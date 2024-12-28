@@ -3,6 +3,7 @@ package grpcx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -34,7 +35,7 @@ func (x *sender) push(ctx context.Context, methodName string, req proto.Message)
 		if x.Methods[method].MethodName != filepath.Base(methodName) {
 			continue
 		}
-		buf, err := encode(x.seq, uint16(method), req)
+		buf, err := x.encode(ctx, x.seq, uint16(method), req)
 		if err != nil {
 			return nil, err
 		}
@@ -53,4 +54,27 @@ func (x *sender) push(ctx context.Context, methodName string, req proto.Message)
 		}
 	}
 	return nil, errors.New(methodName)
+}
+
+func (x *sender) encode(ctx context.Context, seq uint32, method uint16, iMessage proto.Message) (Message, error) {
+	opentracing, ok := ctx.Value("opentracing").(OpenTracing)
+	if !ok {
+		return nil, errors.New("opentracing")
+	}
+	b, err := proto.Marshal(iMessage)
+	if err != nil {
+		return nil, err
+	}
+	buf := pool.Get().(*Message)
+	buf.WriteUint16(uint16(32 + len(b))) // 2
+	buf.WriteUint32(seq)                 // 4
+	buf.WriteUint16(method)              // 2
+	buf.WriteUint64(opentracing.High)    // 8
+	buf.WriteUint64(opentracing.Low)     // 8
+	buf.WriteUint64(opentracing.SpanID)  // 8
+	fmt.Println(opentracing.High, opentracing.Low, opentracing.SpanID)
+	if _, err := buf.Write(b); err != nil {
+		return nil, err
+	}
+	return *buf, nil
 }

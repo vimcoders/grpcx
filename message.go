@@ -1,13 +1,9 @@
 package grpcx
 
 import (
-	"bufio"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"sync"
-
-	"google.golang.org/protobuf/proto"
 )
 
 type Message []byte
@@ -18,60 +14,25 @@ var pool sync.Pool = sync.Pool{
 	},
 }
 
-func decode(b *bufio.Reader) (Message, error) {
-	headerBytes, err := b.Peek(2)
-	if err != nil {
-		return nil, err
-	}
-	length := int(binary.BigEndian.Uint16(headerBytes))
-	if length > b.Size() {
-		return nil, fmt.Errorf("header %v too long", length)
-	}
-	iMessage, err := b.Peek(length)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := b.Discard(len(iMessage)); err != nil {
-		return nil, err
-	}
-	return iMessage, nil
-}
-
-func encode(seq uint32, method uint16, iMessage proto.Message) (Message, error) {
-	b, err := proto.Marshal(iMessage)
-	if err != nil {
-		return nil, err
-	}
-	buf := pool.Get().(*Message)
-	buf.WriteUint16(uint16(8 + len(b)))
-	buf.WriteUint32(seq)
-	buf.WriteUint16(method)
-	if _, err := buf.Write(b); err != nil {
-		return nil, err
-	}
-	return *buf, nil
-}
-
-func (x Message) length() uint16 {
-	return binary.BigEndian.Uint16(x)
-}
-
 func (x Message) seq() uint32 {
-	return binary.BigEndian.Uint32(x[2:])
+	return binary.BigEndian.Uint32(x[2:]) //2
 }
 
-func (x Message) method() uint16 {
+func (x Message) methodID() uint16 {
 	return binary.BigEndian.Uint16(x[6:])
 }
 
-func (x Message) payload() []byte {
-	return x[8:x.length()]
+func (x Message) openTracing() OpenTracing {
+	high := binary.BigEndian.Uint64(x[8:])
+	low := binary.BigEndian.Uint64(x[16:])
+	spanID := binary.BigEndian.Uint64(x[24:])
+	return OpenTracing{High: high, Low: low, SpanID: spanID}
 }
 
 func (x Message) clone() Message {
-	clone := pool.Get().(*Message)
-	*clone = append(*clone, x...)
-	return *clone
+	b := pool.Get().(*Message)
+	*b = append(*b, x...)
+	return *b
 }
 
 func (x *Message) reset() {
@@ -93,6 +54,10 @@ func (x *Message) WriteUint32(v uint32) {
 
 func (x *Message) WriteUint16(v uint16) {
 	*x = binary.BigEndian.AppendUint16(*x, v)
+}
+
+func (x *Message) WriteUint64(v uint64) {
+	*x = binary.BigEndian.AppendUint64(*x, v)
 }
 
 // WriteTo writes data to w until the buffer is drained or an error occurs.

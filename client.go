@@ -3,7 +3,9 @@ package grpcx
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"runtime/debug"
@@ -76,7 +78,7 @@ func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply 
 		x.done(sender.seq)
 		return err
 	}
-	if err := proto.Unmarshal(response.payload(), reply.(proto.Message)); err != nil {
+	if err := proto.Unmarshal(response[8:], reply.(proto.Message)); err != nil {
 		return err
 	}
 	response.reset()
@@ -100,7 +102,7 @@ func (x *XClient) serve(ctx context.Context) (err error) {
 		if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		iMessage, err := decode(buf)
+		iMessage, err := x.decode(buf)
 		if err != nil {
 			return err
 		}
@@ -128,4 +130,23 @@ func (x *XClient) done(seq uint32) *sender {
 		return v
 	}
 	return nil
+}
+
+func (x *XClient) decode(b *bufio.Reader) (Message, error) {
+	headerBytes, err := b.Peek(2)
+	if err != nil {
+		return nil, err
+	}
+	length := int(binary.BigEndian.Uint16(headerBytes))
+	if length > b.Size() {
+		return nil, fmt.Errorf("header %v too long", length)
+	}
+	iMessage, err := b.Peek(length)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := b.Discard(len(iMessage)); err != nil {
+		return nil, err
+	}
+	return iMessage, nil
 }

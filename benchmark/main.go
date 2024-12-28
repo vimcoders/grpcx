@@ -22,13 +22,10 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	listener, err := net.Listen("tcp", ":28889")
-	if err != nil {
-		panic(err)
-	}
 	x := MakeHandler()
-	go grpcx.ListenAndServe(context.Background(), listener, x)
-
+	if listener, err := net.Listen("tcp", ":28889"); err == nil {
+		go grpcx.ListenAndServe(context.Background(), listener, x)
+	}
 	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Parkour_ServiceDesc))
 	if err != nil {
 		fmt.Println(err.Error())
@@ -39,7 +36,7 @@ func main() {
 		ParkourClient: client,
 		Tracer:        x.Tracer,
 	}
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		go benchmarkClient.BenchmarkLogin(context.Background())
 	}
 	quit := make(chan os.Signal, 1)

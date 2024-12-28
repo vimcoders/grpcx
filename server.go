@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/vimcoders/go-driver/driver"
-	"github.com/vimcoders/go-driver/log"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -65,7 +64,7 @@ func ListenAndServe(ctx context.Context, listener net.Listener, handler driver.H
 		}
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Error(err.Error())
+			//log.Error(err.Error())
 			continue
 		}
 		handler.Handle(ctx, conn)
@@ -160,7 +159,6 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 		if _, err := buf.WriteTo(c); err != nil {
 			return err
 		}
-		buf.reset()
 	}
 }
 

@@ -81,7 +81,7 @@ func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply 
 	if err := proto.Unmarshal(response[8:], reply.(proto.Message)); err != nil {
 		return err
 	}
-	//response.reset()
+	response.reset()
 	x.streams.Put(sender)
 	return nil
 }

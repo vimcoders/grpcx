@@ -64,8 +64,7 @@ func (x *sender) encode(ctx context.Context, seq uint32, method uint16, iMessage
 	if err != nil {
 		return nil, err
 	}
-	//buf := pool.Get().(*Message)
-	var buf Message
+	buf := pool.Get().(*Message)
 	buf.WriteUint16(uint16(32 + len(b))) // 2
 	buf.WriteUint32(seq)                 // 4
 	buf.WriteUint16(method)              // 2
@@ -75,5 +74,5 @@ func (x *sender) encode(ctx context.Context, seq uint32, method uint16, iMessage
 	if _, err := buf.Write(b); err != nil {
 		return nil, err
 	}
-	return buf, nil
+	return *buf, nil
 }

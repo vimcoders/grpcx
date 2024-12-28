@@ -166,18 +166,6 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 }
 
 func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			fmt.Println(e)
-		}
-		if err != nil {
-			fmt.Println(err)
-		}
-		if err := x.Close(); err != nil {
-			fmt.Println(err)
-		}
-		debug.PrintStack()
-	}()
 	buf := bufio.NewReaderSize(c, x.readBufferSize)
 	for {
 		select {
@@ -199,7 +187,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			}
 			return nil
 		}
-		reply, err := x.Methods[method].Handler(x.handler, ctx, dec, x.Unary)
+		reply, err := x.Methods[method].Handler(x.handler, ctx, dec, nil)
 		if err != nil {
 			return err
 		}

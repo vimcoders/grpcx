@@ -14,9 +14,6 @@ import (
 	"net"
 	"runtime"
 	"testing"
-	"time"
-
-	"github.com/vimcoders/go-driver/quicx"
 )
 
 type Handler struct {
@@ -44,13 +41,14 @@ func (x *Handler) Close() error {
 }
 
 func TestMain(m *testing.M) {
-	qlistener, err := quicx.Listen("udp", ":28889", GenerateTLSConfig(), &quicx.Config{
-		MaxIdleTimeout: time.Minute,
-	})
+	// listener, err := quicx.Listen("udp", ":28889", GenerateTLSConfig(), &quicx.Config{
+	// 	MaxIdleTimeout: time.Minute,
+	// })
+	listener, err := net.Listen("tcp", ":28889")
 	if err != nil {
 		panic(err)
 	}
-	go grpcx.ListenAndServe(context.Background(), qlistener, MakeHandler())
+	go grpcx.ListenAndServe(context.Background(), listener, MakeHandler())
 	m.Run()
 }
 
@@ -80,7 +78,7 @@ func GenerateTLSConfig() *tls.Config {
 
 func BenchmarkQUIC(b *testing.B) {
 	fmt.Println(runtime.NumCPU())
-	cc, err := grpcx.Dial("udp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Parkour_ServiceDesc))
+	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Parkour_ServiceDesc))
 	if err != nil {
 		fmt.Println(err.Error())
 		return

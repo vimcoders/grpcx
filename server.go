@@ -24,6 +24,11 @@ const (
 
 // ListenAndServe binds port and handle requests, blocking until close
 func ListenAndServe(ctx context.Context, listener net.Listener, handler driver.Handler) {
+	defer func() {
+		if err := recover(); err != nil {
+			debug.PrintStack()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -76,13 +81,8 @@ func (x *Server) Close() error {
 func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 	defer func() {
 		if err := recover(); err != nil {
-			log.Error(err)
-		}
-		if err != nil {
-			log.Error(err.Error())
 		}
 		if err := x.Close(); err != nil {
-			log.Error(err.Error())
 		}
 		debug.PrintStack()
 	}()

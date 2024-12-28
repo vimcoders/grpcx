@@ -5,9 +5,8 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"runtime/debug"
 	"time"
-
-	"github.com/vimcoders/go-driver/log"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -23,7 +22,7 @@ type sender struct {
 func (x *sender) invoke(iMessage Message) error {
 	defer func() {
 		if err := recover(); err != nil {
-			log.Error(err)
+			debug.PrintStack()
 		}
 	}()
 	x.signal <- iMessage

@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vimcoders/go-driver/log"
-
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -89,15 +87,8 @@ func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply 
 func (x *XClient) serve(ctx context.Context) (err error) {
 	defer func() {
 		if err := recover(); err != nil {
-			log.Error(err)
+			debug.PrintStack()
 		}
-		if err != nil {
-			log.Error(err.Error())
-		}
-		if err := x.Close(); err != nil {
-			log.Error(err.Error())
-		}
-		debug.PrintStack()
 	}()
 	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
 	for {

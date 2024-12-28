@@ -3,7 +3,6 @@ package grpcx
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -65,16 +64,16 @@ func (x *sender) encode(ctx context.Context, seq uint32, method uint16, iMessage
 	if err != nil {
 		return nil, err
 	}
-	buf := pool.Get().(*Message)
+	//buf := pool.Get().(*Message)
+	var buf Message
 	buf.WriteUint16(uint16(32 + len(b))) // 2
 	buf.WriteUint32(seq)                 // 4
 	buf.WriteUint16(method)              // 2
 	buf.WriteUint64(opentracing.High)    // 8
 	buf.WriteUint64(opentracing.Low)     // 8
 	buf.WriteUint64(opentracing.SpanID)  // 8
-	fmt.Println(opentracing.High, opentracing.Low, opentracing.SpanID)
 	if _, err := buf.Write(b); err != nil {
 		return nil, err
 	}
-	return *buf, nil
+	return buf, nil
 }

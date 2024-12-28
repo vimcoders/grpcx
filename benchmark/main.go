@@ -1,27 +1,51 @@
-package grpcx_test
+package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"grpcx"
 	"grpcx/pb"
 	"io"
-	"math/big"
 	"net"
+	"os"
+	"os/signal"
 	"runtime"
-	"testing"
+	"syscall"
 	"time"
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go"
-	jaegercfg "github.com/uber/jaeger-client-go/config"
 	"google.golang.org/grpc"
+
+	jaegercfg "github.com/uber/jaeger-client-go/config"
 )
+
+func main() {
+	fmt.Println(runtime.NumCPU())
+	listener, err := net.Listen("tcp", ":28889")
+	if err != nil {
+		panic(err)
+	}
+	x := MakeHandler()
+	go grpcx.ListenAndServe(context.Background(), listener, x)
+
+	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Parkour_ServiceDesc))
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	client := pb.NewParkourClient(cc)
+	benchmarkClient := Client{
+		ParkourClient: client,
+		Tracer:        x.Tracer,
+	}
+	for i := 0; i < 2; i++ {
+		go benchmarkClient.BenchmarkLogin(context.Background())
+	}
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	<-quit
+}
 
 type Handler struct {
 	pb.ParkourServer
@@ -64,86 +88,13 @@ func MakeHandler() *Handler {
 }
 
 func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
-	svr := grpcx.NewServer(grpcx.UnaryInterceptor(x.UnaryInterceptor))
+	svr := grpcx.NewServer( /*grpcx.UnaryInterceptor(x.UnaryInterceptor)*/ )
 	svr.RegisterService(&pb.Parkour_ServiceDesc, x)
 	go svr.Serve(ctx, conn)
 }
 
 func (x *Handler) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
 	return &pb.LoginResponse{}, nil
-}
-
-func TestMain(m *testing.M) {
-	// listener, err := quicx.Listen("udp", ":28889", GenerateTLSConfig(), &quicx.Config{
-	// 	MaxIdleTimeout: time.Minute,
-	// })
-	fmt.Println(runtime.NumCPU())
-	listener, err := net.Listen("tcp", ":28889")
-	if err != nil {
-		panic(err)
-	}
-	x := MakeHandler()
-	go grpcx.ListenAndServe(context.Background(), listener, x)
-	m.Run()
-	x.Close()
-}
-
-func GenerateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
-	if err != nil {
-		panic(err)
-	}
-	template := x509.Certificate{SerialNumber: big.NewInt(1)}
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		panic(err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		panic(err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		NextProtos:   []string{"quic-echo-example"},
-		MaxVersion:   tls.VersionTLS13,
-	}
-}
-
-func TestQUIC(t *testing.T) {
-	t.Log(runtime.NumCPU())
-	var cfg = jaegercfg.Configuration{
-		ServiceName: "balance test", // 对其发起请求的的调用链，叫什么服务
-		Sampler: &jaegercfg.SamplerConfig{
-			Type:  jaeger.SamplerTypeConst,
-			Param: 1,
-		},
-		Reporter: &jaegercfg.ReporterConfig{
-			LogSpans:          true,
-			CollectorEndpoint: "http://127.0.0.1:14268/api/traces",
-		},
-	}
-	//jLogger := jaegerlog.StdLogger
-	tracer, closer, _ := cfg.NewTracer(
-	//jaegercfg.Logger(jLogger),
-	)
-	defer closer.Close()
-	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Parkour_ServiceDesc))
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
-	client := pb.NewParkourClient(cc)
-	benchmarkClient := Client{
-		Tracer:        tracer,
-		ParkourClient: client,
-	}
-	for i := 0; i < 20; i++ {
-		go benchmarkClient.BenchmarkLogin(context.Background())
-	}
-	time.Sleep(time.Minute * 10)
 }
 
 type Client struct {

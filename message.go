@@ -30,9 +30,10 @@ func (x Message) openTracing() OpenTracing {
 }
 
 func (x Message) clone() Message {
-	b := pool.Get().(*Message)
-	*b = append(*b, x...)
-	return *b
+	//b := pool.Get().(*Message)
+	var b Message
+	b.Write(x)
+	return b
 }
 
 func (x *Message) reset() {
@@ -80,6 +81,6 @@ func (x Message) WriteTo(w io.Writer) (n int64, err error) {
 		}
 	}
 	// Buffer is now empty; reset.
-	x.reset()
+	//x.reset()
 	return n, nil
 }

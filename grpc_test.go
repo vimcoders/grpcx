@@ -1,8 +1,6 @@
 package grpcx_test
 
 import (
-	"balance/grpcx"
-	"balance/pb"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -10,6 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"grpcx"
+	"grpcx/pb"
 	"math/big"
 	"net"
 	"runtime"

@@ -123,6 +123,9 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 		}
 		debug.PrintStack()
 	}()
+	if x.Unary == nil {
+		return x.serve(ctx, c)
+	}
 	buf := bufio.NewReaderSize(c, x.readBufferSize)
 	for {
 		select {
@@ -146,6 +149,57 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 			return nil
 		}
 		reply, err := x.Methods[method].Handler(x.handler, opentracingCtx, dec, x.Unary)
+		if err != nil {
+			return err
+		}
+		buf, err := x.encode(seq, method, reply.(proto.Message))
+		if err != nil {
+			return err
+		}
+		if err := c.SetWriteDeadline(time.Now().Add(x.connectionTimeout)); err != nil {
+			return err
+		}
+		if _, err := buf.WriteTo(c); err != nil {
+			return err
+		}
+	}
+}
+
+func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Println(e)
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
+		if err := x.Close(); err != nil {
+			fmt.Println(err)
+		}
+		debug.PrintStack()
+	}()
+	buf := bufio.NewReaderSize(c, x.readBufferSize)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New("shutdown")
+		default:
+		}
+		if err := c.SetReadDeadline(time.Now().Add(x.connectionTimeout)); err != nil {
+			return err
+		}
+		iMessage, err := x.decode(buf)
+		if err != nil {
+			return err
+		}
+		method, seq := iMessage.methodID(), iMessage.seq()
+		dec := func(in any) error {
+			if err := proto.Unmarshal(iMessage[8:], in.(proto.Message)); err != nil {
+				return err
+			}
+			return nil
+		}
+		reply, err := x.Methods[method].Handler(x.handler, ctx, dec, x.Unary)
 		if err != nil {
 			return err
 		}

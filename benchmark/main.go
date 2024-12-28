@@ -16,8 +16,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go"
 	"google.golang.org/grpc"
-
-	jaegercfg "github.com/uber/jaeger-client-go/config"
 )
 
 func main() {
@@ -66,22 +64,22 @@ func (x Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *gr
 
 // MakeHandler creates a Handler instance
 func MakeHandler() *Handler {
-	var cfg = jaegercfg.Configuration{
-		ServiceName: "grpcx test", // 对其发起请求的的调用链，叫什么服务
-		Sampler: &jaegercfg.SamplerConfig{
-			Type:  jaeger.SamplerTypeConst,
-			Param: 1,
-		},
-		Reporter: &jaegercfg.ReporterConfig{
-			LogSpans:          true,
-			CollectorEndpoint: "http://127.0.0.1:14268/api/traces",
-		},
-	}
-	//jLogger := jaegerlog.StdLogger
-	tracer, closer, _ := cfg.NewTracer(
-	//jaegercfg.Logger(jLogger),
-	)
-	return &Handler{Tracer: tracer, Closer: closer}
+	// var cfg = jaegercfg.Configuration{
+	// 	ServiceName: "grpcx test", // 对其发起请求的的调用链，叫什么服务
+	// 	Sampler: &jaegercfg.SamplerConfig{
+	// 		Type:  jaeger.SamplerTypeConst,
+	// 		Param: 1,
+	// 	},
+	// 	Reporter: &jaegercfg.ReporterConfig{
+	// 		LogSpans:          true,
+	// 		CollectorEndpoint: "http://127.0.0.1:14268/api/traces",
+	// 	},
+	// }
+	// //jLogger := jaegerlog.StdLogger
+	// tracer, closer, _ := cfg.NewTracer(
+	// //jaegercfg.Logger(jLogger),
+	// )
+	return &Handler{ /*Tracer: tracer, Closer: closer*/ }
 }
 
 func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
@@ -105,12 +103,12 @@ func (x *Client) BenchmarkLogin(ctx context.Context) {
 	for {
 		// span := x.StartSpan("Login")
 		// spanCtx := span.Context().(jaeger.SpanContext)
-		opentracing := grpcx.OpenTracing{
-			// High:   spanCtx.TraceID().High,
-			// Low:    spanCtx.TraceID().Low,
-			// SpanID: uint64(spanCtx.SpanID()),
-		}
-		ctx := grpcx.WithContext(context.Background(), opentracing)
+		// opentracing := grpcx.OpenTracing{
+		// 	// High:   spanCtx.TraceID().High,
+		// 	// Low:    spanCtx.TraceID().Low,
+		// 	// SpanID: uint64(spanCtx.SpanID()),
+		// }
+		//ctx := grpcx.WithContext(context.Background(), opentracing)
 		if _, err := x.Login(ctx, &pb.LoginRequest{Token: "token"}); err != nil {
 			fmt.Println(err.Error())
 			return

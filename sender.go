@@ -56,21 +56,26 @@ func (x *sender) push(ctx context.Context, methodName string, req proto.Message)
 }
 
 func (x *sender) encode(ctx context.Context, seq uint32, method uint16, iMessage proto.Message) (Message, error) {
-	opentracing, ok := ctx.Value("opentracing").(OpenTracing)
-	if !ok {
-		return nil, errors.New("opentracing")
-	}
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err
 	}
 	buf := pool.Get().(*Message)
-	buf.WriteUint16(uint16(32 + len(b))) // 2
-	buf.WriteUint32(seq)                 // 4
-	buf.WriteUint16(method)              // 2
-	buf.WriteUint64(opentracing.High)    // 8
-	buf.WriteUint64(opentracing.Low)     // 8
-	buf.WriteUint64(opentracing.SpanID)  // 8
+	if opentracing, ok := ctx.Value("opentracing").(OpenTracing); ok {
+		buf.WriteUint16(uint16(32 + len(b))) // 2
+		buf.WriteUint32(seq)                 // 4
+		buf.WriteUint16(method)              // 2
+		buf.WriteUint64(opentracing.High)    // 8
+		buf.WriteUint64(opentracing.Low)     // 8
+		buf.WriteUint64(opentracing.SpanID)  // 8
+		if _, err := buf.Write(b); err != nil {
+			return nil, err
+		}
+		return *buf, nil
+	}
+	buf.WriteUint16(uint16(8 + len(b))) // 2
+	buf.WriteUint32(seq)                // 4
+	buf.WriteUint16(method)             // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err
 	}

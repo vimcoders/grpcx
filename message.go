@@ -14,12 +14,12 @@ var pool sync.Pool = sync.Pool{
 	},
 }
 
-func (x Message) seq() uint32 {
-	return binary.BigEndian.Uint32(x[2:]) //2
+func (x Message) seq() uint16 {
+	return binary.BigEndian.Uint16(x[2:]) //2
 }
 
 func (x Message) methodID() uint16 {
-	return binary.BigEndian.Uint16(x[6:])
+	return binary.BigEndian.Uint16(x[4:])
 }
 
 func (x Message) clone() Message {

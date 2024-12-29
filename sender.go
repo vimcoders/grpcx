@@ -14,11 +14,11 @@ import (
 
 type sender struct {
 	net.Conn
-	seq     uint32
+	seq     uint16
 	timeout time.Duration
 	signal  chan Message
 	Methods []grpc.MethodDesc
-	encode  func(seq uint32, method uint16, iMessage proto.Message) (Message, error)
+	encode  func(seq uint16, method uint16, iMessage proto.Message) (Message, error)
 }
 
 func (x *sender) invoke(iMessage Message) error {

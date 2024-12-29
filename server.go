@@ -142,7 +142,7 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 		}
 		method, seq := iMessage.methodID(), iMessage.seq()
 		dec := func(in any) error {
-			if err := proto.Unmarshal(iMessage[8:], in.(proto.Message)); err != nil {
+			if err := proto.Unmarshal(iMessage[6:], in.(proto.Message)); err != nil {
 				return err
 			}
 			return nil
@@ -183,14 +183,14 @@ func (x *Server) decode(b *bufio.Reader) (Message, error) {
 	return iMessage, nil
 }
 
-func (x *Server) encode(seq uint32, method uint16, iMessage proto.Message) (Message, error) {
+func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (Message, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err
 	}
 	buf := pool.Get().(*Message)
-	buf.WriteUint16(uint16(8 + len(b))) // 2
-	buf.WriteUint32(seq)                // 4
+	buf.WriteUint16(uint16(6 + len(b))) // 2
+	buf.WriteUint16(seq)                // 2
 	buf.WriteUint16(method)             // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err

@@ -29,15 +29,15 @@ func main() {
 	if listener, err := net.Listen("tcp", ":28889"); err == nil {
 		go grpcx.ListenAndServe(context.Background(), listener, x)
 	}
-	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Parkour_ServiceDesc))
+	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
-	client := pb.NewParkourClient(cc)
+	client := pb.NewChatClient(cc)
 	benchmarkClient := Client{
-		ParkourClient: client,
-		Tracer:        x.Tracer,
+		ChatClient: client,
+		Tracer:     x.Tracer,
 	}
 	for i := 0; i < 1; i++ {
 		go benchmarkClient.BenchmarkTracing(context.Background())
@@ -48,7 +48,7 @@ func main() {
 }
 
 type Handler struct {
-	pb.ParkourServer
+	pb.ChatServer
 	opentracing.Tracer
 	io.Closer
 }
@@ -93,17 +93,17 @@ func MakeHandler() *Handler {
 
 func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
 	svr := grpcx.NewServer(grpcx.UnaryInterceptor(x.UnaryInterceptor))
-	svr.RegisterService(&pb.Parkour_ServiceDesc, x)
+	svr.RegisterService(&pb.Chat_ServiceDesc, x)
 	go svr.Serve(ctx, conn)
 }
 
-func (x *Handler) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
-	return &pb.LoginResponse{}, nil
+func (x *Handler) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatResponse, error) {
+	return &pb.ChatResponse{}, nil
 }
 
 type Client struct {
 	opentracing.Tracer
-	pb.ParkourClient
+	pb.ChatClient
 	total int64
 	unix  int64
 }
@@ -117,7 +117,7 @@ func (x *Client) BenchmarkTracing(ctx context.Context) {
 			Low:    spanCtx.TraceID().Low,
 			SpanID: uint64(spanCtx.SpanID()),
 		}
-		if _, err := x.Login(ctx, &pb.LoginRequest{Token: "token", Opentracing: &opentracing}); err != nil {
+		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token", Opentracing: &opentracing}); err != nil {
 			fmt.Println(err.Error())
 			return
 		}
@@ -131,9 +131,9 @@ func (x *Client) BenchmarkTracing(ctx context.Context) {
 	}
 }
 
-func (x *Client) BenchmarkLogin(ctx context.Context) {
+func (x *Client) BenchmarkChat(ctx context.Context) {
 	for {
-		if _, err := x.Login(ctx, &pb.LoginRequest{Token: "token"}); err != nil {
+		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token"}); err != nil {
 			fmt.Println(err.Error())
 			return
 		}

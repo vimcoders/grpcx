@@ -2,8 +2,15 @@ syntax = "proto3";
 package pb;
 option go_package = "../pb";
 
+message Opentracing {
+	uint64 High = 1;
+	uint64 Low = 2;
+	uint64 SpanID = 3;
+}
+
 message ChatRequest {
 	string Message = 1;
+	Opentracing Opentracing = 2;
 }
 
 message ChatResponse {

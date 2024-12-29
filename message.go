@@ -22,13 +22,6 @@ func (x Message) methodID() uint16 {
 	return binary.BigEndian.Uint16(x[6:])
 }
 
-func (x Message) openTracing() OpenTracing {
-	high := binary.BigEndian.Uint64(x[8:])
-	low := binary.BigEndian.Uint64(x[16:])
-	spanID := binary.BigEndian.Uint64(x[24:])
-	return OpenTracing{High: high, Low: low, SpanID: spanID}
-}
-
 func (x Message) clone() Message {
 	b := pool.Get().(*Message)
 	b.Write(x)

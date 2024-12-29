@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"grpcx"
-	"grpcx/pb"
+	"grpcx/benchmark/pb"
 	"io"
 	"net"
 	"os"
@@ -15,8 +15,13 @@ import (
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go"
+	jaegercfg "github.com/uber/jaeger-client-go/config"
 	"google.golang.org/grpc"
 )
+
+type OpenTracing interface {
+	GetOpentracing() *pb.Opentracing
+}
 
 func main() {
 	fmt.Println(runtime.NumCPU())
@@ -35,7 +40,7 @@ func main() {
 		Tracer:        x.Tracer,
 	}
 	for i := 0; i < 1; i++ {
-		go benchmarkClient.BenchmarkLogin(context.Background())
+		go benchmarkClient.BenchmarkTracing(context.Background())
 	}
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
@@ -49,8 +54,12 @@ type Handler struct {
 }
 
 func (x Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	t, ok := ctx.Value("opentracing").(grpcx.OpenTracing)
+	opentracingAgrs, ok := req.(OpenTracing)
 	if !ok {
+		return handler(ctx, req)
+	}
+	t := opentracingAgrs.GetOpentracing()
+	if t == nil {
 		return handler(ctx, req)
 	}
 	traceID := jaeger.TraceID{High: t.High, Low: t.Low}
@@ -64,26 +73,26 @@ func (x Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *gr
 
 // MakeHandler creates a Handler instance
 func MakeHandler() *Handler {
-	// var cfg = jaegercfg.Configuration{
-	// 	ServiceName: "grpcx test", // 对其发起请求的的调用链，叫什么服务
-	// 	Sampler: &jaegercfg.SamplerConfig{
-	// 		Type:  jaeger.SamplerTypeConst,
-	// 		Param: 1,
-	// 	},
-	// 	Reporter: &jaegercfg.ReporterConfig{
-	// 		LogSpans:          true,
-	// 		CollectorEndpoint: "http://127.0.0.1:14268/api/traces",
-	// 	},
-	// }
-	// //jLogger := jaegerlog.StdLogger
-	// tracer, closer, _ := cfg.NewTracer(
-	// //jaegercfg.Logger(jLogger),
-	// )
-	return &Handler{ /*Tracer: tracer, Closer: closer*/ }
+	var cfg = jaegercfg.Configuration{
+		ServiceName: "grpcx test", // 对其发起请求的的调用链，叫什么服务
+		Sampler: &jaegercfg.SamplerConfig{
+			Type:  jaeger.SamplerTypeConst,
+			Param: 1,
+		},
+		Reporter: &jaegercfg.ReporterConfig{
+			LogSpans:          true,
+			CollectorEndpoint: "http://127.0.0.1:14268/api/traces",
+		},
+	}
+	//jLogger := jaegerlog.StdLogger
+	tracer, closer, _ := cfg.NewTracer(
+	//jaegercfg.Logger(jLogger),
+	)
+	return &Handler{Tracer: tracer, Closer: closer}
 }
 
 func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
-	svr := grpcx.NewServer( /*grpcx.UnaryInterceptor(x.UnaryInterceptor)*/ )
+	svr := grpcx.NewServer(grpcx.UnaryInterceptor(x.UnaryInterceptor))
 	svr.RegisterService(&pb.Parkour_ServiceDesc, x)
 	go svr.Serve(ctx, conn)
 }
@@ -99,21 +108,35 @@ type Client struct {
 	unix  int64
 }
 
+func (x *Client) BenchmarkTracing(ctx context.Context) {
+	for {
+		span := x.StartSpan("Login")
+		spanCtx := span.Context().(jaeger.SpanContext)
+		opentracing := pb.Opentracing{
+			High:   spanCtx.TraceID().High,
+			Low:    spanCtx.TraceID().Low,
+			SpanID: uint64(spanCtx.SpanID()),
+		}
+		if _, err := x.Login(ctx, &pb.LoginRequest{Token: "token", Opentracing: &opentracing}); err != nil {
+			fmt.Println(err.Error())
+			return
+		}
+		span.Finish()
+		x.total++
+		if x.unix != time.Now().Unix() {
+			fmt.Println(x.total)
+			x.total = 0
+			x.unix = time.Now().Unix()
+		}
+	}
+}
+
 func (x *Client) BenchmarkLogin(ctx context.Context) {
 	for {
-		// span := x.StartSpan("Login")
-		// spanCtx := span.Context().(jaeger.SpanContext)
-		// opentracing := grpcx.OpenTracing{
-		// 	// High:   spanCtx.TraceID().High,
-		// 	// Low:    spanCtx.TraceID().Low,
-		// 	// SpanID: uint64(spanCtx.SpanID()),
-		// }
-		//ctx := grpcx.WithContext(context.Background(), opentracing)
 		if _, err := x.Login(ctx, &pb.LoginRequest{Token: "token"}); err != nil {
 			fmt.Println(err.Error())
 			return
 		}
-		//span.Finish()
 		x.total++
 		if x.unix != time.Now().Unix() {
 			fmt.Println(x.total)

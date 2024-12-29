@@ -54,11 +54,12 @@ func newClient(c net.Conn, opt Option) Client {
 			seq := x.seq + 1
 			x.seq = seq % math.MaxUint32
 			return &sender{
-				Option:  opt,
 				seq:     seq,
 				Conn:    x.Conn,
 				signal:  make(chan Message, 1),
-				timeout: x.timeout,
+				timeout: opt.timeout,
+				Methods: opt.Methods,
+				encode:  x.encode,
 			}
 		},
 	}
@@ -150,4 +151,19 @@ func (x *XClient) decode(b *bufio.Reader) (Message, error) {
 		return nil, err
 	}
 	return iMessage, nil
+}
+
+func (x *XClient) encode(seq uint32, method uint16, iMessage proto.Message) (Message, error) {
+	b, err := proto.Marshal(iMessage)
+	if err != nil {
+		return nil, err
+	}
+	buf := pool.Get().(*Message)
+	buf.WriteUint16(uint16(8 + len(b))) // 2
+	buf.WriteUint32(seq)                // 4
+	buf.WriteUint16(method)             // 2
+	if _, err := buf.Write(b); err != nil {
+		return nil, err
+	}
+	return *buf, nil
 }

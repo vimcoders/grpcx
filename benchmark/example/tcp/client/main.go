@@ -9,54 +9,39 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 )
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	client, err := Dial("quic", "127.0.0.1:28888")
+	runtime.GOMAXPROCS(3)
+	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		panic(err)
+	}
+	client := &Client{
+		ChatClient: pb.NewChatClient(cc),
 	}
 	for i := 0; i < 100; i++ {
 		go client.BenchmarkChat(context.Background())
 	}
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
-	<-quit
-	client.Close()
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-quit:
+			return
+		case <-ticker.C:
+			fmt.Println("NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())
+		}
+	}
 }
 
 type Client struct {
 	pb.ChatClient
-	total int64
-	unix  int64
 	io.Closer
-	sync.RWMutex
-}
-
-func Dial(network, address string) (*Client, error) {
-	cc, err := grpcx.Dial(network, address, grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
-	if err != nil {
-		return nil, err
-	}
-	return &Client{
-		ChatClient: pb.NewChatClient(cc),
-	}, nil
-}
-
-func (x *Client) after(_ context.Context) {
-	x.Lock()
-	defer x.Unlock()
-	x.total++
-	if x.unix != time.Now().Unix() {
-		fmt.Println(x.total)
-		x.total = 0
-		x.unix = time.Now().Unix()
-	}
 }
 
 func (x *Client) BenchmarkChat(ctx context.Context) {
@@ -65,6 +50,5 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 			fmt.Println(err.Error())
 			return
 		}
-		x.after(ctx)
 	}
 }

@@ -28,6 +28,7 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
+	runtime.GOMAXPROCS(1)
 	listener, err := quicx.Listen("udp", ":28888", GenerateTLSConfig(), &quicx.Config{
 		MaxIdleTimeout: time.Minute,
 	})
@@ -45,6 +46,8 @@ type Handler struct {
 	pb.ChatServer
 	opentracing.Tracer
 	io.Closer
+	total int64
+	unix  int64
 }
 
 type OpenTracing interface {
@@ -96,6 +99,12 @@ func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
 }
 
 func (x *Handler) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatResponse, error) {
+	x.total++
+	if x.unix != time.Now().Unix() {
+		fmt.Println(x.total, "request/s", "NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())
+		x.total = 0
+		x.unix = time.Now().Unix()
+	}
 	return &pb.ChatResponse{}, nil
 }
 

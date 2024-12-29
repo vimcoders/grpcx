@@ -19,29 +19,7 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	client, err := Dial("tcp", "127.0.0.1:28889")
-	if err != nil {
-		fmt.Println(err.Error())
-		return
-	}
-	for i := 0; i < 1; i++ {
-		go client.BenchmarkTracing(context.Background())
-	}
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
-	<-quit
-	client.Close()
-}
-
-type Client struct {
-	opentracing.Tracer
-	pb.ChatClient
-	total int64
-	unix  int64
-	io.Closer
-}
-
-func Dial(network, address string) (*Client, error) {
+	runtime.GOMAXPROCS(3)
 	var cfg = jaegercfg.Configuration{
 		ServiceName: "grpcx client", // 对其发起请求的的调用链，叫什么服务
 		Sampler: &jaegercfg.SamplerConfig{
@@ -59,13 +37,33 @@ func Dial(network, address string) (*Client, error) {
 	)
 	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-	return &Client{
-		ChatClient: pb.NewChatClient(cc),
+	client := &Client{
 		Tracer:     tracer,
+		ChatClient: pb.NewChatClient(cc),
 		Closer:     closer,
-	}, nil
+	}
+	for i := 0; i < 100; i++ {
+		go client.BenchmarkTracing(context.Background())
+	}
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-quit:
+			return
+		case <-ticker.C:
+			fmt.Println("NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())
+		}
+	}
+}
+
+type Client struct {
+	opentracing.Tracer
+	pb.ChatClient
+	io.Closer
 }
 
 func (x *Client) BenchmarkTracing(ctx context.Context) {
@@ -86,11 +84,5 @@ func (x *Client) tracing(ctx context.Context) {
 	if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token", Opentracing: &opentracing}); err != nil {
 		fmt.Println(err.Error())
 		return
-	}
-	x.total++
-	if x.unix != time.Now().Unix() {
-		fmt.Println(x.total)
-		x.total = 0
-		x.unix = time.Now().Unix()
 	}
 }

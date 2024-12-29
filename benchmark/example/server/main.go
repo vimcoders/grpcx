@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
-	"time"
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go"
@@ -21,22 +20,12 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	x := MakeHandler()
-	if listener, err := net.Listen("tcp", ":28889"); err == nil {
-		go grpcx.ListenAndServe(context.Background(), listener, x)
-	}
-	cc, err := grpcx.Dial("tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
+	listener, err := net.Listen("tcp", ":28889")
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		panic(err)
 	}
-	benchmarkClient := Client{
-		ChatClient: pb.NewChatClient(cc),
-		Tracer:     x.Tracer,
-	}
-	for i := 0; i < 1; i++ {
-		go benchmarkClient.BenchmarkTracing(context.Background())
-	}
+	x := MakeHandler()
+	go grpcx.ListenAndServe(context.Background(), listener, x)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
@@ -73,7 +62,7 @@ func (x Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *gr
 // MakeHandler creates a Handler instance
 func MakeHandler() *Handler {
 	var cfg = jaegercfg.Configuration{
-		ServiceName: "grpcx test", // 对其发起请求的的调用链，叫什么服务
+		ServiceName: "grpcx server", // 对其发起请求的的调用链，叫什么服务
 		Sampler: &jaegercfg.SamplerConfig{
 			Type:  jaeger.SamplerTypeConst,
 			Param: 1,
@@ -98,49 +87,4 @@ func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
 
 func (x *Handler) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatResponse, error) {
 	return &pb.ChatResponse{}, nil
-}
-
-type Client struct {
-	opentracing.Tracer
-	pb.ChatClient
-	total int64
-	unix  int64
-}
-
-func (x *Client) BenchmarkTracing(ctx context.Context) {
-	for {
-		span := x.StartSpan("Login")
-		spanCtx := span.Context().(jaeger.SpanContext)
-		opentracing := pb.Opentracing{
-			High:   spanCtx.TraceID().High,
-			Low:    spanCtx.TraceID().Low,
-			SpanID: uint64(spanCtx.SpanID()),
-		}
-		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token", Opentracing: &opentracing}); err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-		span.Finish()
-		x.total++
-		if x.unix != time.Now().Unix() {
-			fmt.Println(x.total)
-			x.total = 0
-			x.unix = time.Now().Unix()
-		}
-	}
-}
-
-func (x *Client) BenchmarkChat(ctx context.Context) {
-	for {
-		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token"}); err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-		x.total++
-		if x.unix != time.Now().Unix() {
-			fmt.Println(x.total)
-			x.total = 0
-			x.unix = time.Now().Unix()
-		}
-	}
 }

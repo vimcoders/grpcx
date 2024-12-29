@@ -1,6 +1,7 @@
 package grpcx
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -34,7 +35,7 @@ func newFuncDialOption(f func(*Option)) *funcDialOption {
 	}
 }
 
-func Dial(network string, addr string, opts ...DialOption) (Client, error) {
+func Dial(ctx context.Context, network string, addr string, opts ...DialOption) (grpc.ClientConnInterface, error) {
 	opt := defaultClientOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
@@ -51,7 +52,7 @@ func Dial(network string, addr string, opts ...DialOption) (Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newClient(conn, opt), nil
+		return newClient(ctx, conn, opt), nil
 	case "tcp":
 		fallthrough
 	case "tcp4":
@@ -59,7 +60,7 @@ func Dial(network string, addr string, opts ...DialOption) (Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newClient(conn, opt), nil
+		return newClient(ctx, conn, opt), nil
 	}
 	return nil, fmt.Errorf("%s unkonw", network)
 }

@@ -35,7 +35,7 @@ func main() {
 	tracer, closer, _ := cfg.NewTracer(
 	//jaegercfg.Logger(jLogger),
 	)
-	cc, err := grpcx.Dial("quic", "127.0.0.1:28888", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
+	cc, err := grpcx.Dial(context.Background(), "quic", "127.0.0.1:28888", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
 	if err != nil {
 		panic(err)
 	}

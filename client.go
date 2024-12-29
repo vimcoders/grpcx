@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -16,11 +15,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
-
-type Client interface {
-	grpc.ClientConnInterface
-	Close() error
-}
 
 type Option struct {
 	buffsize uint16
@@ -38,28 +32,16 @@ type XClient struct {
 	net.Conn
 	grpc.ClientConnInterface
 	sync.RWMutex
-	seq     uint16
 	pending map[uint16]*invoker
-	streams *sync.Pool
 }
 
-func newClient(c net.Conn, opt Option) Client {
+func newClient(ctx context.Context, c net.Conn, opt Option) grpc.ClientConnInterface {
 	x := &XClient{
 		Option:  opt,
 		Conn:    c,
 		pending: make(map[uint16]*invoker),
 	}
-	x.streams = &sync.Pool{
-		New: func() any {
-			seq := x.seq + 1
-			x.seq = seq % math.MaxUint16
-			return &invoker{
-				seq:    seq,
-				signal: make(chan Message, 1),
-			}
-		},
-	}
-	go x.serve(context.Background())
+	go x.serve(ctx)
 	return x
 }
 
@@ -78,7 +60,7 @@ func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply 
 }
 
 func (x *XClient) do(ctx context.Context, method uint16, req any, reply any) (err error) {
-	invoker := x.streams.Get().(*invoker)
+	invoker := invoke.Get().(*invoker)
 	if ok := x.wait(invoker); !ok {
 		return errors.New("too many request")
 	}
@@ -101,7 +83,7 @@ func (x *XClient) do(ctx context.Context, method uint16, req any, reply any) (er
 			return err
 		}
 		response.close()
-		x.streams.Put(invoker)
+		invoke.Put(invoker)
 		return nil
 	}
 }

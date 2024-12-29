@@ -27,7 +27,11 @@ func main() {
 		panic(err)
 	}
 	x := MakeHandler()
-	go grpcx.ListenAndServe(context.Background(), listener, x)
+	opts := []grpcx.ServerOption{
+		//grpcx.UnaryInterceptor(x.UnaryInterceptor),
+		grpcx.WithServiceDesc(pb.Chat_ServiceDesc),
+	}
+	go grpcx.ListenAndServe(context.Background(), listener, x, opts...)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
@@ -81,12 +85,6 @@ func MakeHandler() *Handler {
 	//jaegercfg.Logger(jLogger),
 	)
 	return &Handler{Tracer: tracer, Closer: closer}
-}
-
-func (x *Handler) Handle(ctx context.Context, conn net.Conn) {
-	svr := grpcx.NewServer(grpcx.UnaryInterceptor(x.UnaryInterceptor))
-	svr.RegisterService(&pb.Chat_ServiceDesc, x)
-	go svr.Serve(ctx, conn)
 }
 
 func (x *Handler) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatResponse, error) {

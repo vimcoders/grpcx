@@ -17,25 +17,31 @@ import (
 type UnaryServerInterceptor = grpc.UnaryServerInterceptor
 
 type ServerOption interface {
-	apply(*serverOptions)
+	apply(*serverOption)
 }
 
 type funcServerOption struct {
-	f func(*serverOptions)
+	f func(*serverOption)
 }
 
-func (x *funcServerOption) apply(o *serverOptions) {
+func (x *funcServerOption) apply(o *serverOption) {
 	x.f(o)
 }
 
-func newFuncServerOption(f func(*serverOptions)) ServerOption {
+func newFuncServerOption(f func(*serverOption)) ServerOption {
 	return &funcServerOption{
 		f: f,
 	}
 }
 
+func WithServiceDesc(info grpc.ServiceDesc) ServerOption {
+	return newFuncServerOption(func(o *serverOption) {
+		o.Methods = info.Methods
+	})
+}
+
 func UnaryInterceptor(i UnaryServerInterceptor) ServerOption {
-	return newFuncServerOption(func(o *serverOptions) {
+	return newFuncServerOption(func(o *serverOption) {
 		o.Unary = i
 	})
 }
@@ -48,11 +54,10 @@ const (
 )
 
 type Handler interface {
-	Handle(context.Context, net.Conn)
 }
 
 // ListenAndServe binds port and handle requests, blocking until close
-func ListenAndServe(ctx context.Context, listener net.Listener, handler Handler) {
+func ListenAndServe(ctx context.Context, listener net.Listener, x Handler, opt ...ServerOption) {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()
@@ -66,51 +71,45 @@ func ListenAndServe(ctx context.Context, listener net.Listener, handler Handler)
 		}
 		conn, err := listener.Accept()
 		if err != nil {
-			//log.Error(err.Error())
+			fmt.Println(err)
 			continue
 		}
-		handler.Handle(ctx, conn)
+		svr := newServer(x, opt...)
+		go svr.serve(ctx, conn)
 	}
 }
 
-type serverOptions struct {
+type serverOption struct {
 	// creds             credentials.TransportCredentials
-	// unaryInt          grpc.UnaryServerInterceptor
 	readBufferSize    int
 	connectionTimeout time.Duration
-	Unary             grpc.UnaryServerInterceptor
+	Unary             UnaryServerInterceptor
+	Methods           []grpc.MethodDesc
 }
 
-var defaultServerOptions = serverOptions{
+var defaultServerOptions = serverOption{
 	connectionTimeout: 120 * time.Second,
 	readBufferSize:    defaultReadBufSize,
 }
 
-type Server struct {
-	serverOptions
-	grpc.ServiceRegistrar
-	Methods []grpc.MethodDesc
-	handler any
+type server struct {
+	serverOption
+	impl any
 }
 
-func NewServer(opt ...ServerOption) *Server {
+func newServer(impl any, opt ...ServerOption) *server {
 	opts := defaultServerOptions
 	for i := 0; i < len(opt); i++ {
 		opt[i].apply(&opts)
 	}
-	return &Server{serverOptions: opts}
+	return &server{serverOption: opts, impl: impl}
 }
 
-func (x *Server) RegisterService(desc *grpc.ServiceDesc, impl any) {
-	x.Methods = desc.Methods
-	x.handler = impl
-}
-
-func (x *Server) Close() error {
+func (x *server) Close() error {
 	return nil
 }
 
-func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
+func (x *server) serve(ctx context.Context, c net.Conn) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			fmt.Println(e)
@@ -144,7 +143,7 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 			}
 			return nil
 		}
-		reply, err := x.Methods[method].Handler(x.handler, ctx, dec, x.Unary)
+		reply, err := x.Methods[method].Handler(x.impl, ctx, dec, x.Unary)
 		if err != nil {
 			return err
 		}
@@ -161,7 +160,7 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (x *Server) decode(b *bufio.Reader) (Message, error) {
+func (x *server) decode(b *bufio.Reader) (message, error) {
 	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -180,12 +179,12 @@ func (x *Server) decode(b *bufio.Reader) (Message, error) {
 	return iMessage, nil
 }
 
-func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (Message, error) {
+func (x *server) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err
 	}
-	buf := pool.Get().(*Message)
+	buf := pool.Get().(*message)
 	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
 	buf.WriteUint16(seq)                                     // 2
 	buf.WriteUint16(method)                                  // 2

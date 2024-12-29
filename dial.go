@@ -12,24 +12,24 @@ import (
 )
 
 type DialOption interface {
-	apply(*Option)
+	apply(*clientOption)
 }
 
 type funcDialOption struct {
-	f func(*Option)
+	f func(*clientOption)
 }
 
-func (x *funcDialOption) apply(o *Option) {
+func (x *funcDialOption) apply(o *clientOption) {
 	x.f(o)
 }
 
 func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
-	return newFuncDialOption(func(o *Option) {
+	return newFuncDialOption(func(o *clientOption) {
 		o.Methods = info.Methods
 	})
 }
 
-func newFuncDialOption(f func(*Option)) *funcDialOption {
+func newFuncDialOption(f func(*clientOption)) *funcDialOption {
 	return &funcDialOption{
 		f: f,
 	}

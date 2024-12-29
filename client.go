@@ -16,40 +16,40 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type Option struct {
+type clientOption struct {
 	buffsize uint16
 	timeout  time.Duration
 	Methods  []grpc.MethodDesc
 }
 
-var defaultClientOptions = Option{
+var defaultClientOptions = clientOption{
 	timeout:  120 * time.Second,
 	buffsize: defaultReadBufSize,
 }
 
-type XClient struct {
-	Option
+type client struct {
+	clientOption
 	net.Conn
 	grpc.ClientConnInterface
 	sync.RWMutex
 	pending map[uint16]*invoker
 }
 
-func newClient(ctx context.Context, c net.Conn, opt Option) grpc.ClientConnInterface {
-	x := &XClient{
-		Option:  opt,
-		Conn:    c,
-		pending: make(map[uint16]*invoker),
+func newClient(ctx context.Context, c net.Conn, opt clientOption) grpc.ClientConnInterface {
+	x := &client{
+		clientOption: opt,
+		Conn:         c,
+		pending:      make(map[uint16]*invoker),
 	}
 	go x.serve(ctx)
 	return x
 }
 
-func (x *XClient) Close() error {
+func (x *client) Close() error {
 	return x.Conn.Close()
 }
 
-func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
+func (x *client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
 	for method := 0; method < len(x.Methods); method++ {
 		if x.Methods[method].MethodName != filepath.Base(methodName) {
 			continue
@@ -59,10 +59,10 @@ func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply 
 	return errors.New(methodName)
 }
 
-func (x *XClient) do(ctx context.Context, method uint16, req any, reply any) (err error) {
+func (x *client) do(ctx context.Context, method uint16, req any, reply any) (err error) {
 	invoker := invoke.Get().(*invoker)
 	if ok := x.wait(invoker); !ok {
-		return errors.New("too many request")
+		return fmt.Errorf("too many request %d", invoker.seq)
 	}
 	buf, err := x.encode(invoker.seq, uint16(method), req.(proto.Message))
 	if err != nil {
@@ -88,7 +88,7 @@ func (x *XClient) do(ctx context.Context, method uint16, req any, reply any) (er
 	}
 }
 
-func (x *XClient) serve(ctx context.Context) (err error) {
+func (x *client) serve(ctx context.Context) (err error) {
 	defer func() {
 		if err := recover(); err != nil {
 			fmt.Println(err)
@@ -119,7 +119,7 @@ func (x *XClient) serve(ctx context.Context) (err error) {
 	}
 }
 
-func (x *XClient) wait(s *invoker) bool {
+func (x *client) wait(s *invoker) bool {
 	x.Lock()
 	defer x.Unlock()
 	if _, ok := x.pending[s.seq]; ok {
@@ -129,7 +129,7 @@ func (x *XClient) wait(s *invoker) bool {
 	return true
 }
 
-func (x *XClient) invoke(seq uint16) *invoker {
+func (x *client) invoke(seq uint16) *invoker {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[seq]; ok {
@@ -139,7 +139,7 @@ func (x *XClient) invoke(seq uint16) *invoker {
 	return nil
 }
 
-func (x *XClient) decode(b *bufio.Reader) (Message, error) {
+func (x *client) decode(b *bufio.Reader) (message, error) {
 	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -158,12 +158,12 @@ func (x *XClient) decode(b *bufio.Reader) (Message, error) {
 	return iMessage, nil
 }
 
-func (x *XClient) encode(seq uint16, method uint16, iMessage proto.Message) (Message, error) {
+func (x *client) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err
 	}
-	buf := pool.Get().(*Message)
+	buf := pool.Get().(*message)
 	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
 	buf.WriteUint16(seq)                                     // 2
 	buf.WriteUint16(method)                                  // 2

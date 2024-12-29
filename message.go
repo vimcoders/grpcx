@@ -6,6 +6,9 @@ import (
 	"sync"
 )
 
+const _MESSAGE_HEADER_LENGTH = 6
+const _MESSAGE_HEADER = 2
+
 type Message []byte
 
 var pool sync.Pool = sync.Pool{
@@ -22,13 +25,17 @@ func (x Message) methodID() uint16 {
 	return binary.BigEndian.Uint16(x[4:])
 }
 
+func (x Message) body() []byte {
+	return x[6:]
+}
+
 func (x Message) clone() Message {
 	b := pool.Get().(*Message)
 	b.Write(x)
 	return *b
 }
 
-func (x *Message) reset() {
+func (x *Message) close() {
 	if cap(*x) <= 0 {
 		return
 	}
@@ -73,6 +80,16 @@ func (x Message) WriteTo(w io.Writer) (n int64, err error) {
 		}
 	}
 	// Buffer is now empty; reset.
-	x.reset()
+	x.close()
 	return n, nil
+}
+
+type invoker struct {
+	seq    uint16
+	signal chan Message
+}
+
+func (x *invoker) invoke(iMessage Message) error {
+	x.signal <- iMessage
+	return nil
 }

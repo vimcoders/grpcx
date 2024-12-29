@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -27,13 +28,18 @@ type Option struct {
 	Methods  []grpc.MethodDesc
 }
 
+var defaultClientOptions = Option{
+	timeout:  120 * time.Second,
+	buffsize: defaultReadBufSize,
+}
+
 type XClient struct {
 	Option
 	net.Conn
 	grpc.ClientConnInterface
 	sync.RWMutex
 	seq     uint16
-	pending map[uint16]*sender
+	pending map[uint16]*invoker
 	streams *sync.Pool
 }
 
@@ -41,19 +47,15 @@ func newClient(c net.Conn, opt Option) Client {
 	x := &XClient{
 		Option:  opt,
 		Conn:    c,
-		pending: make(map[uint16]*sender),
+		pending: make(map[uint16]*invoker),
 	}
 	x.streams = &sync.Pool{
 		New: func() any {
 			seq := x.seq + 1
 			x.seq = seq % math.MaxUint16
-			return &sender{
-				seq:     seq,
-				Conn:    x.Conn,
-				signal:  make(chan Message, 1),
-				timeout: opt.timeout,
-				Methods: opt.Methods,
-				encode:  x.encode,
+			return &invoker{
+				seq:    seq,
+				signal: make(chan Message, 1),
 			}
 		},
 	}
@@ -66,19 +68,42 @@ func (x *XClient) Close() error {
 }
 
 func (x *XClient) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
-	sender := x.streams.Get().(*sender)
-	x.wait(sender)
-	response, err := sender.push(ctx, methodName, req.(proto.Message))
+	for method := 0; method < len(x.Methods); method++ {
+		if x.Methods[method].MethodName != filepath.Base(methodName) {
+			continue
+		}
+		return x.do(ctx, uint16(method), req, reply)
+	}
+	return errors.New(methodName)
+}
+
+func (x *XClient) do(ctx context.Context, method uint16, req any, reply any) (err error) {
+	invoker := x.streams.Get().(*invoker)
+	if ok := x.wait(invoker); !ok {
+		return errors.New("too many request")
+	}
+	buf, err := x.encode(invoker.seq, uint16(method), req.(proto.Message))
 	if err != nil {
-		x.done(sender.seq)
 		return err
 	}
-	if err := proto.Unmarshal(response[6:], reply.(proto.Message)); err != nil {
+	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
 	}
-	response.reset()
-	x.streams.Put(sender)
-	return nil
+	if _, err := buf.WriteTo(x.Conn); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		x.invoke(invoker.seq)
+		return errors.New("timeout")
+	case response := <-invoker.signal:
+		if err := proto.Unmarshal(response.body(), reply.(proto.Message)); err != nil {
+			return err
+		}
+		response.close()
+		x.streams.Put(invoker)
+		return nil
+	}
 }
 
 func (x *XClient) serve(ctx context.Context) (err error) {
@@ -102,23 +127,27 @@ func (x *XClient) serve(ctx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
-		ch := x.done(iMessage.seq())
-		if ch == nil {
+		invoker := x.invoke(iMessage.seq())
+		if invoker == nil {
 			return nil
 		}
-		if err := ch.invoke(iMessage.clone()); err != nil {
+		if err := invoker.invoke(iMessage.clone()); err != nil {
 			return err
 		}
 	}
 }
 
-func (x *XClient) wait(s *sender) {
+func (x *XClient) wait(s *invoker) bool {
 	x.Lock()
 	defer x.Unlock()
+	if _, ok := x.pending[s.seq]; ok {
+		return false
+	}
 	x.pending[s.seq] = s
+	return true
 }
 
-func (x *XClient) done(seq uint16) *sender {
+func (x *XClient) invoke(seq uint16) *invoker {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[seq]; ok {
@@ -129,7 +158,7 @@ func (x *XClient) done(seq uint16) *sender {
 }
 
 func (x *XClient) decode(b *bufio.Reader) (Message, error) {
-	headerBytes, err := b.Peek(2)
+	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
 	}
@@ -153,9 +182,9 @@ func (x *XClient) encode(seq uint16, method uint16, iMessage proto.Message) (Mes
 		return nil, err
 	}
 	buf := pool.Get().(*Message)
-	buf.WriteUint16(uint16(6 + len(b))) // 2
-	buf.WriteUint16(seq)                // 2
-	buf.WriteUint16(method)             // 2
+	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
+	buf.WriteUint16(seq)                                     // 2
+	buf.WriteUint16(method)                                  // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err
 	}

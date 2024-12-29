@@ -44,8 +44,7 @@ const (
 	//defaultClientMaxReceiveMessageSize = 1024 * 1024 * 4
 	//defaultClientMaxSendMessageSize    = math.MaxInt32
 	// http2IOBufSize specifies the buffer size for sending frames.
-	defaultWriteBufSize = 32 * 1024
-	defaultReadBufSize  = 32 * 1024
+	defaultReadBufSize = 32 * 1024
 )
 
 type Handler interface {
@@ -77,7 +76,6 @@ func ListenAndServe(ctx context.Context, listener net.Listener, handler Handler)
 type serverOptions struct {
 	// creds             credentials.TransportCredentials
 	// unaryInt          grpc.UnaryServerInterceptor
-	writeBufferSize   int
 	readBufferSize    int
 	connectionTimeout time.Duration
 	Unary             grpc.UnaryServerInterceptor
@@ -85,7 +83,6 @@ type serverOptions struct {
 
 var defaultServerOptions = serverOptions{
 	connectionTimeout: 120 * time.Second,
-	writeBufferSize:   defaultWriteBufSize,
 	readBufferSize:    defaultReadBufSize,
 }
 
@@ -142,7 +139,7 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 		}
 		method, seq := iMessage.methodID(), iMessage.seq()
 		dec := func(in any) error {
-			if err := proto.Unmarshal(iMessage[6:], in.(proto.Message)); err != nil {
+			if err := proto.Unmarshal(iMessage.body(), in.(proto.Message)); err != nil {
 				return err
 			}
 			return nil
@@ -165,7 +162,7 @@ func (x *Server) Serve(ctx context.Context, c net.Conn) (err error) {
 }
 
 func (x *Server) decode(b *bufio.Reader) (Message, error) {
-	headerBytes, err := b.Peek(2)
+	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +186,9 @@ func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (Mess
 		return nil, err
 	}
 	buf := pool.Get().(*Message)
-	buf.WriteUint16(uint16(6 + len(b))) // 2
-	buf.WriteUint16(seq)                // 2
-	buf.WriteUint16(method)             // 2
+	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
+	buf.WriteUint16(seq)                                     // 2
+	buf.WriteUint16(method)                                  // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err
 	}

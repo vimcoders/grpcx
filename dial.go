@@ -35,10 +35,7 @@ func newFuncDialOption(f func(*Option)) *funcDialOption {
 }
 
 func Dial(network string, addr string, opts ...DialOption) (Client, error) {
-	opt := Option{
-		buffsize: 8 * 1024,
-		timeout:  time.Minute,
-	}
+	opt := defaultClientOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
 	}

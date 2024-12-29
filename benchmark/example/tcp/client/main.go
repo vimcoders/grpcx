@@ -45,8 +45,13 @@ type Client struct {
 }
 
 func (x *Client) BenchmarkChat(ctx context.Context) {
+	var b []byte
+	for i := 0; i < 100; i++ {
+		b = append(b, []byte("tokentoken")...)
+	}
+	message := string(b)
 	for {
-		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token"}); err != nil {
+		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: message}); err != nil {
 			fmt.Println(err.Error())
 			return
 		}

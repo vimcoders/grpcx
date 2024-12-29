@@ -10,7 +10,6 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/vimcoders/go-driver/driver"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -49,8 +48,12 @@ const (
 	defaultReadBufSize  = 32 * 1024
 )
 
+type Handler interface {
+	Handle(context.Context, net.Conn)
+}
+
 // ListenAndServe binds port and handle requests, blocking until close
-func ListenAndServe(ctx context.Context, listener net.Listener, handler driver.Handler) {
+func ListenAndServe(ctx context.Context, listener net.Listener, handler Handler) {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()

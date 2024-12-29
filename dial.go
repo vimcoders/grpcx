@@ -1,10 +1,12 @@
 package grpcx
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
 
+	"github.com/vimcoders/quicx"
 	"google.golang.org/grpc"
 )
 
@@ -41,18 +43,18 @@ func Dial(network string, addr string, opts ...DialOption) (Client, error) {
 		opts[i].apply(&opt)
 	}
 	switch network {
-	case "udp":
-		// conn, err := quicx.Dial(addr, &tls.Config{
-		// 	InsecureSkipVerify: true,
-		// 	NextProtos:         []string{"quic-echo-example"},
-		// 	MaxVersion:         tls.VersionTLS13,
-		// }, &quicx.Config{
-		// 	MaxIdleTimeout: time.Minute,
-		// })
-		// if err != nil {
-		// 	return nil, err
-		// }
-		// return newClient(conn, opt), nil
+	case "quic":
+		conn, err := quicx.Dial(addr, &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"quic-echo-example"},
+			MaxVersion:         tls.VersionTLS13,
+		}, &quicx.Config{
+			MaxIdleTimeout: time.Minute,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return newClient(conn, opt), nil
 	case "tcp":
 		fallthrough
 	case "tcp4":

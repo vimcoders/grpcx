@@ -19,10 +19,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-type OpenTracing interface {
-	GetOpentracing() *pb.Opentracing
-}
-
 func main() {
 	fmt.Println(runtime.NumCPU())
 	x := MakeHandler()
@@ -34,9 +30,8 @@ func main() {
 		fmt.Println(err.Error())
 		return
 	}
-	client := pb.NewChatClient(cc)
 	benchmarkClient := Client{
-		ChatClient: client,
+		ChatClient: pb.NewChatClient(cc),
 		Tracer:     x.Tracer,
 	}
 	for i := 0; i < 1; i++ {
@@ -51,6 +46,10 @@ type Handler struct {
 	pb.ChatServer
 	opentracing.Tracer
 	io.Closer
+}
+
+type OpenTracing interface {
+	GetOpentracing() *pb.Opentracing
 }
 
 func (x Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {

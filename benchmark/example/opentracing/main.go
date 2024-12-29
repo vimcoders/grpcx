@@ -94,18 +94,3 @@ func (x *Client) tracing(ctx context.Context) {
 		x.unix = time.Now().Unix()
 	}
 }
-
-func (x *Client) BenchmarkChat(ctx context.Context) {
-	for {
-		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: "token"}); err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-		x.total++
-		if x.unix != time.Now().Unix() {
-			fmt.Println(x.total)
-			x.total = 0
-			x.unix = time.Now().Unix()
-		}
-	}
-}

@@ -34,7 +34,7 @@ func newFuncDialOption(f func(*Option)) *funcDialOption {
 
 func Dial(network string, addr string, opts ...DialOption) (Client, error) {
 	opt := Option{
-		buffsize: 1024,
+		buffsize: 8 * 1024,
 		timeout:  time.Minute,
 	}
 	for i := 0; i < len(opts); i++ {

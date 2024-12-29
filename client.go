@@ -37,13 +37,7 @@ type XClient struct {
 	streams *sync.Pool
 }
 
-func NewClient(c net.Conn, opt Option) Client {
-	return newClient(c, opt)
-}
-
 func newClient(c net.Conn, opt Option) Client {
-	opt.buffsize = 8 * 1024
-	opt.timeout = time.Second * 60
 	x := &XClient{
 		Option:  opt,
 		Conn:    c,

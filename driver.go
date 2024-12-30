@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const _MESSAGE_HEADER_LENGTH = 8
+const _MESSAGE_HEADER_LENGTH = 6
 const _MESSAGE_HEADER = 2
 
 var pool sync.Pool = sync.Pool{
@@ -43,7 +43,7 @@ func (x message) methodID() uint16 {
 }
 
 func (x message) body() []byte {
-	return x[8:] // 6
+	return x[6:] // 6
 }
 
 func (x message) clone() message {

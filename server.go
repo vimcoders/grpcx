@@ -185,7 +185,7 @@ func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (mess
 	}
 	buf := pool.Get().(*message)
 	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
-	buf.WriteUint16(seq)                                     // 4
+	buf.WriteUint16(seq)                                     // 2
 	buf.WriteUint16(method)                                  // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err

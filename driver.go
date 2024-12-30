@@ -24,7 +24,7 @@ var invoke sync.Pool = sync.Pool{
 		_invoke_mutex.Lock()
 		defer _invoke_mutex.Unlock()
 		seq := _invoke_seq + 1
-		_invoke_seq = seq % math.MaxUint16
+		_invoke_seq = seq % math.MaxInt32
 		return &invoker{
 			seq:    seq,
 			signal: make(chan message, 1),

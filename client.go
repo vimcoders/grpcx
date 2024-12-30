@@ -34,14 +34,14 @@ type client struct {
 	net.Conn
 	grpc.ClientConnInterface
 	sync.RWMutex
-	pending map[uint32]*invoker
+	pending map[uint16]*invoker
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) grpc.ClientConnInterface {
 	x := &client{
 		clientOption: opt,
 		Conn:         c,
-		pending:      make(map[uint32]*invoker),
+		pending:      make(map[uint16]*invoker),
 	}
 	go x.serve(ctx)
 	return x
@@ -131,7 +131,7 @@ func (x *client) wait(s *invoker) bool {
 	return true
 }
 
-func (x *client) invoke(seq uint32) *invoker {
+func (x *client) invoke(seq uint16) *invoker {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[seq]; ok {
@@ -160,14 +160,14 @@ func (x *client) decode(b *bufio.Reader) (message, error) {
 	return iMessage, nil
 }
 
-func (x *client) encode(seq uint32, method uint16, iMessage proto.Message) (message, error) {
+func (x *client) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err
 	}
 	buf := pool.Get().(*message)
 	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
-	buf.WriteUint32(seq)                                     // 4
+	buf.WriteUint16(seq)                                     // 2
 	buf.WriteUint16(method)                                  // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err

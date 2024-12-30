@@ -22,7 +22,6 @@ import (
 	"github.com/uber/jaeger-client-go"
 	jaegercfg "github.com/uber/jaeger-client-go/config"
 	"github.com/vimcoders/quicx"
-	"google.golang.org/grpc"
 )
 
 func main() {
@@ -56,24 +55,6 @@ type Handler struct {
 
 type OpenTracing interface {
 	GetOpentracing() *pb.Opentracing
-}
-
-func (x *Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	opentracingAgrs, ok := req.(OpenTracing)
-	if !ok {
-		return handler(ctx, req)
-	}
-	t := opentracingAgrs.GetOpentracing()
-	if t == nil {
-		return handler(ctx, req)
-	}
-	traceID := jaeger.TraceID{High: t.High, Low: t.Low}
-	spanID := jaeger.SpanID(t.SpanID + 1)
-	parentID := jaeger.SpanID(t.SpanID)
-	spanCtx := jaeger.NewSpanContext(traceID, spanID, parentID, true, nil)
-	span := x.StartSpan(info.FullMethod, opentracing.ChildOf(spanCtx))
-	defer span.Finish()
-	return handler(ctx, req)
 }
 
 // MakeHandler creates a Handler instance

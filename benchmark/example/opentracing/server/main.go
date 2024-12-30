@@ -17,6 +17,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go"
 	jaegercfg "github.com/uber/jaeger-client-go/config"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -26,11 +27,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	x := MakeHandler()
 	opts := []grpcx.ServerOption{
-		//grpcx.UnaryInterceptor(x.UnaryInterceptor),
+		grpcx.UnaryInterceptor(x.UnaryInterceptor),
 		grpcx.WithServiceDesc(pb.Chat_ServiceDesc),
 	}
-	svr := grpcx.NewServer(MakeHandler(), opts...)
+	svr := grpcx.NewServer(x, opts...)
 	go svr.ListenAndServe(context.Background(), listener)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
@@ -48,6 +50,24 @@ type Handler struct {
 
 type OpenTracing interface {
 	GetOpentracing() *pb.Opentracing
+}
+
+func (x *Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	opentracingAgrs, ok := req.(OpenTracing)
+	if !ok {
+		return handler(ctx, req)
+	}
+	t := opentracingAgrs.GetOpentracing()
+	if t == nil {
+		return handler(ctx, req)
+	}
+	traceID := jaeger.TraceID{High: t.High, Low: t.Low}
+	spanID := jaeger.SpanID(t.SpanID + 1)
+	parentID := jaeger.SpanID(t.SpanID)
+	spanCtx := jaeger.NewSpanContext(traceID, spanID, parentID, true, nil)
+	span := x.StartSpan(info.FullMethod, opentracing.ChildOf(spanCtx))
+	defer span.Finish()
+	return handler(ctx, req)
 }
 
 // MakeHandler creates a Handler instance

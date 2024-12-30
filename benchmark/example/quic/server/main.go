@@ -58,7 +58,7 @@ type OpenTracing interface {
 	GetOpentracing() *pb.Opentracing
 }
 
-func (x Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func (x *Handler) UnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	opentracingAgrs, ok := req.(OpenTracing)
 	if !ok {
 		return handler(ctx, req)

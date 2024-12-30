@@ -43,7 +43,7 @@ func (x message) methodID() uint16 {
 }
 
 func (x message) body() []byte {
-	return x[6:] // 6
+	return x[8:] // 6
 }
 
 func (x message) clone() message {

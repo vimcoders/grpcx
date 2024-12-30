@@ -21,7 +21,7 @@ type clientOption struct {
 	address  string
 	buffsize uint16
 	timeout  time.Duration
-	Methods  []grpc.MethodDesc
+	Methods  []string
 }
 
 var defaultClientOptions = clientOption{
@@ -53,7 +53,7 @@ func (x *client) Close() error {
 
 func (x *client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
 	for method := 0; method < len(x.Methods); method++ {
-		if x.Methods[method].MethodName != filepath.Base(methodName) {
+		if x.Methods[method] != filepath.Base(methodName) {
 			continue
 		}
 		return x.do(ctx, uint16(method), req, reply)

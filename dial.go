@@ -32,7 +32,9 @@ func WithClientDial(network, address string) DialOption {
 
 func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
 	return newFuncDialOption(func(o *clientOption) {
-		o.Methods = info.Methods
+		for i := 0; i < len(info.Methods); i++ {
+			o.Methods = append(o.Methods, info.Methods[i].MethodName)
+		}
 	})
 }
 

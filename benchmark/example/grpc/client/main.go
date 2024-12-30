@@ -56,7 +56,7 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 	for {
 		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: message}); err != nil {
 			fmt.Println(err.Error())
-			return
+			continue
 		}
 	}
 }

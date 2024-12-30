@@ -17,6 +17,8 @@ import (
 )
 
 type clientOption struct {
+	network  string
+	address  string
 	buffsize uint16
 	timeout  time.Duration
 	Methods  []grpc.MethodDesc

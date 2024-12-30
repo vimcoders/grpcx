@@ -39,7 +39,8 @@ func main() {
 		//grpcx.UnaryInterceptor(x.UnaryInterceptor),
 		grpcx.WithServiceDesc(pb.Chat_ServiceDesc),
 	}
-	go grpcx.ListenAndServe(context.Background(), listener, x, opts...)
+	svr := grpcx.NewServer(x, opts...)
+	go svr.ListenAndServe(context.Background(), listener)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	<-quit

@@ -16,7 +16,11 @@ import (
 func main() {
 	fmt.Println(runtime.NumCPU())
 	runtime.GOMAXPROCS(3)
-	cc, err := grpcx.Dial(context.Background(), "tcp", "127.0.0.1:28889", grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc))
+	opts := []grpcx.DialOption{
+		grpcx.WithClientDial("tcp", "127.0.0.1:28889"),
+		grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc),
+	}
+	cc, err := grpcx.Dial(context.Background(), opts...)
 	if err != nil {
 		panic(err)
 	}

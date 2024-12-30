@@ -57,7 +57,7 @@ type Handler interface {
 }
 
 // ListenAndServe binds port and handle requests, blocking until close
-func ListenAndServe(ctx context.Context, listener net.Listener, x Handler, opt ...ServerOption) {
+func (x Server) ListenAndServe(ctx context.Context, listener net.Listener) {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()
@@ -74,8 +74,7 @@ func ListenAndServe(ctx context.Context, listener net.Listener, x Handler, opt .
 			fmt.Println(err)
 			continue
 		}
-		svr := newServer(x, opt...)
-		go svr.serve(ctx, conn)
+		go x.serve(ctx, conn)
 	}
 }
 
@@ -92,24 +91,24 @@ var defaultServerOptions = serverOption{
 	readBufferSize:    defaultReadBufSize,
 }
 
-type server struct {
+type Server struct {
 	serverOption
 	impl any
 }
 
-func newServer(impl any, opt ...ServerOption) *server {
+func NewServer(impl any, opt ...ServerOption) *Server {
 	opts := defaultServerOptions
 	for i := 0; i < len(opt); i++ {
 		opt[i].apply(&opts)
 	}
-	return &server{serverOption: opts, impl: impl}
+	return &Server{impl: impl, serverOption: opts}
 }
 
-func (x *server) Close() error {
+func (x *Server) Close() error {
 	return nil
 }
 
-func (x *server) serve(ctx context.Context, c net.Conn) (err error) {
+func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			fmt.Println(e)
@@ -160,7 +159,7 @@ func (x *server) serve(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (x *server) decode(b *bufio.Reader) (message, error) {
+func (x *Server) decode(b *bufio.Reader) (message, error) {
 	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -179,7 +178,7 @@ func (x *server) decode(b *bufio.Reader) (message, error) {
 	return iMessage, nil
 }
 
-func (x *server) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
+func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err

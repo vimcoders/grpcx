@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,12 +27,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	x := MakeHandler()
 	opts := []grpcx.ServerOption{
 		//grpcx.UnaryInterceptor(x.UnaryInterceptor),
 		grpcx.WithServiceDesc(pb.Chat_ServiceDesc),
 	}
-	go grpcx.ListenAndServe(context.Background(), listener, x, opts...)
+	svr := grpcx.NewServer(MakeHandler(), opts...)
+	go svr.ListenAndServe(context.Background(), listener)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
@@ -43,6 +44,7 @@ type Handler struct {
 	io.Closer
 	total int64
 	unix  int64
+	sync.RWMutex
 }
 
 type OpenTracing interface {
@@ -88,6 +90,8 @@ func MakeHandler() *Handler {
 }
 
 func (x *Handler) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatResponse, error) {
+	x.Lock()
+	defer x.Unlock()
 	x.total++
 	if x.unix != time.Now().Unix() {
 		fmt.Println(x.total, "request/s", "NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())

@@ -23,6 +23,13 @@ func (x *funcDialOption) apply(o *clientOption) {
 	x.f(o)
 }
 
+func WithClientDial(network, address string) DialOption {
+	return newFuncDialOption(func(o *clientOption) {
+		o.network = network
+		o.address = address
+	})
+}
+
 func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
 	return newFuncDialOption(func(o *clientOption) {
 		o.Methods = info.Methods
@@ -35,14 +42,14 @@ func newFuncDialOption(f func(*clientOption)) *funcDialOption {
 	}
 }
 
-func Dial(ctx context.Context, network string, addr string, opts ...DialOption) (grpc.ClientConnInterface, error) {
+func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, error) {
 	opt := defaultClientOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
 	}
-	switch network {
+	switch opt.network {
 	case "quic":
-		conn, err := quicx.Dial(addr, &tls.Config{
+		conn, err := quicx.Dial(opt.address, &tls.Config{
 			InsecureSkipVerify: true,
 			NextProtos:         []string{"quic-echo-example"},
 			MaxVersion:         tls.VersionTLS13,
@@ -56,11 +63,11 @@ func Dial(ctx context.Context, network string, addr string, opts ...DialOption) 
 	case "tcp":
 		fallthrough
 	case "tcp4":
-		conn, err := net.Dial("tcp", addr)
+		conn, err := net.Dial("tcp", opt.address)
 		if err != nil {
 			return nil, err
 		}
 		return newClient(ctx, conn, opt), nil
 	}
-	return nil, fmt.Errorf("%s unkonw", network)
+	return nil, fmt.Errorf("%s unkonw", opt.network)
 }

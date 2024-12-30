@@ -48,7 +48,7 @@ func main() {
 		ChatClient: pb.NewChatClient(cc),
 		Closer:     closer,
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 100000; i++ {
 		go client.BenchmarkTracing(context.Background())
 	}
 	quit := make(chan os.Signal, 1)

@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const _MESSAGE_HEADER_LENGTH = 6
+const _MESSAGE_HEADER_LENGTH = 8
 const _MESSAGE_HEADER = 2
 
 var pool sync.Pool = sync.Pool{
@@ -16,7 +16,7 @@ var pool sync.Pool = sync.Pool{
 	},
 }
 
-var _invoke_seq uint16
+var _invoke_seq uint32
 var _invoke_mutex sync.Mutex
 
 var invoke sync.Pool = sync.Pool{
@@ -34,16 +34,16 @@ var invoke sync.Pool = sync.Pool{
 
 type message []byte
 
-func (x message) seq() uint16 {
-	return binary.BigEndian.Uint16(x[2:]) //2
+func (x message) seq() uint32 {
+	return binary.BigEndian.Uint32(x[2:]) //2
 }
 
 func (x message) methodID() uint16 {
-	return binary.BigEndian.Uint16(x[4:]) // 4
+	return binary.BigEndian.Uint16(x[6:]) // 4
 }
 
 func (x message) body() []byte {
-	return x[6:] // 6
+	return x[8:] // 6
 }
 
 func (x message) clone() message {
@@ -95,7 +95,7 @@ func (x message) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 type invoker struct {
-	seq    uint16
+	seq    uint32
 	signal chan message
 }
 

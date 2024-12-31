@@ -17,7 +17,7 @@ func main() {
 	fmt.Println(runtime.NumCPU())
 	runtime.GOMAXPROCS(3)
 	opts := []grpcx.DialOption{
-		grpcx.WithClientDial("quic", "127.0.0.1:28888"),
+		grpcx.WithDial("udp", "127.0.0.1:28888"),
 		grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc),
 	}
 	cc, err := grpcx.Dial(context.Background(), opts...)

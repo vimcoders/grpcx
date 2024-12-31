@@ -28,9 +28,9 @@ type Instance interface {
 	Tag(key string) (value string, ok bool)
 }
 
-func NewInstance(network, address string, weight int, tags map[string]string) Instance {
+func NewInstance(addr net.Addr, weight int, tags map[string]string) Instance {
 	return &instance{
-		//addr:   utils.NewNetAddr(network, address),
+		addr:   addr,
 		weight: weight,
 		tags:   tags,
 	}

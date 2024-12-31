@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"net"
 	"sync"
 )
 
@@ -102,4 +103,23 @@ type invoker struct {
 func (x *invoker) invoke(iMessage message) error {
 	x.signal <- iMessage
 	return nil
+}
+
+var _ net.Addr = &Addr{}
+
+type Addr struct {
+	network string
+	address string
+}
+
+func NewAddr(network, address string) net.Addr {
+	return &Addr{network, address}
+}
+
+func (na *Addr) Network() string {
+	return na.network
+}
+
+func (na *Addr) String() string {
+	return na.address
 }

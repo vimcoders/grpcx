@@ -3,7 +3,7 @@ package grpcx
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
+	"grpcx/discovery"
 	"net"
 	"time"
 
@@ -11,65 +11,86 @@ import (
 	"google.golang.org/grpc"
 )
 
+type dialOption struct {
+	address  []net.Addr
+	buffsize uint16
+	timeout  time.Duration
+	Methods  []string
+}
+
+var defaultDialOptions = dialOption{
+	timeout:  120 * time.Second,
+	buffsize: defaultReadBufSize,
+}
+
 type DialOption interface {
-	apply(*clientOption)
+	apply(*dialOption)
 }
 
 type funcDialOption struct {
-	f func(*clientOption)
+	f func(*dialOption)
 }
 
-func (x *funcDialOption) apply(o *clientOption) {
+func (x *funcDialOption) apply(o *dialOption) {
 	x.f(o)
 }
 
-func WithClientDial(network, address string) DialOption {
-	return newFuncDialOption(func(o *clientOption) {
-		o.network = network
-		o.address = address
+func WithDial(network, address string) DialOption {
+	return newFuncDialOption(func(o *dialOption) {
+		o.address = append(o.address, NewAddr(network, address))
 	})
 }
 
 func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
-	return newFuncDialOption(func(o *clientOption) {
+	return newFuncDialOption(func(o *dialOption) {
 		for i := 0; i < len(info.Methods); i++ {
 			o.Methods = append(o.Methods, info.Methods[i].MethodName)
 		}
 	})
 }
 
-func newFuncDialOption(f func(*clientOption)) *funcDialOption {
+func newFuncDialOption(f func(*dialOption)) *funcDialOption {
 	return &funcDialOption{
 		f: f,
 	}
 }
 
 func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, error) {
-	opt := defaultClientOptions
+	opt := defaultDialOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
 	}
-	switch opt.network {
-	case "quic":
-		conn, err := quicx.Dial(opt.address, &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{"quic-echo-example"},
-			MaxVersion:         tls.VersionTLS13,
-		}, &quicx.Config{
-			MaxIdleTimeout: time.Minute,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return newClient(ctx, conn, opt), nil
-	case "tcp":
-		fallthrough
-	case "tcp4":
-		conn, err := net.Dial("tcp", opt.address)
-		if err != nil {
-			return nil, err
-		}
-		return newClient(ctx, conn, opt), nil
+	clientOpt := clientOption{
+		timeout:  opt.timeout,
+		buffsize: opt.buffsize,
+		Methods:  opt.Methods,
 	}
-	return nil, fmt.Errorf("%s unkonw", opt.network)
+	var client client
+	for i := 0; i < len(opt.address); i++ {
+
+		switch opt.address[i].Network() {
+		case "tcp":
+			conn, err := net.Dial("tcp", opt.address[i].String())
+			if err != nil {
+				return nil, err
+			}
+			client.cc = append(client.cc, newClient(ctx, conn, clientOpt))
+		case "udp":
+			conn, err := quicx.Dial(opt.address[i].String(), &tls.Config{
+				InsecureSkipVerify: true,
+				NextProtos:         []string{"quic-echo-example"},
+				MaxVersion:         tls.VersionTLS13,
+			}, &quicx.Config{
+				MaxIdleTimeout: time.Minute,
+			})
+			if err != nil {
+				return nil, err
+			}
+			client.cc = append(client.cc, newClient(ctx, conn, clientOpt))
+		}
+	}
+	for i := 0; i < len(client.cc); i++ {
+		client.Instances = append(client.Instances, discovery.NewInstance(client.cc[i], 1, nil))
+	}
+	return &client, nil
 }

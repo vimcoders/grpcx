@@ -1,4 +1,4 @@
-package loadbalance
+package balance
 
 import (
 	"context"
@@ -10,14 +10,14 @@ type randomPicker struct {
 	instances []discovery.Instance
 }
 
-func newRandomPicker(instances []discovery.Instance) Picker {
+func NewRandomPicker(instances []discovery.Instance) Picker {
 	return &randomPicker{
 		instances: instances,
 	}
 }
 
 // Next implements the Picker interface.
-func (rp *randomPicker) Next(ctx context.Context, request interface{}) (ins discovery.Instance) {
+func (rp *randomPicker) Next(ctx context.Context, request interface{}) discovery.Instance {
 	idx := rand.IntN(len(rp.instances))
 	return rp.instances[idx]
 }

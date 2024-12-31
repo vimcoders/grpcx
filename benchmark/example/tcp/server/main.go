@@ -75,7 +75,7 @@ func (x *Handler) Chat(ctx context.Context, req *pb.ChatRequest) (*pb.ChatRespon
 	defer x.Unlock()
 	x.total++
 	if x.unix != time.Now().Unix() {
-		fmt.Println(x.total, "request/s", "NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())
+		fmt.Println(time.Now().Format("2006-01-02 15:04:05"), x.total, "request/s", "NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())
 		x.total = 0
 		x.unix = time.Now().Unix()
 	}

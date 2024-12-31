@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"grpcx/balance"
+	"grpcx/discovery"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -16,29 +18,52 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type Conn interface {
+	net.Addr
+	grpc.ClientConnInterface
+}
+
 type clientOption struct {
-	network  string
-	address  string
 	buffsize uint16
 	timeout  time.Duration
 	Methods  []string
 }
 
-var defaultClientOptions = clientOption{
-	timeout:  120 * time.Second,
-	buffsize: defaultReadBufSize,
+type client struct {
+	cc []Conn
+	grpc.ClientConnInterface
+	balance.Balancer
+	discovery.Result
 }
 
-type client struct {
-	clientOption
+func (x client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
+	instance := x.GetPicker(x.Result).Next(ctx, req)
+	for i := 0; i < len(x.cc); i++ {
+		if x.cc[i].Network() != instance.Address().Network() {
+			continue
+		}
+		if x.cc[i].String() != instance.Address().String() {
+			continue
+		}
+		return x.cc[i].Invoke(ctx, methodName, req, reply, opts...)
+	}
+	return fmt.Errorf("instance %s not found", instance.Address().String())
+}
+
+func (x client) GetPicker(result discovery.Result) balance.Picker {
+	return balance.NewRandomPicker(result.Instances)
+}
+
+type conn struct {
 	net.Conn
-	grpc.ClientConnInterface
+	clientOption
 	sync.RWMutex
+	grpc.ClientConnInterface
 	pending map[uint16]*invoker
 }
 
-func newClient(ctx context.Context, c net.Conn, opt clientOption) grpc.ClientConnInterface {
-	x := &client{
+func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
+	x := &conn{
 		clientOption: opt,
 		Conn:         c,
 		pending:      make(map[uint16]*invoker),
@@ -47,21 +72,29 @@ func newClient(ctx context.Context, c net.Conn, opt clientOption) grpc.ClientCon
 	return x
 }
 
-func (x *client) Close() error {
+func (x *conn) Close() error {
 	return x.Conn.Close()
 }
 
-func (x *client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
+func (x *conn) Network() string {
+	return x.RemoteAddr().Network()
+}
+
+func (x *conn) String() string {
+	return x.RemoteAddr().String()
+}
+
+func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
 	for method := 0; method < len(x.Methods); method++ {
 		if x.Methods[method] != filepath.Base(methodName) {
 			continue
 		}
 		return x.do(ctx, uint16(method), req, reply)
 	}
-	return errors.New(methodName)
+	return fmt.Errorf("method %s not found", methodName)
 }
 
-func (x *client) do(ctx context.Context, method uint16, req any, reply any) (err error) {
+func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
 	invoker := invoke.Get().(*invoker)
 	if ok := x.wait(invoker); !ok {
 		return fmt.Errorf("too many request %d", invoker.seq)
@@ -90,7 +123,7 @@ func (x *client) do(ctx context.Context, method uint16, req any, reply any) (err
 	}
 }
 
-func (x *client) serve(ctx context.Context) (err error) {
+func (x *conn) serve(ctx context.Context) (err error) {
 	defer func() {
 		if err := recover(); err != nil {
 			fmt.Println(err)
@@ -121,7 +154,7 @@ func (x *client) serve(ctx context.Context) (err error) {
 	}
 }
 
-func (x *client) wait(s *invoker) bool {
+func (x *conn) wait(s *invoker) bool {
 	x.Lock()
 	defer x.Unlock()
 	if _, ok := x.pending[s.seq]; ok {
@@ -131,7 +164,7 @@ func (x *client) wait(s *invoker) bool {
 	return true
 }
 
-func (x *client) invoke(seq uint16) *invoker {
+func (x *conn) invoke(seq uint16) *invoker {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[seq]; ok {
@@ -141,7 +174,7 @@ func (x *client) invoke(seq uint16) *invoker {
 	return nil
 }
 
-func (x *client) decode(b *bufio.Reader) (message, error) {
+func (x *conn) decode(b *bufio.Reader) (message, error) {
 	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -160,7 +193,7 @@ func (x *client) decode(b *bufio.Reader) (message, error) {
 	return iMessage, nil
 }
 
-func (x *client) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
+func (x *conn) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err

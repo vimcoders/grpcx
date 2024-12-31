@@ -74,6 +74,7 @@ func (x Server) ListenAndServe(ctx context.Context, listener net.Listener) {
 			fmt.Println(err)
 			continue
 		}
+		fmt.Println(conn.RemoteAddr())
 		go x.serve(ctx, conn)
 	}
 }

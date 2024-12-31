@@ -1,4 +1,4 @@
-package loadbalance
+package balance
 
 import (
 	"context"
@@ -12,7 +12,7 @@ type Picker interface {
 }
 
 // Loadbalancer generates pickers for the given service discovery result.
-type Loadbalancer interface {
+type Balancer interface {
 	GetPicker(discovery.Result) Picker
 	Name() string // unique key
 }

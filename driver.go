@@ -16,9 +16,9 @@ var pool sync.Pool = sync.Pool{
 	},
 }
 
-var _signal sync.Pool = sync.Pool{
+var streams sync.Pool = sync.Pool{
 	New: func() any {
-		return &signal{
+		return &stream{
 			signal: make(chan message, 1),
 		}
 	},
@@ -86,11 +86,12 @@ func (x message) WriteTo(w io.Writer) (n int64, err error) {
 	return n, nil
 }
 
-type signal struct {
+type stream struct {
+	seq    uint16
 	signal chan message
 }
 
-func (x *signal) invoke(iMessage message) error {
+func (x *stream) invoke(iMessage message) error {
 	x.signal <- iMessage
 	return nil
 }

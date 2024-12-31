@@ -64,21 +64,24 @@ type conn struct {
 	clientOption
 	sync.RWMutex
 	grpc.ClientConnInterface
-	pending map[uint16]*signal
+	streams map[uint16]*stream
 	seq     uint16
+	queue   chan message
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
 	x := &conn{
 		clientOption: opt,
 		Conn:         c,
-		pending:      make(map[uint16]*signal),
+		streams:      make(map[uint16]*stream),
+		queue:        make(chan message, 65535),
 	}
 	go x.serve(ctx)
 	return x
 }
 
 func (x *conn) Close() error {
+	close(x.queue)
 	return x.Conn.Close()
 }
 
@@ -101,35 +104,55 @@ func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any
 }
 
 func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
-	seq, signal, ok := x.newSignal()
+	stream, ok := x.newStream()
 	if !ok {
 		return fmt.Errorf("too many request")
 	}
 	defer func() {
 		if err != nil {
-			x.notify(seq)
+			x.closeStream(stream.seq)
 		}
 	}()
-	buf, err := x.encode(seq, uint16(method), req.(proto.Message))
+	buf, err := x.encode(stream.seq, uint16(method), req.(proto.Message))
 	if err != nil {
 		return err
 	}
-	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-		return err
-	}
-	if _, err := buf.WriteTo(x.Conn); err != nil {
-		return err
-	}
+	x.queue <- buf
 	select {
 	case <-ctx.Done():
 		return errors.New("timeout")
-	case response := <-signal.signal:
+	case response := <-stream.signal:
 		if err := proto.Unmarshal(response.body(), reply.(proto.Message)); err != nil {
 			return err
 		}
 		response.close()
-		_signal.Put(signal)
+		streams.Put(stream)
 		return nil
+	}
+}
+
+func (x *conn) send(ctx context.Context) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Println(e)
+			debug.PrintStack()
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New("shutdown")
+		case buf := <-x.queue:
+			if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+				return err
+			}
+			if _, err := buf.WriteTo(x.Conn); err != nil {
+				return err
+			}
+		}
 	}
 }
 
@@ -139,7 +162,9 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			fmt.Println(err)
 			debug.PrintStack()
 		}
+		x.Close()
 	}()
+	go x.send(ctx)
 	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
 	for {
 		select {
@@ -154,34 +179,35 @@ func (x *conn) serve(ctx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
-		invoker := x.notify(iMessage.seq())
-		if invoker == nil {
+		stream := x.closeStream(iMessage.seq())
+		if stream == nil {
 			return nil
 		}
-		if err := invoker.invoke(iMessage.clone()); err != nil {
+		if err := stream.invoke(iMessage.clone()); err != nil {
 			return err
 		}
 	}
 }
 
-func (x *conn) newSignal() (uint16, *signal, bool) {
+func (x *conn) newStream() (*stream, bool) {
 	x.Lock()
 	defer x.Unlock()
 	seq := x.seq + 1
-	if _, ok := x.pending[seq]; ok {
-		return 0, nil, false
+	if _, ok := x.streams[seq]; ok {
+		return nil, false
 	}
-	signal := _signal.Get().(*signal)
-	x.pending[seq] = signal
+	stream := streams.Get().(*stream)
+	x.streams[seq] = stream
 	x.seq = seq % math.MaxUint16
-	return seq, signal, true
+	stream.seq = seq
+	return stream, true
 }
 
-func (x *conn) notify(seq uint16) *signal {
+func (x *conn) closeStream(seq uint16) *stream {
 	x.Lock()
 	defer x.Unlock()
-	if v, ok := x.pending[seq]; ok {
-		delete(x.pending, seq)
+	if v, ok := x.streams[seq]; ok {
+		delete(x.streams, seq)
 		return v
 	}
 	return nil

@@ -169,6 +169,7 @@ func (x *conn) newSignal() (uint16, *signal, bool) {
 		}
 		invoker := _signal.Get().(*signal)
 		x.pending[seq] = invoker
+		return seq, invoker, true
 	}
 	return 0, nil, false
 }

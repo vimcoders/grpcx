@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"grpcx/balance"
 	"grpcx/discovery"
+	"math"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -62,14 +63,15 @@ type conn struct {
 	clientOption
 	sync.RWMutex
 	grpc.ClientConnInterface
-	pending map[uint16]*invoker
+	seq     uint16
+	pending map[uint16]*signal
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
 	x := &conn{
 		clientOption: opt,
 		Conn:         c,
-		pending:      make(map[uint16]*invoker),
+		pending:      make(map[uint16]*signal),
 	}
 	go x.serve(ctx)
 	return x
@@ -98,11 +100,11 @@ func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any
 }
 
 func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
-	invoker := invoke.Get().(*invoker)
-	if ok := x.wait(invoker); !ok {
-		return fmt.Errorf("too many request %d", invoker.seq)
+	seq, signal, ok := x.newSignal()
+	if !ok {
+		return fmt.Errorf("too many request")
 	}
-	buf, err := x.encode(invoker.seq, uint16(method), req.(proto.Message))
+	buf, err := x.encode(seq, uint16(method), req.(proto.Message))
 	if err != nil {
 		return err
 	}
@@ -114,14 +116,14 @@ func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err e
 	}
 	select {
 	case <-ctx.Done():
-		x.invoke(invoker.seq)
+		x.notify(seq)
 		return errors.New("timeout")
-	case response := <-invoker.signal:
+	case response := <-signal.signal:
 		if err := proto.Unmarshal(response.body(), reply.(proto.Message)); err != nil {
 			return err
 		}
 		response.close()
-		invoke.Put(invoker)
+		_signal.Put(signal)
 		return nil
 	}
 }
@@ -147,7 +149,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
-		invoker := x.invoke(iMessage.seq())
+		invoker := x.notify(iMessage.seq())
 		if invoker == nil {
 			return nil
 		}
@@ -157,17 +159,20 @@ func (x *conn) serve(ctx context.Context) (err error) {
 	}
 }
 
-func (x *conn) wait(s *invoker) bool {
+func (x *conn) newSignal() (uint16, *signal, bool) {
 	x.Lock()
 	defer x.Unlock()
-	if _, ok := x.pending[s.seq]; ok {
-		return false
+	seq := x.seq + 1
+	if _, ok := x.pending[seq]; ok {
+		return 0, nil, false
 	}
-	x.pending[s.seq] = s
-	return true
+	invoker := _signal.Get().(*signal)
+	x.pending[seq] = invoker
+	x.seq = seq % math.MaxUint16
+	return seq, invoker, true
 }
 
-func (x *conn) invoke(seq uint16) *invoker {
+func (x *conn) notify(seq uint16) *signal {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[seq]; ok {

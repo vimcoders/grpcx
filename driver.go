@@ -3,7 +3,6 @@ package grpcx
 import (
 	"encoding/binary"
 	"io"
-	"math"
 	"net"
 	"sync"
 )
@@ -17,17 +16,9 @@ var pool sync.Pool = sync.Pool{
 	},
 }
 
-var _invoke_seq uint16
-var _invoke_mutex sync.Mutex
-
-var invoke sync.Pool = sync.Pool{
+var _signal sync.Pool = sync.Pool{
 	New: func() any {
-		_invoke_mutex.Lock()
-		defer _invoke_mutex.Unlock()
-		seq := _invoke_seq + 1
-		_invoke_seq = seq % math.MaxInt16
-		return &invoker{
-			seq:    seq,
+		return &signal{
 			signal: make(chan message, 1),
 		}
 	},
@@ -95,12 +86,11 @@ func (x message) WriteTo(w io.Writer) (n int64, err error) {
 	return n, nil
 }
 
-type invoker struct {
-	seq    uint16
+type signal struct {
 	signal chan message
 }
 
-func (x *invoker) invoke(iMessage message) error {
+func (x *signal) invoke(iMessage message) error {
 	x.signal <- iMessage
 	return nil
 }

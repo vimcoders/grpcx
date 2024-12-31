@@ -10,68 +10,71 @@ import (
 const _MESSAGE_HEADER_LENGTH = 6
 const _MESSAGE_HEADER = 2
 
-var pool sync.Pool = sync.Pool{
+var buffers sync.Pool = sync.Pool{
 	New: func() any {
-		return &message{}
+		return &buffer{}
 	},
 }
 
-var streams sync.Pool = sync.Pool{
+var requests sync.Pool = sync.Pool{
 	New: func() any {
-		return &stream{
-			signal: make(chan message, 1),
+		return &request{
+			ch: make(chan *buffer, 1),
 		}
 	},
 }
 
-type message []byte
-
-func (x message) seq() uint16 {
-	return binary.BigEndian.Uint16(x[2:]) //2
+type buffer struct {
+	b []byte
 }
 
-func (x message) methodID() uint16 {
-	return binary.BigEndian.Uint16(x[4:]) // 4
+func NewBuffer(b []byte) *buffer {
+	return &buffer{b: b}
 }
 
-func (x message) body() []byte {
-	return x[6:] // 6
+func (x buffer) seq() uint16 {
+	return binary.BigEndian.Uint16(x.b[2:]) //2
 }
 
-func (x message) clone() message {
-	b := pool.Get().(*message)
-	b.Write(x)
-	return *b
+func (x buffer) methodID() uint16 {
+	return binary.BigEndian.Uint16(x.b[4:]) // 4
 }
 
-func (x *message) close() {
-	if cap(*x) <= 0 {
-		return
-	}
-	*x = (*x)[:0]
-	pool.Put(x)
+func (x buffer) body() []byte {
+	return x.b[6:] // 6
 }
 
-func (x *message) Write(p []byte) (int, error) {
-	*x = append(*x, p...)
+func (x *buffer) close() {
+	x.b = x.b[:0]
+	buffers.Put(x)
+}
+
+func (x *buffer) Write(p []byte) (int, error) {
+	x.b = append(x.b, p...)
 	return len(p), nil
 }
 
-func (x *message) WriteUint32(v uint32) {
-	*x = binary.BigEndian.AppendUint32(*x, v)
+func (x *buffer) WriteUint32(v ...uint32) {
+	for i := 0; i < len(v); i++ {
+		x.b = binary.BigEndian.AppendUint32(x.b, v[i])
+	}
 }
 
-func (x *message) WriteUint16(v uint16) {
-	*x = binary.BigEndian.AppendUint16(*x, v)
+func (x *buffer) WriteUint16(v ...uint16) {
+	for i := 0; i < len(v); i++ {
+		x.b = binary.BigEndian.AppendUint16(x.b, v[i])
+	}
 }
 
-func (x *message) WriteUint64(v uint64) {
-	*x = binary.BigEndian.AppendUint64(*x, v)
+func (x *buffer) WriteUint64(v ...uint64) {
+	for i := 0; i < len(v); i++ {
+		x.b = binary.BigEndian.AppendUint64(x.b, v[i])
+	}
 }
 
-func (x message) WriteTo(w io.Writer) (n int64, err error) {
-	if nBytes := len(x); nBytes > 0 {
-		m, e := w.Write(x)
+func (x buffer) WriteTo(w io.Writer) (n int64, err error) {
+	if nBytes := len(x.b); nBytes > 0 {
+		m, e := w.Write(x.b)
 		if m > nBytes {
 			panic("bytes.Buffer.WriteTo: invalid Write count")
 		}
@@ -86,14 +89,22 @@ func (x message) WriteTo(w io.Writer) (n int64, err error) {
 	return n, nil
 }
 
-type stream struct {
+type request struct {
 	seq    uint16
-	signal chan message
+	method uint16
+	body   []byte
+	ch     chan *buffer
 }
 
-func (x *stream) invoke(iMessage message) error {
-	x.signal <- iMessage
-	return nil
+func (x request) Size() uint16 {
+	return uint16(2 + 2 + 2 + len(x.body))
+}
+
+func (x *request) WriteTo(c net.Conn) (int64, error) {
+	buf := buffers.Get().(*buffer)
+	buf.WriteUint16(x.Size(), x.seq, x.method)
+	buf.Write(x.body)
+	return buf.WriteTo(c)
 }
 
 var _ net.Addr = &Addr{}
@@ -107,10 +118,10 @@ func NewAddr(network, address string) net.Addr {
 	return &Addr{network, address}
 }
 
-func (na *Addr) Network() string {
-	return na.network
+func (x *Addr) Network() string {
+	return x.network
 }
 
-func (na *Addr) String() string {
-	return na.address
+func (x *Addr) String() string {
+	return x.address
 }

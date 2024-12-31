@@ -65,6 +65,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		timeout:  opt.timeout,
 		buffsize: opt.buffsize,
 		Methods:  opt.Methods,
+		maxRetry: 3,
 	}
 	var client client
 	for i := 0; i < len(opt.address); i++ {

@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"github/vimcoders/grpcx/benchmark/pb"
 	"io"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx/benchmark/pb"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

@@ -160,7 +160,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (x *Server) decode(b *bufio.Reader) (message, error) {
+func (x *Server) decode(b *bufio.Reader) (*buffer, error) {
 	headerBytes, err := b.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -176,20 +176,20 @@ func (x *Server) decode(b *bufio.Reader) (message, error) {
 	if _, err := b.Discard(len(iMessage)); err != nil {
 		return nil, err
 	}
-	return iMessage, nil
+	return NewBuffer(iMessage), nil
 }
 
-func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
+func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (*buffer, error) {
 	b, err := proto.Marshal(iMessage)
 	if err != nil {
 		return nil, err
 	}
-	buf := pool.Get().(*message)
+	buf := buffers.Get().(*buffer)
 	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
 	buf.WriteUint16(seq)                                     // 2
 	buf.WriteUint16(method)                                  // 2
 	if _, err := buf.Write(b); err != nil {
 		return nil, err
 	}
-	return *buf, nil
+	return buf, nil
 }

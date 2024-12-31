@@ -16,7 +16,7 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	runtime.GOMAXPROCS(2)
+	runtime.GOMAXPROCS(4)
 	opts := []grpcx.DialOption{
 		grpcx.WithDial("tcp", "127.0.0.1:28889"),
 		//grpcx.WithDial("tcp", "127.0.0.1:28889"),
@@ -29,7 +29,7 @@ func main() {
 	client := &Client{
 		ChatClient: pb.NewChatClient(cc),
 	}
-	for i := 0; i < 30000; i++ {
+	for i := 0; i < 100000; i++ {
 		go client.BenchmarkChat(context.Background())
 	}
 	quit := make(chan os.Signal, 1)
@@ -56,8 +56,9 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 		b = append(b, []byte("tokentoken")...)
 	}
 	message := string(b)
-	//ticker := time.NewTicker(time.Second)
-	for /*range ticker.C*/ {
+	ticker := time.NewTicker(time.Millisecond * 100)
+	for range ticker.C {
+		//for {
 		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: message}); err != nil {
 			fmt.Println(err.Error())
 			continue

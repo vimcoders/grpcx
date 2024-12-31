@@ -10,7 +10,6 @@ import (
 	"net"
 	"path/filepath"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/balance"
@@ -29,6 +28,7 @@ type clientOption struct {
 	buffsize uint16
 	timeout  time.Duration
 	Methods  []string
+	maxRetry int
 }
 
 type client struct {
@@ -62,26 +62,28 @@ func (x *client) GetPicker(result discovery.Result) balance.Picker {
 type conn struct {
 	net.Conn
 	clientOption
-	sync.RWMutex
 	grpc.ClientConnInterface
-	streams map[uint16]*stream
+	pending map[uint16]*request
 	seq     uint16
-	queue   chan message
+	sendQ   chan *request
+	readQ   chan *buffer
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
 	x := &conn{
 		clientOption: opt,
 		Conn:         c,
-		streams:      make(map[uint16]*stream),
-		queue:        make(chan message, 65535),
+		pending:      make(map[uint16]*request),
+		sendQ:        make(chan *request, 65535),
+		readQ:        make(chan *buffer, 65535),
 	}
 	go x.serve(ctx)
 	return x
 }
 
 func (x *conn) Close() error {
-	close(x.queue)
+	close(x.sendQ)
+	close(x.readQ)
 	return x.Conn.Close()
 }
 
@@ -98,40 +100,95 @@ func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any
 		if x.Methods[method] != filepath.Base(methodName) {
 			continue
 		}
-		return x.do(ctx, uint16(method), req, reply)
+		return x.invoke(ctx, uint16(method), req, reply)
 	}
 	return fmt.Errorf("method %s not found", methodName)
 }
 
-func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
-	stream, ok := x.newStream()
-	if !ok {
-		return fmt.Errorf("too many request")
-	}
-	defer func() {
-		if err != nil {
-			x.closeStream(stream.seq)
+func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) error {
+	for i := 1; i <= x.maxRetry; i++ {
+		err := x.do(ctx, method, req, reply)
+		if err == nil {
+			return nil
 		}
-	}()
-	buf, err := x.encode(stream.seq, uint16(method), req.(proto.Message))
+		if i == x.maxRetry {
+			return err
+		}
+	}
+	return nil
+}
+
+func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
+	request, err := x.newRequest(method, req)
 	if err != nil {
 		return err
 	}
-	x.queue <- buf
 	select {
 	case <-ctx.Done():
 		return errors.New("timeout")
-	case response := <-stream.signal:
-		if err := proto.Unmarshal(response.body(), reply.(proto.Message)); err != nil {
+	case x.sendQ <- request:
+	}
+	select {
+	case <-ctx.Done():
+		return errors.New("timeout")
+	case b := <-request.ch:
+		if b == nil {
+			return errors.New("too many request")
+		}
+		if err := proto.Unmarshal(b.body(), reply.(proto.Message)); err != nil {
 			return err
 		}
-		response.close()
-		streams.Put(stream)
+		b.close()
+		requests.Put(request)
 		return nil
 	}
 }
 
-func (x *conn) send(ctx context.Context) (err error) {
+func (x *conn) read(ctx context.Context) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Println(e)
+			debug.PrintStack()
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
+		x.Close()
+	}()
+	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New("shutdown")
+		default:
+			if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
+				return err
+			}
+			headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+			if err != nil {
+				return err
+			}
+			length := int(binary.BigEndian.Uint16(headerBytes))
+			if length > buf.Size() {
+				return fmt.Errorf("header %v too long", length)
+			}
+			b, err := buf.Peek(length)
+			if err != nil {
+				return err
+			}
+			if _, err := buf.Discard(len(b)); err != nil {
+				return err
+			}
+			buffer := buffers.Get().(*buffer)
+			if _, err := buffer.Write(b); err != nil {
+				return err
+			}
+			x.readQ <- buffer
+		}
+	}
+}
+
+func (x *conn) serve(ctx context.Context) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			fmt.Println(e)
@@ -141,108 +198,50 @@ func (x *conn) send(ctx context.Context) (err error) {
 			fmt.Println(err)
 		}
 	}()
+	go x.read(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.New("shutdown")
-		case buf := <-x.queue:
-			if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+		case req := <-x.sendQ:
+			err := x.push(req)
+			if err != nil {
+				close(req.ch)
 				return err
 			}
-			if _, err := buf.WriteTo(x.Conn); err != nil {
-				return err
+		case b := <-x.readQ:
+			seq := b.seq()
+			if v, ok := x.pending[seq]; ok {
+				delete(x.pending, seq)
+				v.ch <- b
 			}
 		}
 	}
 }
 
-func (x *conn) serve(ctx context.Context) (err error) {
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Println(err)
-			debug.PrintStack()
-		}
-		x.Close()
-	}()
-	go x.send(ctx)
-	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.New("shutdown")
-		default:
-		}
-		if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
-			return err
-		}
-		iMessage, err := x.decode(buf)
-		if err != nil {
-			return err
-		}
-		stream := x.closeStream(iMessage.seq())
-		if stream == nil {
-			return nil
-		}
-		if err := stream.invoke(iMessage.clone()); err != nil {
-			return err
-		}
+func (x *conn) newRequest(method uint16, req any) (*request, error) {
+	b, err := proto.Marshal(req.(proto.Message))
+	if err != nil {
+		return nil, err
 	}
+	stream := requests.Get().(*request)
+	stream.body = b
+	stream.method = method
+	return stream, nil
 }
 
-func (x *conn) newStream() (*stream, bool) {
-	x.Lock()
-	defer x.Unlock()
-	seq := x.seq + 1
-	if _, ok := x.streams[seq]; ok {
-		return nil, false
+func (x *conn) push(req *request) error {
+	req.seq = x.seq + 1
+	if _, ok := x.pending[req.seq]; ok {
+		return errors.New("too many request")
 	}
-	stream := streams.Get().(*stream)
-	x.streams[seq] = stream
-	x.seq = seq % math.MaxUint16
-	stream.seq = seq
-	return stream, true
-}
-
-func (x *conn) closeStream(seq uint16) *stream {
-	x.Lock()
-	defer x.Unlock()
-	if v, ok := x.streams[seq]; ok {
-		delete(x.streams, seq)
-		return v
+	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+		return err
 	}
+	if _, err := req.WriteTo(x); err != nil {
+		return err
+	}
+	x.pending[req.seq] = req
+	x.seq = req.seq % math.MaxUint16
 	return nil
-}
-
-func (x *conn) decode(b *bufio.Reader) (message, error) {
-	headerBytes, err := b.Peek(_MESSAGE_HEADER)
-	if err != nil {
-		return nil, err
-	}
-	length := int(binary.BigEndian.Uint16(headerBytes))
-	if length > b.Size() {
-		return nil, fmt.Errorf("header %v too long", length)
-	}
-	iMessage, err := b.Peek(length)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := b.Discard(len(iMessage)); err != nil {
-		return nil, err
-	}
-	return iMessage, nil
-}
-
-func (x *conn) encode(seq uint16, method uint16, iMessage proto.Message) (message, error) {
-	b, err := proto.Marshal(iMessage)
-	if err != nil {
-		return nil, err
-	}
-	buf := pool.Get().(*message)
-	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
-	buf.WriteUint16(seq)                                     // 2
-	buf.WriteUint16(method)                                  // 2
-	if _, err := buf.Write(b); err != nil {
-		return nil, err
-	}
-	return *buf, nil
 }

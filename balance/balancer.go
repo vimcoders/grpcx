@@ -3,7 +3,7 @@ package balance
 import (
 	"context"
 
-	"github/vimcoders/grpcx/discovery"
+	"github.com/vimcoders/grpcx/discovery"
 )
 
 // Picker picks an instance for next RPC call.

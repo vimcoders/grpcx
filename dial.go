@@ -3,9 +3,10 @@ package grpcx
 import (
 	"context"
 	"crypto/tls"
-	"github/vimcoders/grpcx/discovery"
 	"net"
 	"time"
+
+	"github.com/vimcoders/grpcx/discovery"
 
 	"github.com/vimcoders/quicx"
 	"google.golang.org/grpc"

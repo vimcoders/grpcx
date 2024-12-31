@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github/vimcoders/grpcx"
 	"io"
 	"net"
 	"opentracing/pb"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx"
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/uber/jaeger-client-go"

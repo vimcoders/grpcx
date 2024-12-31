@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github/vimcoders/grpcx"
-	"github/vimcoders/grpcx/benchmark/pb"
 	"net"
 	"os"
 	"os/signal"
@@ -12,6 +10,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx"
+	"github.com/vimcoders/grpcx/benchmark/pb"
 )
 
 func main() {

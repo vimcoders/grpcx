@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"github/vimcoders/grpcx/benchmark/pb"
 	"net"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/vimcoders/grpcx/benchmark/pb"
 
 	"google.golang.org/grpc"
 )

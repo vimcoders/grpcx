@@ -2,8 +2,9 @@ package balance
 
 import (
 	"context"
-	"github/vimcoders/grpcx/discovery"
 	"math/rand/v2"
+
+	"github.com/vimcoders/grpcx/discovery"
 )
 
 type randomPicker struct {

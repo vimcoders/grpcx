@@ -8,8 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"grpcx"
-	"grpcx/benchmark/pb"
 	"io"
 	"math/big"
 	"os"
@@ -17,6 +15,9 @@ import (
 	"runtime"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx"
+	"github.com/vimcoders/grpcx/benchmark/pb"
 
 	"github.com/vimcoders/quicx"
 )

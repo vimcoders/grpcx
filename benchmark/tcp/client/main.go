@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
-	"github/vimcoders/grpcx"
-	"github/vimcoders/grpcx/benchmark/pb"
 	"io"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx"
+	"github.com/vimcoders/grpcx/benchmark/pb"
 )
 
 func main() {

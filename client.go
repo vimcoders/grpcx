@@ -6,14 +6,15 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github/vimcoders/grpcx/balance"
-	"github/vimcoders/grpcx/discovery"
 	"math"
 	"net"
 	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/vimcoders/grpcx/balance"
+	"github.com/vimcoders/grpcx/discovery"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"

@@ -20,7 +20,7 @@ type Client struct {
 
 func (x *Client) BenchmarkChat(ctx context.Context) {
 	var b []byte
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 100; i++ {
 		b = append(b, []byte("tokentoken")...)
 	}
 	message := string(b)
@@ -33,13 +33,13 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 }
 
 func main() {
-	runtime.GOMAXPROCS(3)
+	runtime.GOMAXPROCS(2)
 	cc, err := chat.NewClient("chat", client.WithHostPorts("127.0.0.1:27777"))
 	if err != nil {
 		panic(err)
 	}
 	client := Client{Client: cc}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 8000; i++ {
 		go client.BenchmarkChat(context.Background())
 	}
 	quit := make(chan os.Signal, 1)

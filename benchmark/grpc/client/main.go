@@ -17,7 +17,7 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	runtime.GOMAXPROCS(3)
+	runtime.GOMAXPROCS(2)
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		panic(err)
@@ -26,7 +26,7 @@ func main() {
 	client := &Client{
 		ChatClient: pb.NewChatClient(conn),
 	}
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 8000; i++ {
 		go client.BenchmarkChat(context.Background())
 	}
 	quit := make(chan os.Signal, 1)

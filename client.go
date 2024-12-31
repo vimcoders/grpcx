@@ -104,6 +104,11 @@ func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err e
 	if !ok {
 		return fmt.Errorf("too many request")
 	}
+	defer func() {
+		if err != nil {
+			x.notify(seq)
+		}
+	}()
 	buf, err := x.encode(seq, uint16(method), req.(proto.Message))
 	if err != nil {
 		return err
@@ -116,7 +121,6 @@ func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err e
 	}
 	select {
 	case <-ctx.Done():
-		x.notify(seq)
 		return errors.New("timeout")
 	case response := <-signal.signal:
 		if err := proto.Unmarshal(response.body(), reply.(proto.Message)); err != nil {

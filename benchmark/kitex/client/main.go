@@ -20,7 +20,7 @@ type Client struct {
 
 func (x *Client) BenchmarkChat(ctx context.Context) {
 	var b []byte
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10000; i++ {
 		b = append(b, []byte("tokentoken")...)
 	}
 	message := string(b)

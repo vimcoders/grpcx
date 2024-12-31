@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"opentracing/pb"
 	"os"
 	"os/signal"
 	"runtime"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx/benchmark/pb"
 
 	"github.com/vimcoders/grpcx"
 

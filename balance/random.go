@@ -17,7 +17,7 @@ func NewRandomPicker(instances []discovery.Instance) Picker {
 }
 
 // Next implements the Picker interface.
-func (rp *randomPicker) Next(ctx context.Context, request interface{}) discovery.Instance {
-	idx := rand.IntN(len(rp.instances))
-	return rp.instances[idx]
+func (x *randomPicker) Next(ctx context.Context, request interface{}) discovery.Instance {
+	idx := rand.IntN(len(x.instances))
+	return x.instances[idx]
 }

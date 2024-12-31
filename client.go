@@ -39,6 +39,7 @@ type client struct {
 func (x client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
 	instance := x.GetPicker(x.Result).Next(ctx, req)
 	for i := 0; i < len(x.cc); i++ {
+		fmt.Println(x.cc[i].Network(), x.cc[i].String(), instance.Address().Network(), instance.Address().String())
 		if x.cc[i].Network() != instance.Address().Network() {
 			continue
 		}

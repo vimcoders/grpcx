@@ -36,22 +36,24 @@ type client struct {
 	discovery.Result
 }
 
-func (x client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
+func (x *client) Invoke(ctx context.Context, methodName string, req any, reply any, opts ...grpc.CallOption) (err error) {
 	instance := x.GetPicker(x.Result).Next(ctx, req)
 	for i := 0; i < len(x.cc); i++ {
-		fmt.Println(x.cc[i].Network(), x.cc[i].String(), instance.Address().Network(), instance.Address().String())
-		if x.cc[i].Network() != instance.Address().Network() {
+		if i != instance.Weight() {
 			continue
 		}
-		if x.cc[i].String() != instance.Address().String() {
-			continue
-		}
+		// if x.cc[i].Network() != instance.Address().Network() {
+		// 	continue
+		// }
+		// if x.cc[i].String() != instance.Address().String() {
+		// 	continue
+		// }
 		return x.cc[i].Invoke(ctx, methodName, req, reply, opts...)
 	}
 	return fmt.Errorf("instance %s not found", instance.Address().String())
 }
 
-func (x client) GetPicker(result discovery.Result) balance.Picker {
+func (x *client) GetPicker(result discovery.Result) balance.Picker {
 	return balance.NewRandomPicker(result.Instances)
 }
 

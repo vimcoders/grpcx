@@ -90,7 +90,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		}
 	}
 	for i := 0; i < len(client.cc); i++ {
-		client.Instances = append(client.Instances, discovery.NewInstance(client.cc[i], 1, nil))
+		client.Instances = append(client.Instances, discovery.NewInstance(client.cc[i], i, nil))
 	}
 	return &client, nil
 }

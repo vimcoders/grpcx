@@ -42,19 +42,19 @@ type instance struct {
 	tags   map[string]string
 }
 
-func (i *instance) Address() net.Addr {
-	return i.addr
+func (x *instance) Address() net.Addr {
+	return x.addr
 }
 
-func (i *instance) Weight() int {
-	return i.weight
+func (x *instance) Weight() int {
+	return x.weight
 }
 
-func (i *instance) Tag(key string) (value string, ok bool) {
-	value, ok = i.tags[key]
+func (x *instance) Tag(key string) (value string, ok bool) {
+	value, ok = x.tags[key]
 	return value, ok
 }
 
-func (i *instance) Tags() map[string]string {
-	return i.tags
+func (x *instance) Tags() map[string]string {
+	return x.tags
 }

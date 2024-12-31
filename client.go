@@ -9,7 +9,6 @@ import (
 	"grpcx/balance"
 	"grpcx/discovery"
 	"math"
-	"math/rand/v2"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -26,9 +25,10 @@ type Conn interface {
 }
 
 type clientOption struct {
-	buffsize uint16
-	timeout  time.Duration
-	Methods  []string
+	buffsize        uint16
+	timeout         time.Duration
+	Methods         []string
+	maxPendingCount int
 }
 
 type client struct {
@@ -64,7 +64,9 @@ type conn struct {
 	clientOption
 	sync.RWMutex
 	grpc.ClientConnInterface
-	pending map[uint16]*signal
+	pending      map[uint16]*signal
+	seq          uint16
+	pendingCount int
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
@@ -100,6 +102,9 @@ func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any
 }
 
 func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
+	if x.pendingCount > x.maxPendingCount {
+		return fmt.Errorf("too many request %d", x.pendingCount)
+	}
 	seq, signal, ok := x.newSignal()
 	if !ok {
 		return fmt.Errorf("too many request")
@@ -162,21 +167,21 @@ func (x *conn) serve(ctx context.Context) (err error) {
 func (x *conn) newSignal() (uint16, *signal, bool) {
 	x.Lock()
 	defer x.Unlock()
-	for i := 0; i < math.MaxUint8; i++ {
-		seq := rand.N[uint16](math.MaxUint16)
-		if _, ok := x.pending[seq]; ok {
-			continue
-		}
-		invoker := _signal.Get().(*signal)
-		x.pending[seq] = invoker
-		return seq, invoker, true
+	seq := x.seq + 1
+	if _, ok := x.pending[seq]; ok {
+		return 0, nil, false
 	}
-	return 0, nil, false
+	signal := _signal.Get().(*signal)
+	x.pending[seq] = signal
+	x.seq = seq % math.MaxUint16
+	x.pendingCount = len(x.pending)
+	return seq, signal, true
 }
 
 func (x *conn) notify(seq uint16) *signal {
 	x.Lock()
 	defer x.Unlock()
+	x.pendingCount = len(x.pending)
 	if v, ok := x.pending[seq]; ok {
 		delete(x.pending, seq)
 		return v

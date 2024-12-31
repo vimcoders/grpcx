@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"grpcx"
-	"grpcx/benchmark/pb"
+	"github/vimcoders/grpcx"
 	"io"
+	"opentracing/pb"
 	"os"
 	"os/signal"
 	"runtime"

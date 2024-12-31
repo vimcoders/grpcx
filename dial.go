@@ -3,7 +3,7 @@ package grpcx
 import (
 	"context"
 	"crypto/tls"
-	"grpcx/discovery"
+	"github/vimcoders/grpcx/discovery"
 	"net"
 	"time"
 

@@ -2,7 +2,7 @@ package balance
 
 import (
 	"context"
-	"grpcx/discovery"
+	"github/vimcoders/grpcx/discovery"
 	"math/rand/v2"
 )
 

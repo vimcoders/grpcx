@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"grpcx/benchmark/pb"
+	"github/vimcoders/grpcx/benchmark/pb"
 	"io"
 	"os"
 	"os/signal"

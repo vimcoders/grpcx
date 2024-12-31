@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"grpcx/discovery"
-	"math"
 	"net"
 	"time"
 
@@ -62,10 +61,9 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		opts[i].apply(&opt)
 	}
 	clientOpt := clientOption{
-		timeout:         opt.timeout,
-		buffsize:        opt.buffsize,
-		Methods:         opt.Methods,
-		maxPendingCount: math.MaxUint16,
+		timeout:  opt.timeout,
+		buffsize: opt.buffsize,
+		Methods:  opt.Methods,
 	}
 	var client client
 	for i := 0; i < len(opt.address); i++ {

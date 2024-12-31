@@ -25,10 +25,9 @@ type Conn interface {
 }
 
 type clientOption struct {
-	buffsize        uint16
-	timeout         time.Duration
-	Methods         []string
-	maxPendingCount int
+	buffsize uint16
+	timeout  time.Duration
+	Methods  []string
 }
 
 type client struct {
@@ -64,9 +63,8 @@ type conn struct {
 	clientOption
 	sync.RWMutex
 	grpc.ClientConnInterface
-	pending      map[uint16]*signal
-	seq          uint16
-	pendingCount int
+	pending map[uint16]*signal
+	seq     uint16
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
@@ -102,9 +100,6 @@ func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any
 }
 
 func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
-	if x.pendingCount > x.maxPendingCount {
-		return fmt.Errorf("too many request %d", x.pendingCount)
-	}
 	seq, signal, ok := x.newSignal()
 	if !ok {
 		return fmt.Errorf("too many request")
@@ -174,14 +169,12 @@ func (x *conn) newSignal() (uint16, *signal, bool) {
 	signal := _signal.Get().(*signal)
 	x.pending[seq] = signal
 	x.seq = seq % math.MaxUint16
-	x.pendingCount = len(x.pending)
 	return seq, signal, true
 }
 
 func (x *conn) notify(seq uint16) *signal {
 	x.Lock()
 	defer x.Unlock()
-	x.pendingCount = len(x.pending)
 	if v, ok := x.pending[seq]; ok {
 		delete(x.pending, seq)
 		return v

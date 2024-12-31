@@ -9,6 +9,7 @@ import (
 	"grpcx/balance"
 	"grpcx/discovery"
 	"math"
+	"math/rand/v2"
 	"net"
 	"path/filepath"
 	"runtime/debug"
@@ -63,7 +64,6 @@ type conn struct {
 	clientOption
 	sync.RWMutex
 	grpc.ClientConnInterface
-	seq     uint16
 	pending map[uint16]*signal
 }
 
@@ -162,14 +162,15 @@ func (x *conn) serve(ctx context.Context) (err error) {
 func (x *conn) newSignal() (uint16, *signal, bool) {
 	x.Lock()
 	defer x.Unlock()
-	seq := x.seq + 1
-	if _, ok := x.pending[seq]; ok {
-		return 0, nil, false
+	for i := 0; i < math.MaxUint8; i++ {
+		seq := rand.N[uint16](math.MaxUint16)
+		if _, ok := x.pending[seq]; ok {
+			continue
+		}
+		invoker := _signal.Get().(*signal)
+		x.pending[seq] = invoker
 	}
-	invoker := _signal.Get().(*signal)
-	x.pending[seq] = invoker
-	x.seq = seq % math.MaxUint16
-	return seq, invoker, true
+	return 0, nil, false
 }
 
 func (x *conn) notify(seq uint16) *signal {

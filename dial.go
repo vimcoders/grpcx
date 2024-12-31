@@ -67,7 +67,6 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	}
 	var client client
 	for i := 0; i < len(opt.address); i++ {
-
 		switch opt.address[i].Network() {
 		case "tcp":
 			conn, err := net.Dial("tcp", opt.address[i].String())

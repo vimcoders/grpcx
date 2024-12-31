@@ -3,7 +3,6 @@ package grpcx
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -81,15 +80,15 @@ func (x Server) ListenAndServe(ctx context.Context, listener net.Listener) {
 
 type serverOption struct {
 	// creds             credentials.TransportCredentials
-	readBufferSize    int
-	connectionTimeout time.Duration
-	Unary             UnaryServerInterceptor
-	Methods           []grpc.MethodDesc
+	readBufferSize int
+	timeout        time.Duration
+	Unary          UnaryServerInterceptor
+	Methods        []grpc.MethodDesc
 }
 
 var defaultServerOptions = serverOption{
-	connectionTimeout: 120 * time.Second,
-	readBufferSize:    defaultReadBufSize,
+	timeout:        120 * time.Second,
+	readBufferSize: defaultReadBufSize,
 }
 
 type Server struct {
@@ -129,16 +128,16 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			return errors.New("shutdown")
 		default:
 		}
-		if err := c.SetReadDeadline(time.Now().Add(x.connectionTimeout)); err != nil {
+		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		iMessage, err := x.decode(buf)
+		buffer, err := readBuffer(buf)
 		if err != nil {
 			return err
 		}
-		method, seq := iMessage.methodID(), iMessage.seq()
+		method, seq := buffer.method(), buffer.seq()
 		dec := func(in any) error {
-			if err := proto.Unmarshal(iMessage.body(), in.(proto.Message)); err != nil {
+			if err := proto.Unmarshal(buffer.body(), in.(proto.Message)); err != nil {
 				return err
 			}
 			return nil
@@ -147,49 +146,16 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		buf, err := x.encode(seq, method, reply.(proto.Message))
+		response, err := NewResponseWriter(seq, method, reply)
 		if err != nil {
 			return err
 		}
-		if err := c.SetWriteDeadline(time.Now().Add(x.connectionTimeout)); err != nil {
+		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		if _, err := buf.WriteTo(c); err != nil {
+		if _, err := response.WriteTo(c); err != nil {
 			return err
 		}
+		buffer.close()
 	}
-}
-
-func (x *Server) decode(b *bufio.Reader) (*buffer, error) {
-	headerBytes, err := b.Peek(_MESSAGE_HEADER)
-	if err != nil {
-		return nil, err
-	}
-	length := int(binary.BigEndian.Uint16(headerBytes))
-	if length > b.Size() {
-		return nil, fmt.Errorf("header %v too long", length)
-	}
-	iMessage, err := b.Peek(length)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := b.Discard(len(iMessage)); err != nil {
-		return nil, err
-	}
-	return NewBuffer(iMessage), nil
-}
-
-func (x *Server) encode(seq uint16, method uint16, iMessage proto.Message) (*buffer, error) {
-	b, err := proto.Marshal(iMessage)
-	if err != nil {
-		return nil, err
-	}
-	buf := buffers.Get().(*buffer)
-	buf.WriteUint16(uint16(_MESSAGE_HEADER_LENGTH + len(b))) // 2
-	buf.WriteUint16(seq)                                     // 2
-	buf.WriteUint16(method)                                  // 2
-	if _, err := buf.Write(b); err != nil {
-		return nil, err
-	}
-	return buf, nil
 }

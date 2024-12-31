@@ -1,13 +1,17 @@
 package grpcx
 
 import (
+	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"sync"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
-const _MESSAGE_HEADER_LENGTH = 6
 const _MESSAGE_HEADER = 2
 
 var buffers sync.Pool = sync.Pool{
@@ -16,27 +20,38 @@ var buffers sync.Pool = sync.Pool{
 	},
 }
 
-var requests sync.Pool = sync.Pool{
-	New: func() any {
-		return &request{
-			ch: make(chan *buffer, 1),
-		}
-	},
-}
-
 type buffer struct {
 	b []byte
 }
 
-func NewBuffer(b []byte) *buffer {
-	return &buffer{b: b}
+func readBuffer(buf *bufio.Reader) (*buffer, error) {
+	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+	if err != nil {
+		return nil, err
+	}
+	length := int(binary.BigEndian.Uint16(headerBytes))
+	if length > buf.Size() {
+		return nil, fmt.Errorf("header %v too long", length)
+	}
+	iMessage, err := buf.Peek(length)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := buf.Discard(len(iMessage)); err != nil {
+		return nil, err
+	}
+	buffer := buffers.Get().(*buffer)
+	if _, err := buffer.Write(iMessage); err != nil {
+		return nil, err
+	}
+	return buffer, nil
 }
 
 func (x buffer) seq() uint16 {
 	return binary.BigEndian.Uint16(x.b[2:]) //2
 }
 
-func (x buffer) methodID() uint16 {
+func (x buffer) method() uint16 {
 	return binary.BigEndian.Uint16(x.b[4:]) // 4
 }
 
@@ -94,17 +109,29 @@ type request struct {
 	method uint16
 	body   []byte
 	ch     chan *buffer
+	now    time.Time
 }
 
 func (x request) Size() uint16 {
 	return uint16(2 + 2 + 2 + len(x.body))
 }
 
-func (x *request) WriteTo(c net.Conn) (int64, error) {
+func (x *request) WriteTo(w io.Writer) (int64, error) {
 	buf := buffers.Get().(*buffer)
 	buf.WriteUint16(x.Size(), x.seq, x.method)
 	buf.Write(x.body)
-	return buf.WriteTo(c)
+	return buf.WriteTo(w)
+}
+
+func NewResponseWriter(seq, method uint16, reply any) (io.WriterTo, error) {
+	b, err := proto.Marshal(reply.(proto.Message))
+	if err != nil {
+		return nil, err
+	}
+	buf := buffers.Get().(*buffer)
+	buf.WriteUint16(uint16(2+2+2+len(b)), seq, method)
+	buf.Write(b)
+	return buf, nil
 }
 
 var _ net.Addr = &Addr{}

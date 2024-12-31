@@ -3,7 +3,6 @@ package grpcx
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -29,6 +28,7 @@ type clientOption struct {
 	timeout  time.Duration
 	Methods  []string
 	maxRetry int
+	ttl      time.Duration
 }
 
 type client struct {
@@ -139,7 +139,6 @@ func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err e
 			return err
 		}
 		b.close()
-		requests.Put(request)
 		return nil
 	}
 }
@@ -164,23 +163,8 @@ func (x *conn) read(ctx context.Context) (err error) {
 			if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 				return err
 			}
-			headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+			buffer, err := readBuffer(buf)
 			if err != nil {
-				return err
-			}
-			length := int(binary.BigEndian.Uint16(headerBytes))
-			if length > buf.Size() {
-				return fmt.Errorf("header %v too long", length)
-			}
-			b, err := buf.Peek(length)
-			if err != nil {
-				return err
-			}
-			if _, err := buf.Discard(len(b)); err != nil {
-				return err
-			}
-			buffer := buffers.Get().(*buffer)
-			if _, err := buffer.Write(b); err != nil {
 				return err
 			}
 			x.readQ <- buffer
@@ -224,24 +208,27 @@ func (x *conn) newRequest(method uint16, req any) (*request, error) {
 	if err != nil {
 		return nil, err
 	}
-	stream := requests.Get().(*request)
-	stream.body = b
-	stream.method = method
-	return stream, nil
+	return &request{
+		method: method,
+		body:   b,
+		ch:     make(chan *buffer, 1),
+		now:    time.Now(),
+	}, nil
 }
 
 func (x *conn) push(req *request) error {
-	req.seq = x.seq + 1
-	if _, ok := x.pending[req.seq]; ok {
+	seq := x.seq + 1
+	if v, ok := x.pending[seq]; ok && time.Since(v.now) < x.ttl {
 		return errors.New("too many request")
 	}
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
 	}
+	req.seq = seq
 	if _, err := req.WriteTo(x); err != nil {
 		return err
 	}
-	x.pending[req.seq] = req
+	x.pending[seq] = req
 	x.seq = req.seq % math.MaxUint16
 	return nil
 }

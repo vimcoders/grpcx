@@ -56,7 +56,7 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 		b = append(b, []byte("tokentoken")...)
 	}
 	message := string(b)
-	ticker := time.NewTicker(time.Millisecond * 100)
+	ticker := time.NewTicker(time.Millisecond * 1)
 	for range ticker.C {
 		//for {
 		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: message}); err != nil {

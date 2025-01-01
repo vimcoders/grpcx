@@ -13,8 +13,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type UnaryServerInterceptor = grpc.UnaryServerInterceptor
-
 type ServerOption interface {
 	apply(*serverOption)
 }
@@ -135,18 +133,24 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		method, seq := buffer.method(), buffer.seq()
+		seq, cmd := buffer.seq(), buffer.cmd()
+		if int(cmd) >= len(x.Methods) {
+			if _, err := buffer.WriteTo(c); err != nil {
+				return err
+			}
+			continue
+		}
 		dec := func(in any) error {
 			if err := proto.Unmarshal(buffer.body(), in.(proto.Message)); err != nil {
 				return err
 			}
 			return nil
 		}
-		reply, err := x.Methods[method].Handler(x.impl, ctx, dec, x.Unary)
+		reply, err := x.Methods[cmd].Handler(x.impl, ctx, dec, x.Unary)
 		if err != nil {
 			return err
 		}
-		response, err := NewResponseWriter(seq, method, reply)
+		response, err := NewResponseWriter(seq, cmd, reply)
 		if err != nil {
 			return err
 		}
@@ -156,6 +160,5 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if _, err := response.WriteTo(c); err != nil {
 			return err
 		}
-		buffer.close()
 	}
 }

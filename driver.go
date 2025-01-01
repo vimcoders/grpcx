@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/proto"
 )
+
+type ClientParameters = keepalive.ClientParameters
+type UnaryServerInterceptor = grpc.UnaryServerInterceptor
 
 const _MESSAGE_HEADER = 2
 
@@ -51,7 +57,7 @@ func (x buffer) seq() uint16 {
 	return binary.BigEndian.Uint16(x.b[2:]) //2
 }
 
-func (x buffer) method() uint16 {
+func (x buffer) cmd() uint16 {
 	return binary.BigEndian.Uint16(x.b[4:]) // 4
 }
 
@@ -105,31 +111,35 @@ func (x buffer) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 type request struct {
-	seq    uint16
-	method uint16
-	body   []byte
-	ch     chan *buffer
-	now    time.Time
+	cmd     uint16
+	body    []byte
+	ch      chan *buffer
+	timeout time.Time
+}
+
+func (x *request) invoke(buf *buffer) error {
+	if e := recover(); e != nil {
+		fmt.Println(e)
+		debug.PrintStack()
+	}
+	if len(x.ch) > 0 {
+		return nil
+	}
+	x.ch <- buf
+	return nil
 }
 
 func (x request) Size() uint16 {
 	return uint16(2 + 2 + 2 + len(x.body))
 }
 
-func (x *request) WriteTo(w io.Writer) (int64, error) {
-	buf := buffers.Get().(*buffer)
-	buf.WriteUint16(x.Size(), x.seq, x.method)
-	buf.Write(x.body)
-	return buf.WriteTo(w)
-}
-
-func NewResponseWriter(seq, method uint16, reply any) (io.WriterTo, error) {
+func NewResponseWriter(seq, cmd uint16, reply any) (io.WriterTo, error) {
 	b, err := proto.Marshal(reply.(proto.Message))
 	if err != nil {
 		return nil, err
 	}
 	buf := buffers.Get().(*buffer)
-	buf.WriteUint16(uint16(2+2+2+len(b)), seq, method)
+	buf.WriteUint16(uint16(2+2+2+len(b)), seq, cmd)
 	buf.Write(b)
 	return buf, nil
 }

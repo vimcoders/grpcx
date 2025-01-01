@@ -15,6 +15,7 @@ import (
 	"github.com/vimcoders/grpcx/discovery"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,11 +25,12 @@ type Conn interface {
 }
 
 type clientOption struct {
-	buffsize uint16
-	timeout  time.Duration
-	Methods  []string
-	maxRetry int
-	ttl      time.Duration
+	buffsize        uint16
+	timeout         time.Duration
+	Methods         []string
+	maxRetry        int
+	ttl             time.Duration
+	KeepaliveParams keepalive.ClientParameters
 }
 
 type client struct {
@@ -76,6 +78,7 @@ func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
 		pending:      make(map[uint16]*request),
 		sendQ:        make(chan *request, 65535),
 		readQ:        make(chan *buffer, 65535),
+		seq:          math.MaxUint8,
 	}
 	go x.serve(ctx)
 	return x
@@ -143,6 +146,31 @@ func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err e
 	}
 }
 
+func (x *conn) keepalive(ctx context.Context) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			fmt.Println(e)
+			debug.PrintStack()
+		}
+		if err != nil {
+			fmt.Println(err)
+		}
+		x.Close()
+	}()
+	ticker := time.NewTicker(x.KeepaliveParams.Time)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New("shutdown")
+		case <-ticker.C:
+			if err := x.ping(ctx); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (x *conn) read(ctx context.Context) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -167,6 +195,9 @@ func (x *conn) read(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
+			if int(buffer.cmd()) >= len(x.Methods) {
+				continue
+			}
 			x.readQ <- buffer
 		}
 	}
@@ -183,6 +214,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 		}
 	}()
 	go x.read(ctx)
+	go x.keepalive(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -197,38 +229,54 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			seq := b.seq()
 			if v, ok := x.pending[seq]; ok {
 				delete(x.pending, seq)
-				v.ch <- b
+				v.invoke(b)
 			}
 		}
 	}
 }
 
-func (x *conn) newRequest(method uint16, req any) (*request, error) {
+func (x *conn) newRequest(cmd uint16, req any) (*request, error) {
 	b, err := proto.Marshal(req.(proto.Message))
 	if err != nil {
 		return nil, err
 	}
 	return &request{
-		method: method,
-		body:   b,
-		ch:     make(chan *buffer, 1),
-		now:    time.Now(),
+		cmd:     cmd,
+		body:    b,
+		ch:      make(chan *buffer, 1),
+		timeout: time.Now().Add(x.ttl),
 	}, nil
 }
 
 func (x *conn) push(req *request) error {
 	seq := x.seq + 1
-	if v, ok := x.pending[seq]; ok && time.Since(v.now) < x.ttl {
+	if v, ok := x.pending[seq]; ok && time.Now().Before(v.timeout) {
 		return errors.New("too many request")
 	}
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
 	}
-	req.seq = seq
-	if _, err := req.WriteTo(x); err != nil {
+	buf := buffers.Get().(*buffer)
+	buf.WriteUint16(req.Size(), seq, req.cmd)
+	if _, err := buf.Write(req.body); err != nil {
 		return err
 	}
+	if _, err := buf.WriteTo(x); err != nil {
+		return err
+	}
+	x.seq = seq % math.MaxUint16
 	x.pending[seq] = req
-	x.seq = req.seq % math.MaxUint16
+	return nil
+}
+
+func (x *conn) ping(_ context.Context) error {
+	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+		return err
+	}
+	buf := buffers.Get().(*buffer)
+	buf.WriteUint16(6, math.MaxUint16, math.MaxUint16)
+	if _, err := buf.WriteTo(x); err != nil {
+		return err
+	}
 	return nil
 }

@@ -10,18 +10,21 @@ import (
 
 	"github.com/vimcoders/quicx"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 type dialOption struct {
-	address  []net.Addr
-	buffsize uint16
-	timeout  time.Duration
-	Methods  []string
+	address         []net.Addr
+	buffsize        uint16
+	timeout         time.Duration
+	Methods         []string
+	KeepaliveParams keepalive.ClientParameters
 }
 
 var defaultDialOptions = dialOption{
-	timeout:  120 * time.Second,
-	buffsize: defaultReadBufSize,
+	timeout:         120 * time.Second,
+	buffsize:        defaultReadBufSize,
+	KeepaliveParams: keepalive.ClientParameters{Time: time.Second * 6, Timeout: time.Second * 60},
 }
 
 type DialOption interface {
@@ -50,6 +53,12 @@ func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
 	})
 }
 
+func WithKeepaliveParams(kp keepalive.ClientParameters) DialOption {
+	return newFuncDialOption(func(o *dialOption) {
+		o.KeepaliveParams = kp
+	})
+}
+
 func newFuncDialOption(f func(*dialOption)) *funcDialOption {
 	return &funcDialOption{
 		f: f,
@@ -62,11 +71,12 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		opts[i].apply(&opt)
 	}
 	clientOpt := clientOption{
-		timeout:  opt.timeout,
-		buffsize: opt.buffsize,
-		Methods:  opt.Methods,
-		maxRetry: 3,
-		ttl:      time.Minute * 2,
+		timeout:         opt.timeout,
+		buffsize:        opt.buffsize,
+		Methods:         opt.Methods,
+		maxRetry:        3,
+		ttl:             time.Minute * 2,
+		KeepaliveParams: opt.KeepaliveParams,
 	}
 	var client client
 	for i := 0; i < len(opt.address); i++ {

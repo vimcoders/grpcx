@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"runtime/debug"
 	"time"
@@ -171,7 +172,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (x *Server) NewPingWriter(seq, cmd uint16) (*buffer, error) {
+func (x *Server) NewPingWriter(seq, cmd uint16) (io.WriterTo, error) {
 	var replay []string
 	for i := 0; i < len(x.Methods); i++ {
 		replay = append(replay, x.Methods[i].MethodName)

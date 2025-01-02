@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math"
 	"net"
 	"runtime/debug"
 	"time"
@@ -138,7 +136,16 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		}
 		seq, cmd := buffer.seq(), buffer.cmd()
 		if int(cmd) >= len(x.Methods) {
-			x.Pong(c, seq)
+			response, err := x.NewPingWriter(seq, cmd)
+			if err != nil {
+				return err
+			}
+			if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+				return err
+			}
+			if _, err := response.WriteTo(c); err != nil {
+				return err
+			}
 			continue
 		}
 		dec := func(in any) error {
@@ -164,22 +171,19 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (x *Server) Pong(w io.Writer, seq uint16) error {
+func (x *Server) NewPingWriter(seq, cmd uint16) (*buffer, error) {
 	var replay []string
 	for i := 0; i < len(x.Methods); i++ {
 		replay = append(replay, x.Methods[i].MethodName)
 	}
 	b, err := json.Marshal(replay)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	buffer := buffers.Get().(*buffer)
-	buffer.WriteUint16(uint16(6+len(b)), seq, math.MaxInt16)
+	buffer.WriteUint16(uint16(6+len(b)), seq, cmd)
 	if _, err := buffer.Write(b); err != nil {
-		return err
+		return nil, err
 	}
-	if _, err := buffer.WriteTo(w); err != nil {
-		return err
-	}
-	return nil
+	return buffer, nil
 }

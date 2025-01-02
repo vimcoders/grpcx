@@ -3,6 +3,7 @@ package grpcx
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -20,11 +21,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type Conn interface {
-	net.Addr
-	grpc.ClientConnInterface
-}
-
 type clientOption struct {
 	buffsize        uint16
 	timeout         time.Duration
@@ -35,7 +31,7 @@ type clientOption struct {
 }
 
 type client struct {
-	cc []Conn
+	cc []*conn
 	grpc.ClientConnInterface
 	balance.Balancer
 	discovery.Result
@@ -69,17 +65,6 @@ type conn struct {
 	grpc.ClientConnInterface
 	pending map[uint16]*request
 	seq     uint16
-}
-
-func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
-	x := &conn{
-		clientOption: opt,
-		Conn:         c,
-		pending:      make(map[uint16]*request),
-		seq:          math.MaxUint8,
-	}
-	go x.serve(ctx)
-	return x
 }
 
 func (x *conn) Close() error {
@@ -126,7 +111,7 @@ func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) er
 }
 
 func (x *conn) do(ctx context.Context, req *request) (b *buffer, err error) {
-	if err := x.push(req); err != nil {
+	if err := x.push(ctx, req); err != nil {
 		return nil, err
 	}
 	select {
@@ -158,7 +143,7 @@ func (x *conn) keepalive(ctx context.Context) (err error) {
 		case <-ctx.Done():
 			return errors.New("shutdown")
 		case <-ticker.C:
-			if err := x.ping(ctx); err != nil {
+			if err := x.Ping(ctx); err != nil {
 				return err
 			}
 		}
@@ -195,9 +180,6 @@ func (x *conn) serve(ctx context.Context) (err error) {
 }
 
 func (x *conn) process(buffer *buffer) error {
-	if int(buffer.cmd()) >= len(x.Methods) {
-		return nil
-	}
 	seq := buffer.seq()
 	x.Lock()
 	defer x.Unlock()
@@ -208,7 +190,7 @@ func (x *conn) process(buffer *buffer) error {
 	return nil
 }
 
-func (x *conn) push(req *request) error {
+func (x *conn) push(_ context.Context, req *request) error {
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
 	}
@@ -224,22 +206,23 @@ func (x *conn) push(req *request) error {
 	if _, err := buf.Write(req.body); err != nil {
 		return err
 	}
-	x.pending[seq] = req
-	x.seq = seq % math.MaxUint16
 	if _, err := buf.WriteTo(x); err != nil {
 		return err
 	}
+	x.pending[seq] = req
+	x.seq = seq % math.MaxUint16
 	return nil
 }
 
-func (x *conn) ping(_ context.Context) error {
-	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+func (x *conn) Ping(ctx context.Context) error {
+	b, err := x.do(ctx, NewPingRequest())
+	if err != nil {
 		return err
 	}
-	buf := buffers.Get().(*buffer)
-	buf.WriteUint16(6, math.MaxUint16, math.MaxUint16)
-	if _, err := buf.WriteTo(x); err != nil {
+	if err := json.Unmarshal(b.body(), &x.Methods); err != nil {
 		return err
 	}
+	fmt.Println(x.Methods)
+	b.close()
 	return nil
 }

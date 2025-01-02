@@ -20,7 +20,6 @@ func main() {
 	opts := []grpcx.DialOption{
 		grpcx.WithDial("tcp", "127.0.0.1:28889"),
 		//grpcx.WithDial("tcp", "127.0.0.1:28889"),
-		grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc),
 	}
 	cc, err := grpcx.Dial(context.Background(), opts...)
 	if err != nil {
@@ -35,6 +34,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-quit:
@@ -57,6 +57,7 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 	}
 	message := string(b)
 	ticker := time.NewTicker(time.Millisecond * 100)
+	defer ticker.Stop()
 	for range ticker.C {
 		//for {
 		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: message}); err != nil {

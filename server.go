@@ -3,8 +3,11 @@ package grpcx
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"net"
 	"runtime/debug"
 	"time"
@@ -135,9 +138,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		}
 		seq, cmd := buffer.seq(), buffer.cmd()
 		if int(cmd) >= len(x.Methods) {
-			if _, err := buffer.WriteTo(c); err != nil {
-				return err
-			}
+			x.Pong(c, seq)
 			continue
 		}
 		dec := func(in any) error {
@@ -161,4 +162,24 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			return err
 		}
 	}
+}
+
+func (x *Server) Pong(w io.Writer, seq uint16) error {
+	var replay []string
+	for i := 0; i < len(x.Methods); i++ {
+		replay = append(replay, x.Methods[i].MethodName)
+	}
+	b, err := json.Marshal(replay)
+	if err != nil {
+		return err
+	}
+	buffer := buffers.Get().(*buffer)
+	buffer.WriteUint16(uint16(6+len(b)), seq, math.MaxInt16)
+	if _, err := buffer.Write(b); err != nil {
+		return err
+	}
+	if _, err := buffer.WriteTo(w); err != nil {
+		return err
+	}
+	return nil
 }

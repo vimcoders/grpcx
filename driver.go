@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"runtime/debug"
 	"sync"
@@ -70,6 +71,9 @@ func (x *buffer) close() {
 }
 
 func (x *buffer) Write(p []byte) (int, error) {
+	if len(p) <= 0 {
+		return 0, nil
+	}
 	x.b = append(x.b, p...)
 	return len(p), nil
 }
@@ -125,6 +129,13 @@ func NewRequest(cmd uint16, req any) (*request, error) {
 		body: b,
 		ch:   make(chan *buffer, 1),
 	}, nil
+}
+
+func NewPingRequest() *request {
+	return &request{
+		cmd: math.MaxUint16,
+		ch:  make(chan *buffer, 1),
+	}
 }
 
 func (x *request) invoke(buf *buffer) error {

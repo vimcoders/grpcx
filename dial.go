@@ -3,12 +3,13 @@ package grpcx
 import (
 	"context"
 	"crypto/tls"
+	"math"
 	"net"
 	"time"
 
 	"github.com/vimcoders/grpcx/discovery"
-
 	"github.com/vimcoders/grpcx/quicx"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -45,13 +46,13 @@ func WithDial(network, address string) DialOption {
 	})
 }
 
-func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
-	return newFuncDialOption(func(o *dialOption) {
-		for i := 0; i < len(info.Methods); i++ {
-			o.Methods = append(o.Methods, info.Methods[i].MethodName)
-		}
-	})
-}
+// func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
+// 	return newFuncDialOption(func(o *dialOption) {
+// 		for i := 0; i < len(info.Methods); i++ {
+// 			o.Methods = append(o.Methods, info.Methods[i].MethodName)
+// 		}
+// 	})
+// }
 
 func WithKeepaliveParams(kp keepalive.ClientParameters) DialOption {
 	return newFuncDialOption(func(o *dialOption) {
@@ -70,39 +71,68 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
 	}
-	clientOpt := clientOption{
-		timeout:         opt.timeout,
-		buffsize:        opt.buffsize,
-		Methods:         opt.Methods,
-		maxRetry:        3,
-		retrySleep:      time.Second * 60,
-		KeepaliveParams: opt.KeepaliveParams,
-	}
 	var client client
 	for i := 0; i < len(opt.address); i++ {
-		switch opt.address[i].Network() {
-		case "tcp":
-			conn, err := net.Dial("tcp", opt.address[i].String())
-			if err != nil {
-				return nil, err
-			}
-			client.cc = append(client.cc, newClient(ctx, conn, clientOpt))
-		case "udp":
-			conn, err := quicx.Dial(opt.address[i].String(), &tls.Config{
-				InsecureSkipVerify: true,
-				NextProtos:         []string{"quic-echo-example"},
-				MaxVersion:         tls.VersionTLS13,
-			}, &quicx.Config{
-				MaxIdleTimeout: time.Minute,
-			})
-			if err != nil {
-				return nil, err
-			}
-			client.cc = append(client.cc, newClient(ctx, conn, clientOpt))
+		cc, err := dail(ctx, opt.address[i].Network(), opt.address[i].String(), opts...)
+		if err != nil {
+			return nil, err
 		}
+		go cc.serve(ctx)
+		if err := cc.Ping(ctx); err != nil {
+			return nil, err
+		}
+		client.cc = append(client.cc, cc)
 	}
 	for i := 0; i < len(client.cc); i++ {
 		client.Instances = append(client.Instances, discovery.NewInstance(client.cc[i], i, nil))
 	}
 	return &client, nil
+}
+
+func dail(_ context.Context, network string, addr string, opts ...DialOption) (*conn, error) {
+	opt := defaultDialOptions
+	for i := 0; i < len(opts); i++ {
+		opts[i].apply(&opt)
+	}
+	clientOpt := clientOption{
+		timeout:         opt.timeout,
+		buffsize:        opt.buffsize,
+		Methods:         opt.Methods,
+		maxRetry:        5,
+		retrySleep:      time.Second * 60,
+		KeepaliveParams: opt.KeepaliveParams,
+	}
+	switch network {
+	case "tcp":
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		x := &conn{
+			Conn:         c,
+			clientOption: clientOpt,
+			pending:      make(map[uint16]*request),
+			seq:          math.MaxUint8,
+		}
+		return x, nil
+	case "udp":
+		c, err := quicx.Dial(addr, &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"quic-echo-example"},
+			MaxVersion:         tls.VersionTLS13,
+		}, &quicx.Config{
+			MaxIdleTimeout: time.Minute,
+		})
+		if err != nil {
+			return nil, err
+		}
+		x := &conn{
+			Conn:         c,
+			clientOption: clientOpt,
+			pending:      make(map[uint16]*request),
+			seq:          math.MaxUint8,
+		}
+		return x, nil
+	}
+	return nil, nil
 }

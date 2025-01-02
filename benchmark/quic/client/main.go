@@ -19,7 +19,6 @@ func main() {
 	runtime.GOMAXPROCS(3)
 	opts := []grpcx.DialOption{
 		grpcx.WithDial("udp", "127.0.0.1:28888"),
-		grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc),
 	}
 	cc, err := grpcx.Dial(context.Background(), opts...)
 	if err != nil {
@@ -34,6 +33,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-quit:

@@ -72,11 +72,11 @@ func (x *conn) Close() error {
 }
 
 func (x *conn) Network() string {
-	return x.RemoteAddr().Network()
+	return x.LocalAddr().Network()
 }
 
 func (x *conn) String() string {
-	return x.RemoteAddr().String()
+	return x.LocalAddr().String()
 }
 
 func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) (err error) {

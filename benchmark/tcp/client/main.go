@@ -28,7 +28,7 @@ func main() {
 	client := &Client{
 		ChatClient: pb.NewChatClient(cc),
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10000; i++ {
 		go client.BenchmarkChat(context.Background())
 	}
 	quit := make(chan os.Signal, 1)
@@ -56,7 +56,7 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 		b = append(b, []byte("tokentoken")...)
 	}
 	message := string(b)
-	ticker := time.NewTicker(time.Millisecond * 100)
+	ticker := time.NewTicker(time.Millisecond * 10)
 	defer ticker.Stop()
 	for range ticker.C {
 		//for {

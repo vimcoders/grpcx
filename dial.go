@@ -25,7 +25,7 @@ type dialOption struct {
 var defaultDialOptions = dialOption{
 	timeout:         120 * time.Second,
 	buffsize:        defaultReadBufSize,
-	KeepaliveParams: keepalive.ClientParameters{Time: time.Second * 6, Timeout: time.Second * 60},
+	KeepaliveParams: keepalive.ClientParameters{Time: time.Second * 60, Timeout: time.Second * 60},
 }
 
 type DialOption interface {
@@ -75,16 +75,14 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	for i := 0; i < len(opt.address); i++ {
 		cc, err := dail(ctx, opt.address[i].Network(), opt.address[i].String(), opts...)
 		if err != nil {
-			return nil, err
+			panic(err)
 		}
 		go cc.serve(ctx)
 		if err := cc.Ping(ctx); err != nil {
-			return nil, err
+			panic(err)
 		}
 		client.cc = append(client.cc, cc)
-	}
-	for i := 0; i < len(client.cc); i++ {
-		client.Instances = append(client.Instances, discovery.NewInstance(client.cc[i], i, nil))
+		client.Instances = append(client.Instances, discovery.NewInstance(cc, i, nil))
 	}
 	return &client, nil
 }
@@ -99,7 +97,7 @@ func dail(_ context.Context, network string, addr string, opts ...DialOption) (*
 		buffsize:        opt.buffsize,
 		Methods:         opt.Methods,
 		maxRetry:        5,
-		retrySleep:      time.Second * 60,
+		retrySleep:      time.Second * 10,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
 	switch network {

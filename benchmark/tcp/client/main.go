@@ -19,7 +19,7 @@ func main() {
 	runtime.GOMAXPROCS(4)
 	opts := []grpcx.DialOption{
 		grpcx.WithDial("tcp", "127.0.0.1:28889"),
-		//grpcx.WithDial("tcp", "127.0.0.1:28889"),
+		grpcx.WithDial("tcp", "127.0.0.1:28889"),
 	}
 	cc, err := grpcx.Dial(context.Background(), opts...)
 	if err != nil {

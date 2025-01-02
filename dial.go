@@ -8,7 +8,7 @@ import (
 
 	"github.com/vimcoders/grpcx/discovery"
 
-	"github.com/vimcoders/quicx"
+	"github.com/vimcoders/grpcx/quicx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -75,7 +75,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		buffsize:        opt.buffsize,
 		Methods:         opt.Methods,
 		maxRetry:        3,
-		ttl:             time.Minute * 2,
+		retrySleep:      time.Second * 60,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
 	var client client

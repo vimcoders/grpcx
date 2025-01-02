@@ -19,7 +19,7 @@ import (
 	"github.com/vimcoders/grpcx"
 	"github.com/vimcoders/grpcx/benchmark/pb"
 
-	"github.com/vimcoders/quicx"
+	"github.com/vimcoders/grpcx/quicx"
 )
 
 func main() {

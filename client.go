@@ -9,6 +9,7 @@ import (
 	"net"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/balance"
@@ -29,7 +30,7 @@ type clientOption struct {
 	timeout         time.Duration
 	Methods         []string
 	maxRetry        int
-	ttl             time.Duration
+	retrySleep      time.Duration
 	KeepaliveParams keepalive.ClientParameters
 }
 
@@ -62,13 +63,12 @@ func (x *client) GetPicker(result discovery.Result) balance.Picker {
 }
 
 type conn struct {
+	sync.RWMutex
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
 	pending map[uint16]*request
 	seq     uint16
-	sendQ   chan *request
-	readQ   chan *buffer
 }
 
 func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
@@ -76,8 +76,6 @@ func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
 		clientOption: opt,
 		Conn:         c,
 		pending:      make(map[uint16]*request),
-		sendQ:        make(chan *request, 65535),
-		readQ:        make(chan *buffer, 65535),
 		seq:          math.MaxUint8,
 	}
 	go x.serve(ctx)
@@ -85,8 +83,6 @@ func newClient(ctx context.Context, c net.Conn, opt clientOption) Conn {
 }
 
 func (x *conn) Close() error {
-	close(x.sendQ)
-	close(x.readQ)
 	return x.Conn.Close()
 }
 
@@ -110,39 +106,37 @@ func (x *conn) Invoke(ctx context.Context, methodName string, req any, reply any
 
 func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) error {
 	for i := 1; i <= x.maxRetry; i++ {
-		err := x.do(ctx, method, req, reply)
-		if err == nil {
-			return nil
-		}
-		if i == x.maxRetry {
+		request, err := NewRequest(method, req)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func (x *conn) do(ctx context.Context, method uint16, req any, reply any) (err error) {
-	request, err := x.newRequest(method, req)
-	if err != nil {
-		return err
-	}
-	select {
-	case <-ctx.Done():
-		return errors.New("timeout")
-	case x.sendQ <- request:
-	}
-	select {
-	case <-ctx.Done():
-		return errors.New("timeout")
-	case b := <-request.ch:
-		if b == nil {
-			return errors.New("too many request")
+		b, err := x.do(ctx, request)
+		if err != nil {
+			time.Sleep(x.retrySleep * time.Duration(i))
+			fmt.Println(err)
+			continue
 		}
 		if err := proto.Unmarshal(b.body(), reply.(proto.Message)); err != nil {
 			return err
 		}
 		b.close()
 		return nil
+	}
+	return nil
+}
+
+func (x *conn) do(ctx context.Context, req *request) (b *buffer, err error) {
+	if err := x.push(req); err != nil {
+		return nil, err
+	}
+	select {
+	case <-ctx.Done():
+		return nil, errors.New("timeout")
+	case b := <-req.ch:
+		if b == nil {
+			return nil, errors.New("too many request")
+		}
+		return b, nil
 	}
 }
 
@@ -170,8 +164,7 @@ func (x *conn) keepalive(ctx context.Context) (err error) {
 		}
 	}
 }
-
-func (x *conn) read(ctx context.Context) (err error) {
+func (x *conn) serve(ctx context.Context) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			fmt.Println(e)
@@ -182,6 +175,7 @@ func (x *conn) read(ctx context.Context) (err error) {
 		}
 		x.Close()
 	}()
+	go x.keepalive(ctx)
 	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
 	for {
 		select {
@@ -195,77 +189,46 @@ func (x *conn) read(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			if int(buffer.cmd()) >= len(x.Methods) {
-				continue
-			}
-			x.readQ <- buffer
+			x.process(buffer)
 		}
 	}
 }
 
-func (x *conn) serve(ctx context.Context) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			fmt.Println(e)
-			debug.PrintStack()
-		}
-		if err != nil {
-			fmt.Println(err)
-		}
-	}()
-	go x.read(ctx)
-	go x.keepalive(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.New("shutdown")
-		case req := <-x.sendQ:
-			err := x.push(req)
-			if err != nil {
-				close(req.ch)
-				return err
-			}
-		case b := <-x.readQ:
-			seq := b.seq()
-			if v, ok := x.pending[seq]; ok {
-				delete(x.pending, seq)
-				v.invoke(b)
-			}
-		}
+func (x *conn) process(buffer *buffer) error {
+	if int(buffer.cmd()) >= len(x.Methods) {
+		return nil
 	}
-}
-
-func (x *conn) newRequest(cmd uint16, req any) (*request, error) {
-	b, err := proto.Marshal(req.(proto.Message))
-	if err != nil {
-		return nil, err
+	seq := buffer.seq()
+	x.Lock()
+	defer x.Unlock()
+	if v, ok := x.pending[seq]; ok && v != nil {
+		v.invoke(buffer)
+		delete(x.pending, seq)
 	}
-	return &request{
-		cmd:     cmd,
-		body:    b,
-		ch:      make(chan *buffer, 1),
-		timeout: time.Now().Add(x.ttl),
-	}, nil
+	return nil
 }
 
 func (x *conn) push(req *request) error {
-	seq := x.seq + 1
-	if v, ok := x.pending[seq]; ok && time.Now().Before(v.timeout) {
-		return errors.New("too many request")
-	}
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
+	}
+	x.Lock()
+	defer x.Unlock()
+	seq := x.seq + 1
+	if _, ok := x.pending[seq]; ok {
+		close(req.ch)
+		return nil
 	}
 	buf := buffers.Get().(*buffer)
 	buf.WriteUint16(req.Size(), seq, req.cmd)
 	if _, err := buf.Write(req.body); err != nil {
 		return err
 	}
+	x.pending[seq] = req
+	x.seq = seq % math.MaxUint16
 	if _, err := buf.WriteTo(x); err != nil {
 		return err
 	}
-	x.seq = seq % math.MaxUint16
-	x.pending[seq] = req
 	return nil
 }
 

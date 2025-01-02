@@ -8,17 +8,16 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/proto"
 )
 
+const _MESSAGE_HEADER = 2
+
 type ClientParameters = keepalive.ClientParameters
 type UnaryServerInterceptor = grpc.UnaryServerInterceptor
-
-const _MESSAGE_HEADER = 2
 
 var buffers sync.Pool = sync.Pool{
 	New: func() any {
@@ -111,10 +110,21 @@ func (x buffer) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 type request struct {
-	cmd     uint16
-	body    []byte
-	ch      chan *buffer
-	timeout time.Time
+	cmd  uint16
+	body []byte
+	ch   chan *buffer
+}
+
+func NewRequest(cmd uint16, req any) (*request, error) {
+	b, err := proto.Marshal(req.(proto.Message))
+	if err != nil {
+		return nil, err
+	}
+	return &request{
+		cmd:  cmd,
+		body: b,
+		ch:   make(chan *buffer, 1),
+	}, nil
 }
 
 func (x *request) invoke(buf *buffer) error {

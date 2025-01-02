@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"opentracing/pb"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
 	"time"
+
+	"github.com/vimcoders/grpcx/benchmark/pb"
 
 	"github.com/vimcoders/grpcx"
 

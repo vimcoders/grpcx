@@ -39,7 +39,6 @@ func main() {
 	)
 	opts := []grpcx.DialOption{
 		grpcx.WithDial("tcp", "127.0.0.1:28889"),
-		grpcx.WithDialServiceDesc(pb.Chat_ServiceDesc),
 	}
 	cc, err := grpcx.Dial(context.Background(), opts...)
 	if err != nil {

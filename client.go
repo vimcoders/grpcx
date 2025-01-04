@@ -176,24 +176,24 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 				return err
 			}
-			req, err := readResponse(buf)
+			response, err := readResponse(buf)
 			if err != nil {
 				return err
 			}
-			x.process(req)
+			x.process(response)
 		}
 	}
 }
 
-func (x *conn) process(req *response) error {
+func (x *conn) process(response *response) error {
 	x.Lock()
 	defer x.Unlock()
-	if v, ok := x.pending[req.seq]; ok && v != nil {
-		delete(x.pending, req.seq)
+	if v, ok := x.pending[response.seq]; ok && v != nil {
+		delete(x.pending, response.seq)
 		if len(v) > 0 {
 			return nil
 		}
-		v <- req.Clone()
+		v <- response.Clone()
 	}
 	return nil
 }

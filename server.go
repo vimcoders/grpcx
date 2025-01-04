@@ -135,31 +135,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		seq, cmd := req.seq, req.cmd
-		if int(cmd) >= len(x.Methods) {
-			response, err := x.NewPingWriter(seq, cmd)
-			if err != nil {
-				return err
-			}
-			if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-				return err
-			}
-			if _, err := response.WriteTo(c); err != nil {
-				return err
-			}
-			continue
-		}
-		dec := func(in any) error {
-			if err := proto.Unmarshal(req.Bytes(), in.(proto.Message)); err != nil {
-				return err
-			}
-			return nil
-		}
-		reply, err := x.Methods[cmd].Handler(x.impl, ctx, dec, x.Unary)
-		if err != nil {
-			return err
-		}
-		response, err := NewResponseWriter(seq, cmd, reply)
+		response, err := x.do(ctx, req)
 		if err != nil {
 			return err
 		}
@@ -170,6 +146,33 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			return err
 		}
 	}
+}
+
+func (x *Server) do(ctx context.Context, req *request) (io.WriterTo, error) {
+	seq, cmd := req.seq, req.cmd
+	if int(cmd) >= len(x.Methods) {
+		response, err := x.NewPingWriter(seq, cmd)
+		if err != nil {
+			return nil, err
+		}
+		return response, nil
+	}
+	dec := func(in any) error {
+		if err := proto.Unmarshal(req.Bytes(), in.(proto.Message)); err != nil {
+			return err
+		}
+		return nil
+	}
+	reply, err := x.Methods[cmd].Handler(x.impl, ctx, dec, x.Unary)
+	if err != nil {
+		return nil, err
+	}
+	response, err := NewResponseWriter(seq, cmd, reply)
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+
 }
 
 func (x *Server) NewPingWriter(seq, cmd uint16) (io.WriterTo, error) {

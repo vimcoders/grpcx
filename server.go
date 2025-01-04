@@ -168,11 +168,15 @@ func (x *Server) do(ctx context.Context, req request) (io.WriterTo, error) {
 	if err != nil {
 		return nil, err
 	}
-	response, err := NewResponseWriter(seq, cmd, reply)
+	b, err := proto.Marshal(reply.(proto.Message))
 	if err != nil {
 		return nil, err
 	}
-	return response, nil
+	return &response{
+		seq:    seq,
+		cmd:    cmd,
+		buffer: NewBuffer(b),
+	}, nil
 
 }
 
@@ -182,18 +186,6 @@ func (x *Server) NewPingWriter(seq, cmd uint16) (io.WriterTo, error) {
 		replay = append(replay, x.Methods[i].MethodName)
 	}
 	b, err := json.Marshal(replay)
-	if err != nil {
-		return nil, err
-	}
-	return &response{
-		seq:    seq,
-		cmd:    cmd,
-		buffer: NewBuffer(b),
-	}, nil
-}
-
-func NewResponseWriter(seq, cmd uint16, reply any) (io.WriterTo, error) {
-	b, err := proto.Marshal(reply.(proto.Message))
 	if err != nil {
 		return nil, err
 	}

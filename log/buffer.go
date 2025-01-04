@@ -1,7 +1,6 @@
 package log
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -70,9 +69,4 @@ var bufferFree sync.Pool = sync.Pool{
 	New: func() any {
 		return &buffer{}
 	},
-}
-
-type Handler interface {
-	Handle(context.Context, []byte) error
-	Close() error
 }

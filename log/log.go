@@ -23,7 +23,6 @@ func Error(a ...any) {
 }
 
 type SysLogger struct {
-	Handler
 }
 
 func NewSysLogger() *SysLogger {
@@ -57,5 +56,5 @@ func (x *SysLogger) log(prefix string, a ...any) {
 // }
 
 func (x *SysLogger) Close() error {
-	return x.Handler.Close()
+	return nil
 }

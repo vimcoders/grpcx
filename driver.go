@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"net"
-	"runtime/debug"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -30,7 +29,7 @@ type buffer struct {
 	b []byte
 }
 
-func readBuffer(buf *bufio.Reader) (*buffer, error) {
+func readBuffer(buf *bufio.Reader) (*request, error) {
 	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -39,35 +38,26 @@ func readBuffer(buf *bufio.Reader) (*buffer, error) {
 	if length > buf.Size() {
 		return nil, fmt.Errorf("header %v too long", length)
 	}
-	iMessage, err := buf.Peek(length)
+	b, err := buf.Peek(length)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := buf.Discard(len(iMessage)); err != nil {
+	if _, err := buf.Discard(len(b)); err != nil {
 		return nil, err
 	}
-	buffer := buffers.Get().(*buffer)
-	if _, err := buffer.Write(iMessage); err != nil {
-		return nil, err
-	}
-	return buffer, nil
+	seq := binary.BigEndian.Uint16(b[2:])
+	cmd := binary.BigEndian.Uint16(b[4:])
+	return &request{
+		seq:    seq,
+		cmd:    cmd,
+		buffer: NewBuffer(b[6:]),
+	}, nil
 }
 
-func (x buffer) seq() uint16 {
-	return binary.BigEndian.Uint16(x.b[2:]) //2
-}
-
-func (x buffer) cmd() uint16 {
-	return binary.BigEndian.Uint16(x.b[4:]) // 4
-}
-
-func (x buffer) body() []byte {
-	return x.b[6:] // 6
-}
-
-func (x *buffer) close() {
+func (x *buffer) Close() error {
 	x.b = x.b[:0]
 	buffers.Put(x)
+	return nil
 }
 
 func (x *buffer) Write(p []byte) (int, error) {
@@ -96,7 +86,7 @@ func (x *buffer) WriteUint64(v ...uint64) {
 	}
 }
 
-func (x buffer) WriteTo(w io.Writer) (n int64, err error) {
+func (x *buffer) WriteTo(w io.Writer) (n int64, err error) {
 	if nBytes := len(x.b); nBytes > 0 {
 		m, e := w.Write(x.b)
 		if m > nBytes {
@@ -109,14 +99,28 @@ func (x buffer) WriteTo(w io.Writer) (n int64, err error) {
 			return n, io.ErrShortWrite
 		}
 	}
-	x.close()
+	x.Close()
 	return n, nil
 }
 
+func (x *buffer) Bytes() []byte {
+	return x.b
+}
+
+func (x *buffer) Clone() *buffer {
+	buf := buffers.Get().(*buffer)
+	buf.Write(x.b)
+	return buf
+}
+
+func NewBuffer(b []byte) *buffer {
+	return &buffer{b: b}
+}
+
 type request struct {
-	cmd  uint16
-	body []byte
-	ch   chan *buffer
+	seq uint16
+	cmd uint16
+	*buffer
 }
 
 func NewRequest(cmd uint16, req any) (*request, error) {
@@ -125,44 +129,28 @@ func NewRequest(cmd uint16, req any) (*request, error) {
 		return nil, err
 	}
 	return &request{
-		cmd:  cmd,
-		body: b,
-		ch:   make(chan *buffer, 1),
+		cmd:    cmd,
+		buffer: NewBuffer(b),
 	}, nil
 }
 
 func NewPingRequest() *request {
 	return &request{
 		cmd: math.MaxUint16,
-		ch:  make(chan *buffer, 1),
 	}
 }
 
-func (x *request) invoke(buf *buffer) error {
-	if e := recover(); e != nil {
-		fmt.Println(e)
-		debug.PrintStack()
-	}
-	if len(x.ch) > 0 {
-		return nil
-	}
-	x.ch <- buf
-	return nil
-}
-
-func (x request) Size() uint16 {
-	return uint16(2 + 2 + 2 + len(x.body))
-}
-
-func NewResponseWriter(seq, cmd uint16, reply any) (io.WriterTo, error) {
-	b, err := proto.Marshal(reply.(proto.Message))
-	if err != nil {
-		return nil, err
-	}
+func (x *request) WriteTo(w io.Writer) (int64, error) {
 	buf := buffers.Get().(*buffer)
-	buf.WriteUint16(uint16(2+2+2+len(b)), seq, cmd)
-	buf.Write(b)
-	return buf, nil
+	if x.buffer == nil {
+		buf.WriteUint16(uint16(2+2+2), x.seq, x.cmd)
+		return buf.WriteTo(w)
+	}
+	buf.WriteUint16(uint16(2+2+2+len(x.Bytes())), x.seq, x.cmd)
+	if _, err := buf.Write(x.Bytes()); err != nil {
+		return 0, err
+	}
+	return buf.WriteTo(w)
 }
 
 var _ net.Addr = &Addr{}

@@ -131,11 +131,11 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		buffer, err := readBuffer(buf)
+		req, err := readBuffer(buf)
 		if err != nil {
 			return err
 		}
-		seq, cmd := buffer.seq(), buffer.cmd()
+		seq, cmd := req.seq, req.cmd
 		if int(cmd) >= len(x.Methods) {
 			response, err := x.NewPingWriter(seq, cmd)
 			if err != nil {
@@ -150,7 +150,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			continue
 		}
 		dec := func(in any) error {
-			if err := proto.Unmarshal(buffer.body(), in.(proto.Message)); err != nil {
+			if err := proto.Unmarshal(req.Bytes(), in.(proto.Message)); err != nil {
 				return err
 			}
 			return nil
@@ -181,10 +181,21 @@ func (x *Server) NewPingWriter(seq, cmd uint16) (io.WriterTo, error) {
 	if err != nil {
 		return nil, err
 	}
-	buffer := buffers.Get().(*buffer)
-	buffer.WriteUint16(uint16(6+len(b)), seq, cmd)
-	if _, err := buffer.Write(b); err != nil {
+	return &request{
+		seq:    seq,
+		cmd:    cmd,
+		buffer: NewBuffer(b),
+	}, nil
+}
+
+func NewResponseWriter(seq, cmd uint16, reply any) (io.WriterTo, error) {
+	b, err := proto.Marshal(reply.(proto.Message))
+	if err != nil {
 		return nil, err
 	}
-	return buffer, nil
+	return &request{
+		seq:    seq,
+		cmd:    cmd,
+		buffer: NewBuffer(b),
+	}, nil
 }

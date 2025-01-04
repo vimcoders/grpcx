@@ -63,11 +63,14 @@ type conn struct {
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
-	pending map[uint16]*request
+	pending map[uint16]chan *buffer
 	seq     uint16
+	context.Context
+	context.CancelFunc
 }
 
 func (x *conn) Close() error {
+	x.CancelFunc()
 	return x.Conn.Close()
 }
 
@@ -101,23 +104,26 @@ func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) er
 			fmt.Println(err)
 			continue
 		}
-		if err := proto.Unmarshal(b.body(), reply.(proto.Message)); err != nil {
+		defer b.Close()
+		if err := proto.Unmarshal(b.Bytes(), reply.(proto.Message)); err != nil {
 			return err
 		}
-		b.close()
 		return nil
 	}
 	return nil
 }
 
-func (x *conn) do(ctx context.Context, req *request) (b *buffer, err error) {
-	if err := x.push(ctx, req); err != nil {
+func (x *conn) do(ctx context.Context, req *request) (*buffer, error) {
+	ch, err := x.push(ctx, req)
+	if err != nil {
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
 		return nil, errors.New("timeout")
-	case b := <-req.ch:
+	case <-x.Done():
+		return nil, errors.New("shutdown")
+	case b := <-ch:
 		if b == nil {
 			return nil, errors.New("too many request")
 		}
@@ -170,48 +176,46 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 				return err
 			}
-			buffer, err := readBuffer(buf)
+			req, err := readBuffer(buf)
 			if err != nil {
 				return err
 			}
-			x.process(buffer)
+			x.process(req)
 		}
 	}
 }
 
-func (x *conn) process(buffer *buffer) error {
-	seq := buffer.seq()
+func (x *conn) process(req *request) error {
 	x.Lock()
 	defer x.Unlock()
-	if v, ok := x.pending[seq]; ok && v != nil {
-		v.invoke(buffer)
-		delete(x.pending, seq)
+	if v, ok := x.pending[req.seq]; ok && v != nil {
+		delete(x.pending, req.seq)
+		if len(v) > 0 {
+			return nil
+		}
+		v <- req.Clone()
 	}
 	return nil
 }
 
-func (x *conn) push(_ context.Context, req *request) error {
+func (x *conn) push(_ context.Context, req *request) (<-chan *buffer, error) {
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-		return err
+		return nil, err
 	}
 	x.Lock()
 	defer x.Unlock()
-	seq := x.seq + 1
-	if _, ok := x.pending[seq]; ok {
-		close(req.ch)
-		return nil
+	req.seq = x.seq + 1
+	if _, ok := x.pending[req.seq]; ok {
+		return nil, errors.New("too many request")
 	}
-	buf := buffers.Get().(*buffer)
-	buf.WriteUint16(req.Size(), seq, req.cmd)
-	if _, err := buf.Write(req.body); err != nil {
-		return err
+	ch := make(chan *buffer, 1)
+	x.pending[req.seq] = ch
+	if _, err := req.WriteTo(x.Conn); err != nil {
+		delete(x.pending, req.seq)
+		return nil, err
 	}
-	if _, err := buf.WriteTo(x); err != nil {
-		return err
-	}
-	x.pending[seq] = req
-	x.seq = seq % math.MaxUint16
-	return nil
+	x.seq = req.seq % math.MaxUint16
+	return ch, nil
 }
 
 func (x *conn) Ping(ctx context.Context) error {
@@ -219,12 +223,12 @@ func (x *conn) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer b.close()
+	defer b.Close()
 	if len(x.Methods) > 0 {
 		return nil
 	}
 	var methods []string
-	if err := json.Unmarshal(b.body(), &methods); err != nil {
+	if err := json.Unmarshal(b.Bytes(), &methods); err != nil {
 		return err
 	}
 	x.Methods = methods

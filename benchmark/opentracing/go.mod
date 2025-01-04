@@ -5,6 +5,7 @@ go 1.23.4
 require (
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/uber/jaeger-client-go v2.30.0+incompatible
+	github.com/vimcoders/grpcx v0.0.2
 	google.golang.org/grpc v1.69.2
 )
 
@@ -15,9 +16,8 @@ require (
 	github.com/onsi/ginkgo/v2 v2.9.5 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/quic-go v0.48.2 // indirect
-	github.com/stretchr/testify v1.9.0 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
-	github.com/vimcoders/grpcx v0.0.2 // indirect
 	github.com/vimcoders/quicx v0.0.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/mock v0.4.0 // indirect

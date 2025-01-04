@@ -87,7 +87,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	return &client, nil
 }
 
-func dail(_ context.Context, network string, addr string, opts ...DialOption) (*conn, error) {
+func dail(ctx context.Context, network string, addr string, opts ...DialOption) (*conn, error) {
 	opt := defaultDialOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
@@ -106,10 +106,13 @@ func dail(_ context.Context, network string, addr string, opts ...DialOption) (*
 		if err != nil {
 			return nil, err
 		}
+		cancelCtx, cancelFunc := context.WithCancel(ctx)
 		x := &conn{
 			Conn:         c,
+			Context:      cancelCtx,
+			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
-			pending:      make(map[uint16]*request),
+			pending:      make(map[uint16]chan *buffer),
 			seq:          math.MaxUint8,
 		}
 		return x, nil
@@ -124,10 +127,13 @@ func dail(_ context.Context, network string, addr string, opts ...DialOption) (*
 		if err != nil {
 			return nil, err
 		}
+		cancelCtx, cancelFunc := context.WithCancel(ctx)
 		x := &conn{
 			Conn:         c,
+			Context:      cancelCtx,
+			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
-			pending:      make(map[uint16]*request),
+			pending:      make(map[uint16]chan *buffer),
 			seq:          math.MaxUint8,
 		}
 		return x, nil

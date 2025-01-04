@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -41,12 +42,14 @@ func main() {
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	s := debug.GCStats{}
 	for {
 		select {
 		case <-quit:
 			return
 		case <-ticker.C:
-			fmt.Println("NumCPU:", runtime.NumCPU(), "NumGoroutine:", runtime.NumGoroutine())
+			debug.ReadGCStats(&s)
+			fmt.Printf("gc %d last@%v, PauseTotal %v\n", s.NumGC, s.LastGC, s.PauseTotal)
 		}
 	}
 }

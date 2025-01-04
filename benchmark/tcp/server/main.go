@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -30,7 +31,17 @@ func main() {
 	go svr.ListenAndServe(context.Background(), listener)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
-	<-quit
+	t := time.NewTicker(time.Second)
+	s := debug.GCStats{}
+	for {
+		select {
+		case <-quit:
+			return
+		case <-t.C:
+			debug.ReadGCStats(&s)
+			fmt.Printf("gc %d last@%v, PauseTotal %v\n", s.NumGC, s.LastGC, s.PauseTotal)
+		}
+	}
 }
 
 type Handler struct {

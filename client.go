@@ -176,7 +176,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err := x.Conn.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 				return err
 			}
-			req, err := readBuffer(buf)
+			req, err := readResponse(buf)
 			if err != nil {
 				return err
 			}
@@ -185,7 +185,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 	}
 }
 
-func (x *conn) process(req *request) error {
+func (x *conn) process(req *response) error {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[req.seq]; ok && v != nil {

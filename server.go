@@ -131,7 +131,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		req, err := readBuffer(buf)
+		req, err := readRequest(buf)
 		if err != nil {
 			return err
 		}
@@ -181,7 +181,7 @@ func (x *Server) NewPingWriter(seq, cmd uint16) (io.WriterTo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &request{
+	return &response{
 		seq:    seq,
 		cmd:    cmd,
 		buffer: NewBuffer(b),
@@ -193,7 +193,7 @@ func NewResponseWriter(seq, cmd uint16, reply any) (io.WriterTo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &request{
+	return &response{
 		seq:    seq,
 		cmd:    cmd,
 		buffer: NewBuffer(b),

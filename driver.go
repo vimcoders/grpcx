@@ -29,7 +29,7 @@ type buffer struct {
 	b []byte
 }
 
-func readBuffer(buf *bufio.Reader) (*request, error) {
+func readRequest(buf *bufio.Reader) (*request, error) {
 	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
 	if err != nil {
 		return nil, err
@@ -48,6 +48,31 @@ func readBuffer(buf *bufio.Reader) (*request, error) {
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
 	return &request{
+		seq:    seq,
+		cmd:    cmd,
+		buffer: NewBuffer(b[6:]),
+	}, nil
+}
+
+func readResponse(buf *bufio.Reader) (*response, error) {
+	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+	if err != nil {
+		return nil, err
+	}
+	length := int(binary.BigEndian.Uint16(headerBytes))
+	if length > buf.Size() {
+		return nil, fmt.Errorf("header %v too long", length)
+	}
+	b, err := buf.Peek(length)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := buf.Discard(len(b)); err != nil {
+		return nil, err
+	}
+	seq := binary.BigEndian.Uint16(b[2:])
+	cmd := binary.BigEndian.Uint16(b[4:])
+	return &response{
 		seq:    seq,
 		cmd:    cmd,
 		buffer: NewBuffer(b[6:]),
@@ -116,6 +141,8 @@ func (x *buffer) Clone() *buffer {
 func NewBuffer(b []byte) *buffer {
 	return &buffer{b: b}
 }
+
+type response request
 
 type request struct {
 	seq uint16

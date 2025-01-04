@@ -186,7 +186,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 	}
 }
 
-func (x *conn) process(response *response) error {
+func (x *conn) process(response response) error {
 	x.Lock()
 	defer x.Unlock()
 	if v, ok := x.pending[response.seq]; ok && v != nil {

@@ -149,7 +149,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (x *Server) do(ctx context.Context, req *request) (io.WriterTo, error) {
+func (x *Server) do(ctx context.Context, req request) (io.WriterTo, error) {
 	seq, cmd := req.seq, req.cmd
 	if int(cmd) >= len(x.Methods) {
 		response, err := x.NewPingWriter(seq, cmd)

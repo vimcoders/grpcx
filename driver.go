@@ -29,50 +29,50 @@ type buffer struct {
 	b []byte
 }
 
-func readRequest(buf *bufio.Reader) (*request, error) {
+func readRequest(buf *bufio.Reader) (request, error) {
 	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
 	if err != nil {
-		return nil, err
+		return request{}, err
 	}
 	length := int(binary.BigEndian.Uint16(headerBytes))
 	if length > buf.Size() {
-		return nil, fmt.Errorf("header %v too long", length)
+		return request{}, fmt.Errorf("header %v too long", length)
 	}
 	b, err := buf.Peek(length)
 	if err != nil {
-		return nil, err
+		return request{}, err
 	}
 	if _, err := buf.Discard(len(b)); err != nil {
-		return nil, err
+		return request{}, err
 	}
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
-	return &request{
+	return request{
 		seq:    seq,
 		cmd:    cmd,
 		buffer: NewBuffer(b[6:]),
 	}, nil
 }
 
-func readResponse(buf *bufio.Reader) (*response, error) {
+func readResponse(buf *bufio.Reader) (response, error) {
 	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
 	if err != nil {
-		return nil, err
+		return response{}, err
 	}
 	length := int(binary.BigEndian.Uint16(headerBytes))
 	if length > buf.Size() {
-		return nil, fmt.Errorf("header %v too long", length)
+		return response{}, fmt.Errorf("header %v too long", length)
 	}
 	b, err := buf.Peek(length)
 	if err != nil {
-		return nil, err
+		return response{}, err
 	}
 	if _, err := buf.Discard(len(b)); err != nil {
-		return nil, err
+		return response{}, err
 	}
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
-	return &response{
+	return response{
 		seq:    seq,
 		cmd:    cmd,
 		buffer: NewBuffer(b[6:]),

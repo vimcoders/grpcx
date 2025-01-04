@@ -15,6 +15,7 @@ import (
 
 	"github.com/vimcoders/grpcx/balance"
 	"github.com/vimcoders/grpcx/discovery"
+	"github.com/vimcoders/grpcx/log"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -101,7 +102,7 @@ func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) er
 		b, err := x.do(ctx, request)
 		if err != nil {
 			time.Sleep(x.retrySleep * time.Duration(i))
-			fmt.Println(err)
+			log.Error(err)
 			continue
 		}
 		defer b.Close()
@@ -134,11 +135,11 @@ func (x *conn) do(ctx context.Context, req *request) (*buffer, error) {
 func (x *conn) keepalive(ctx context.Context) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			fmt.Println(e)
+			log.Error(e)
 			debug.PrintStack()
 		}
 		if err != nil {
-			fmt.Println(err)
+			log.Error(err)
 		}
 		x.Close()
 	}()
@@ -158,11 +159,11 @@ func (x *conn) keepalive(ctx context.Context) (err error) {
 func (x *conn) serve(ctx context.Context) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			fmt.Println(e)
+			log.Error(e)
 			debug.PrintStack()
 		}
 		if err != nil {
-			fmt.Println(err)
+			log.Error(err)
 		}
 		x.Close()
 	}()

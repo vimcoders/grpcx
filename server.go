@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/vimcoders/grpcx/log"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -70,10 +71,10 @@ func (x Server) ListenAndServe(ctx context.Context, listener net.Listener) {
 		}
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println(err)
+			log.Error(err)
 			continue
 		}
-		fmt.Println(conn.RemoteAddr())
+		log.Info(conn.RemoteAddr())
 		go x.serve(ctx, conn)
 	}
 }

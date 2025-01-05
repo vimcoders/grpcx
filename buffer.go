@@ -67,10 +67,6 @@ func (x *buffer) Bytes() []byte {
 	return x.b
 }
 
-func NewBuffer(b []byte) *buffer {
-	return &buffer{b: b}
-}
-
 var buffers sync.Pool = sync.Pool{
 	New: func() any {
 		return &buffer{}

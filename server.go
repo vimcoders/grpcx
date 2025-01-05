@@ -13,6 +13,7 @@ import (
 
 	"github.com/vimcoders/grpcx/log"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 type ServerOption interface {
@@ -149,20 +150,23 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			}
 			continue
 		}
-		// reply, err := x.Methods[cmd].Handler(x.impl, ctx, req.dec, x.Unary)
-		// if err != nil {
-		// 	return err
-		// }
-		// pb, err := proto.Marshal(reply.(proto.Message))
-		// if err != nil {
-		// 	return err
-		// }
-		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+		reply, err := x.Methods[cmd].Handler(x.impl, ctx, req.dec, x.Unary)
+		if err != nil {
 			return err
 		}
-		w := response{seq: seq, cmd: cmd}
-		if _, err := w.WriteTo(c); err != nil {
-			return err
+		switch v := reply.(type) {
+		case proto.Message:
+			b, err := proto.Marshal(v)
+			if err != nil {
+				return err
+			}
+			if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+				return err
+			}
+			w := response{seq: seq, cmd: cmd, b: b}
+			if _, err := w.WriteTo(c); err != nil {
+				return err
+			}
 		}
 	}
 }

@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/vimcoders/grpcx/benchmark/pb"
@@ -20,10 +24,22 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	s := grpc.NewServer()
-	pb.RegisterChatServer(s, MakeHandler())
-	if err := s.Serve(listener); err != nil {
-		panic(err)
+	svr := grpc.NewServer()
+	pb.RegisterChatServer(svr, MakeHandler())
+	go svr.Serve(listener)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	s := debug.GCStats{}
+	for {
+		select {
+		case <-quit:
+			return
+		case <-t.C:
+			debug.ReadGCStats(&s)
+			fmt.Printf("gc %d last@%v, PauseTotal %v\n", s.NumGC, s.LastGC, s.PauseTotal)
+		}
 	}
 }
 

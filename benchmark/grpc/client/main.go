@@ -18,7 +18,7 @@ import (
 
 func main() {
 	fmt.Println(runtime.NumCPU())
-	runtime.GOMAXPROCS(2)
+	runtime.GOMAXPROCS(4)
 	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		panic(err)
@@ -27,7 +27,7 @@ func main() {
 	client := &Client{
 		ChatClient: pb.NewChatClient(conn),
 	}
-	for i := 0; i < 8000; i++ {
+	for i := 0; i < 10000; i++ {
 		go client.BenchmarkChat(context.Background())
 	}
 	quit := make(chan os.Signal, 1)
@@ -55,7 +55,9 @@ func (x *Client) BenchmarkChat(ctx context.Context) {
 		b = append(b, []byte("tokentoken")...)
 	}
 	message := string(b)
-	for {
+	ticker := time.NewTicker(time.Millisecond * 10)
+	defer ticker.Stop()
+	for range ticker.C {
 		if _, err := x.Chat(ctx, &pb.ChatRequest{Message: message}); err != nil {
 			fmt.Println(err.Error())
 			continue

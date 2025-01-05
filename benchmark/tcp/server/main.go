@@ -32,6 +32,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	t := time.NewTicker(time.Second)
+	defer t.Stop()
 	s := debug.GCStats{}
 	for {
 		select {

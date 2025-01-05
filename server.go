@@ -150,13 +150,7 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			}
 			continue
 		}
-		dec := func(in any) error {
-			if err := proto.Unmarshal(req.b, in.(proto.Message)); err != nil {
-				return err
-			}
-			return nil
-		}
-		reply, err := x.Methods[cmd].Handler(x.impl, ctx, dec, x.Unary)
+		reply, err := x.Methods[cmd].Handler(x.impl, ctx, req.dec, x.Unary)
 		if err != nil {
 			return err
 		}

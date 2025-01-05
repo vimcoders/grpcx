@@ -70,3 +70,10 @@ func (x *request) WriteTo(w io.Writer) (int64, error) {
 	}
 	return buf.WriteTo(w)
 }
+
+func (x *request) dec(in any) error {
+	if err := proto.Unmarshal(x.b, in.(proto.Message)); err != nil {
+		return err
+	}
+	return nil
+}

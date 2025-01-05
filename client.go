@@ -194,7 +194,9 @@ func (x *conn) process(response response) error {
 		if len(v) > 0 {
 			return nil
 		}
-		v <- response.Clone()
+		b := make([]byte, len(response.b))
+		copy(b, response.b)
+		v <- NewBuffer(b)
 	}
 	return nil
 }

@@ -159,7 +159,7 @@ func (x *Server) do(ctx context.Context, req request) (io.WriterTo, error) {
 		return response, nil
 	}
 	dec := func(in any) error {
-		if err := proto.Unmarshal(req.Bytes(), in.(proto.Message)); err != nil {
+		if err := proto.Unmarshal(req.b, in.(proto.Message)); err != nil {
 			return err
 		}
 		return nil
@@ -173,9 +173,9 @@ func (x *Server) do(ctx context.Context, req request) (io.WriterTo, error) {
 		return nil, err
 	}
 	return &response{
-		seq:    seq,
-		cmd:    cmd,
-		buffer: NewBuffer(b),
+		seq: seq,
+		cmd: cmd,
+		b:   b,
 	}, nil
 
 }
@@ -190,8 +190,8 @@ func (x *Server) NewPingWriter(seq, cmd uint16) (io.WriterTo, error) {
 		return nil, err
 	}
 	return &response{
-		seq:    seq,
-		cmd:    cmd,
-		buffer: NewBuffer(b),
+		seq: seq,
+		cmd: cmd,
+		b:   b,
 	}, nil
 }

@@ -54,12 +54,12 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 }
 
 func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) error {
+	request, err := x.NewGRPCXRequest(method, req)
+	if err != nil {
+		return err
+	}
+	defer x.Pool.Put(&request)
 	for i := 1; i <= x.maxRetry; i++ {
-		request, err := x.NewGRPCXRequest(method, req)
-		if err != nil {
-			return err
-		}
-		defer x.Pool.Put(&request)
 		b, err := x.do(ctx, request)
 		if err != nil {
 			time.Sleep(x.retrySleep * time.Duration(i))

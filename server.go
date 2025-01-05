@@ -3,7 +3,6 @@ package grpcx
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/vimcoders/grpcx/log"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 )
 
 type ServerOption interface {
@@ -133,28 +131,11 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+		req, err := readRequest(buf)
 		if err != nil {
 			return err
 		}
-		length := int(binary.BigEndian.Uint16(headerBytes))
-		if length > buf.Size() {
-			return fmt.Errorf("header %v too long", length)
-		}
-		b, err := buf.Peek(length)
-		if err != nil {
-			return err
-		}
-		if _, err := buf.Discard(len(b)); err != nil {
-			return err
-		}
-		seq := binary.BigEndian.Uint16(b[2:])
-		cmd := binary.BigEndian.Uint16(b[4:])
-		req := request{seq: seq, cmd: cmd, b: b[6:]}
-		// req, err := readRequest(buf)
-		// if err != nil {
-		// 	return err
-		// }
+		seq, cmd := req.seq, req.cmd
 		if int(cmd) >= len(x.Methods) {
 			response, err := x.NewPingWriter(seq, cmd)
 			if err != nil {
@@ -168,18 +149,18 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 			}
 			continue
 		}
-		reply, err := x.Methods[cmd].Handler(x.impl, ctx, req.dec, x.Unary)
-		if err != nil {
-			return err
-		}
-		pb, err := proto.Marshal(reply.(proto.Message))
-		if err != nil {
-			return err
-		}
+		// reply, err := x.Methods[cmd].Handler(x.impl, ctx, req.dec, x.Unary)
+		// if err != nil {
+		// 	return err
+		// }
+		// pb, err := proto.Marshal(reply.(proto.Message))
+		// if err != nil {
+		// 	return err
+		// }
 		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		w := response{seq: seq, cmd: cmd, b: pb}
+		w := response{seq: seq, cmd: cmd}
 		if _, err := w.WriteTo(c); err != nil {
 			return err
 		}

@@ -161,16 +161,10 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		var buf buffer
-		buf.WriteUint16(uint16(2+2+2+len(b)), seq, cmd)
-		buf.Write(b)
-		if _, err := c.Write(buf.b); err != nil {
+		w := response{seq: seq, cmd: cmd, b: b}
+		if _, err := w.WriteTo(c); err != nil {
 			return err
 		}
-		// response := response{seq: seq, cmd: cmd, b: b}
-		// if _, err := response.WriteTo(c); err != nil {
-		// 	return err
-		// }
 	}
 }
 

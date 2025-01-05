@@ -3,7 +3,6 @@ package grpcx
 import (
 	"encoding/binary"
 	"io"
-	"sync"
 )
 
 type buffer struct {
@@ -16,7 +15,6 @@ func (x *buffer) IsZero() bool {
 
 func (x *buffer) Close() error {
 	x.b = x.b[:0]
-	buffers.Put(x)
 	return nil
 }
 
@@ -65,10 +63,4 @@ func (x *buffer) WriteTo(w io.Writer) (n int64, err error) {
 
 func (x *buffer) Bytes() []byte {
 	return x.b
-}
-
-var buffers sync.Pool = sync.Pool{
-	New: func() any {
-		return &buffer{}
-	},
 }

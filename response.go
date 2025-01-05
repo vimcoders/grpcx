@@ -14,7 +14,7 @@ type response struct {
 }
 
 func (x *response) WriteTo(w io.Writer) (int64, error) {
-	buf := buffers.Get().(*buffer)
+	var buf buffer
 	if x.b == nil {
 		buf.WriteUint16(uint16(2+2+2), x.seq, x.cmd)
 		return buf.WriteTo(w)

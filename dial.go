@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"math"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/discovery"
@@ -112,8 +113,11 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			Context:      cancelCtx,
 			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
-			pending:      make(map[uint16]chan buffer),
+			pending:      make(map[uint16]request),
 			seq:          math.MaxUint8,
+		}
+		x.Pool = sync.Pool{
+			New: x.NewRequest,
 		}
 		return x, nil
 	case "udp":
@@ -133,8 +137,11 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			Context:      cancelCtx,
 			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
-			pending:      make(map[uint16]chan buffer),
+			pending:      make(map[uint16]request),
 			seq:          math.MaxUint8,
+		}
+		x.Pool = sync.Pool{
+			New: x.NewRequest,
 		}
 		return x, nil
 	}

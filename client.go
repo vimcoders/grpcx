@@ -60,14 +60,15 @@ func (x *client) GetPicker(result discovery.Result) balance.Picker {
 }
 
 type conn struct {
-	sync.RWMutex
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
-	pending map[uint16]chan buffer
+	pending map[uint16]request
 	seq     uint16
 	context.Context
 	context.CancelFunc
+	sync.Pool
+	sync.RWMutex
 }
 
 func (x *conn) Close() error {
@@ -95,17 +96,17 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 
 func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) error {
 	for i := 1; i <= x.maxRetry; i++ {
-		request, err := NewRequest(method, req)
+		request, err := x.NewGRPCXRequest(method, req)
 		if err != nil {
 			return err
 		}
+		defer x.Pool.Put(&request)
 		b, err := x.do(ctx, request)
 		if err != nil {
 			time.Sleep(x.retrySleep * time.Duration(i))
 			log.Error(err)
 			continue
 		}
-		defer b.Close()
 		if err := proto.Unmarshal(b.Bytes(), reply.(proto.Message)); err != nil {
 			return err
 		}
@@ -114,8 +115,33 @@ func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) er
 	return nil
 }
 
+func (x *conn) NewGRPCXRequest(cmd uint16, req any) (request, error) {
+	b, err := proto.Marshal(req.(proto.Message))
+	if err != nil {
+		return request{}, err
+	}
+	request := x.Pool.Get().(*request)
+	request.cmd = cmd
+	request.b = b
+	return *request, nil
+}
+
+func (x *conn) NewPingRequest() request {
+	request := x.Pool.Get().(*request)
+	request.cmd = math.MaxUint16
+	return *request
+}
+
+func (x *conn) NewRequest() any {
+	x.Lock()
+	defer x.Unlock()
+	seq := x.seq + 1
+	x.seq = seq % math.MaxUint16
+	return &request{seq: seq, ch: make(chan buffer, 1)}
+}
+
 func (x *conn) do(ctx context.Context, req request) (buffer, error) {
-	ch, err := x.push(ctx, req)
+	err := x.push(ctx, req)
 	if err != nil {
 		return buffer{}, err
 	}
@@ -124,7 +150,7 @@ func (x *conn) do(ctx context.Context, req request) (buffer, error) {
 		return buffer{}, errors.New("timeout")
 	case <-x.Done():
 		return buffer{}, errors.New("shutdown")
-	case b := <-ch:
+	case b := <-req.ch:
 		if b.IsZero() {
 			return buffer{}, errors.New("too many request")
 		}
@@ -183,54 +209,44 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			x.callback(response)
+			x.take(response)
 		}
 	}
 }
 
-func (x *conn) callback(response response) error {
-	buf := buffers.Get().(*buffer)
-	if _, err := buf.Write(response.b); err != nil {
-		return err
-	}
+func (x *conn) take(response response) error {
 	x.Lock()
 	defer x.Unlock()
-	if ch, ok := x.pending[response.seq]; ok && ch != nil {
+	if req, ok := x.pending[response.seq]; ok {
 		delete(x.pending, response.seq)
-		if len(ch) > 0 {
-			return nil
-		}
-		ch <- *buf
+		req.invoke(response.b)
 	}
 	return nil
 }
 
-func (x *conn) push(_ context.Context, req request) (<-chan buffer, error) {
-	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-		return nil, err
-	}
+func (x *conn) push(_ context.Context, req request) error {
 	x.Lock()
 	defer x.Unlock()
-	req.seq = x.seq + 1
 	if _, ok := x.pending[req.seq]; ok {
-		return nil, errors.New("too many request")
+		return errors.New("too many request")
 	}
-	ch := make(chan buffer, 1)
-	x.pending[req.seq] = ch
+	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+		return err
+	}
 	if _, err := req.WriteTo(x.Conn); err != nil {
-		delete(x.pending, req.seq)
-		return nil, err
+		return err
 	}
-	x.seq = req.seq % math.MaxUint16
-	return ch, nil
+	x.pending[req.seq] = req
+	return nil
 }
 
 func (x *conn) Ping(ctx context.Context) error {
-	b, err := x.do(ctx, NewPingRequest())
+	request := x.NewPingRequest()
+	defer x.Pool.Put(&request)
+	b, err := x.do(ctx, request)
 	if err != nil {
 		return err
 	}
-	defer b.Close()
 	if len(x.Methods) > 0 {
 		return nil
 	}

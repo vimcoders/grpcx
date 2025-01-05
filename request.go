@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 
+	"github.com/vimcoders/grpcx/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -14,23 +14,7 @@ type request struct {
 	seq uint16
 	cmd uint16
 	b   []byte
-}
-
-func NewRequest(cmd uint16, req any) (request, error) {
-	b, err := proto.Marshal(req.(proto.Message))
-	if err != nil {
-		return request{}, err
-	}
-	return request{
-		cmd: cmd,
-		b:   b,
-	}, nil
-}
-
-func NewPingRequest() request {
-	return request{
-		cmd: math.MaxUint16,
-	}
+	ch  chan buffer
 }
 
 func readRequest(buf *bufio.Reader) (request, error) {
@@ -59,7 +43,7 @@ func readRequest(buf *bufio.Reader) (request, error) {
 }
 
 func (x *request) WriteTo(w io.Writer) (int64, error) {
-	buf := buffers.Get().(*buffer)
+	var buf buffer
 	if x.b == nil {
 		buf.WriteUint16(uint16(2+2+2), x.seq, x.cmd)
 		return buf.WriteTo(w)
@@ -76,4 +60,16 @@ func (x *request) dec(in any) error {
 		return err
 	}
 	return nil
+}
+
+func (x *request) invoke(b []byte) {
+	if len(x.ch) > 0 {
+		return
+	}
+	var buf buffer
+	if _, err := buf.Write(b); err != nil {
+		log.Error(err)
+		return
+	}
+	x.ch <- buf
 }

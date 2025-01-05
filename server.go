@@ -3,6 +3,7 @@ package grpcx
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -132,11 +133,28 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		req, err := readRequest(buf)
+		headerBytes, err := buf.Peek(_MESSAGE_HEADER)
 		if err != nil {
 			return err
 		}
-		seq, cmd := req.seq, req.cmd
+		length := int(binary.BigEndian.Uint16(headerBytes))
+		if length > buf.Size() {
+			return fmt.Errorf("header %v too long", length)
+		}
+		b, err := buf.Peek(length)
+		if err != nil {
+			return err
+		}
+		if _, err := buf.Discard(len(b)); err != nil {
+			return err
+		}
+		seq := binary.BigEndian.Uint16(b[2:])
+		cmd := binary.BigEndian.Uint16(b[4:])
+		req := request{seq: seq, cmd: cmd, b: b[6:]}
+		// req, err := readRequest(buf)
+		// if err != nil {
+		// 	return err
+		// }
 		if int(cmd) >= len(x.Methods) {
 			response, err := x.NewPingWriter(seq, cmd)
 			if err != nil {
@@ -154,14 +172,14 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		b, err := proto.Marshal(reply.(proto.Message))
+		pb, err := proto.Marshal(reply.(proto.Message))
 		if err != nil {
 			return err
 		}
 		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 			return err
 		}
-		w := response{seq: seq, cmd: cmd, b: b}
+		w := response{seq: seq, cmd: cmd, b: pb}
 		if _, err := w.WriteTo(c); err != nil {
 			return err
 		}

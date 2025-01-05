@@ -151,9 +151,6 @@ func (x *conn) do(ctx context.Context, req request) (buffer, error) {
 	case <-x.Done():
 		return buffer{}, errors.New("shutdown")
 	case b := <-req.ch:
-		if b.IsZero() {
-			return buffer{}, errors.New("too many request")
-		}
 		return b, nil
 	}
 }

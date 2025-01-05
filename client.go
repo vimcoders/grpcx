@@ -165,7 +165,9 @@ func (x *conn) serve(ctx context.Context) (err error) {
 		if err != nil {
 			log.Error(err)
 		}
-		x.Close()
+		if err := x.Close(); err != nil {
+			log.Error(err)
+		}
 	}()
 	go x.keepalive(ctx)
 	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))

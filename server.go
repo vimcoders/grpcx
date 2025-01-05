@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"runtime/debug"
@@ -112,15 +111,15 @@ func (x *Server) Close() error {
 func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			fmt.Println(e)
+			log.Error(e)
+			debug.PrintStack()
 		}
 		if err != nil {
-			fmt.Println(err)
+			log.Error(err)
 		}
 		if err := x.Close(); err != nil {
-			fmt.Println(err)
+			log.Error(err)
 		}
-		debug.PrintStack()
 	}()
 	buf := bufio.NewReaderSize(c, x.readBufferSize)
 	for {

@@ -112,7 +112,7 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			Context:      cancelCtx,
 			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
-			pending:      make(map[uint16]chan *buffer),
+			pending:      make(map[uint16]chan buffer),
 			seq:          math.MaxUint8,
 		}
 		return x, nil
@@ -133,7 +133,7 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			Context:      cancelCtx,
 			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
-			pending:      make(map[uint16]chan *buffer),
+			pending:      make(map[uint16]chan buffer),
 			seq:          math.MaxUint8,
 		}
 		return x, nil

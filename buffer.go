@@ -6,14 +6,12 @@ import (
 	"sync"
 )
 
-var buffers sync.Pool = sync.Pool{
-	New: func() any {
-		return &buffer{}
-	},
-}
-
 type buffer struct {
 	b []byte
+}
+
+func (x *buffer) IsZero() bool {
+	return len(x.b) <= 0
 }
 
 func (x *buffer) Close() error {
@@ -71,4 +69,10 @@ func (x *buffer) Bytes() []byte {
 
 func NewBuffer(b []byte) *buffer {
 	return &buffer{b: b}
+}
+
+var buffers sync.Pool = sync.Pool{
+	New: func() any {
+		return &buffer{}
+	},
 }

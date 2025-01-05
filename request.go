@@ -16,19 +16,19 @@ type request struct {
 	b   []byte
 }
 
-func NewRequest(cmd uint16, req any) (*request, error) {
+func NewRequest(cmd uint16, req any) (request, error) {
 	b, err := proto.Marshal(req.(proto.Message))
 	if err != nil {
-		return nil, err
+		return request{}, err
 	}
-	return &request{
+	return request{
 		cmd: cmd,
 		b:   b,
 	}, nil
 }
 
-func NewPingRequest() *request {
-	return &request{
+func NewPingRequest() request {
+	return request{
 		cmd: math.MaxUint16,
 	}
 }

@@ -64,7 +64,7 @@ type conn struct {
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
-	pending map[uint16]chan *buffer
+	pending map[uint16]chan buffer
 	seq     uint16
 	context.Context
 	context.CancelFunc
@@ -114,19 +114,19 @@ func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) er
 	return nil
 }
 
-func (x *conn) do(ctx context.Context, req *request) (*buffer, error) {
+func (x *conn) do(ctx context.Context, req request) (buffer, error) {
 	ch, err := x.push(ctx, req)
 	if err != nil {
-		return nil, err
+		return buffer{}, err
 	}
 	select {
 	case <-ctx.Done():
-		return nil, errors.New("timeout")
+		return buffer{}, errors.New("timeout")
 	case <-x.Done():
-		return nil, errors.New("shutdown")
+		return buffer{}, errors.New("shutdown")
 	case b := <-ch:
-		if b == nil {
-			return nil, errors.New("too many request")
+		if b.IsZero() {
+			return buffer{}, errors.New("too many request")
 		}
 		return b, nil
 	}
@@ -198,12 +198,12 @@ func (x *conn) process(response response) error {
 		}
 		buf := buffers.Get().(*buffer)
 		buf.Write(response.b)
-		v <- buf
+		v <- *buf
 	}
 	return nil
 }
 
-func (x *conn) push(_ context.Context, req *request) (<-chan *buffer, error) {
+func (x *conn) push(_ context.Context, req request) (<-chan buffer, error) {
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (x *conn) push(_ context.Context, req *request) (<-chan *buffer, error) {
 	if _, ok := x.pending[req.seq]; ok {
 		return nil, errors.New("too many request")
 	}
-	ch := make(chan *buffer, 1)
+	ch := make(chan buffer, 1)
 	x.pending[req.seq] = ch
 	if _, err := req.WriteTo(x.Conn); err != nil {
 		delete(x.pending, req.seq)

@@ -183,22 +183,24 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			x.process(response)
+			x.callback(response)
 		}
 	}
 }
 
-func (x *conn) process(response response) error {
+func (x *conn) callback(response response) error {
+	buf := buffers.Get().(*buffer)
+	if _, err := buf.Write(response.b); err != nil {
+		return err
+	}
 	x.Lock()
 	defer x.Unlock()
-	if v, ok := x.pending[response.seq]; ok && v != nil {
+	if ch, ok := x.pending[response.seq]; ok && ch != nil {
 		delete(x.pending, response.seq)
-		if len(v) > 0 {
+		if len(ch) > 0 {
 			return nil
 		}
-		buf := buffers.Get().(*buffer)
-		buf.Write(response.b)
-		v <- *buf
+		ch <- *buf
 	}
 	return nil
 }

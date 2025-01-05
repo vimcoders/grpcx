@@ -53,14 +53,17 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 	return fmt.Errorf("method %s not found", method)
 }
 
-func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) error {
-	request, err := x.NewGRPCXRequest(method, req)
+func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error {
+	b, err := proto.Marshal(req.(proto.Message))
 	if err != nil {
 		return err
 	}
-	defer x.Pool.Put(&request)
+	request := x.Pool.Get().(*request)
+	request.cmd = cmd
+	request.b = b
+	defer x.Pool.Put(request)
 	for i := 1; i <= x.maxRetry; i++ {
-		b, err := x.do(ctx, request)
+		b, err := x.do(ctx, *request)
 		if err != nil {
 			time.Sleep(x.retrySleep * time.Duration(i))
 			log.Error(err)
@@ -72,23 +75,6 @@ func (x *conn) invoke(ctx context.Context, method uint16, req any, reply any) er
 		return nil
 	}
 	return nil
-}
-
-func (x *conn) NewGRPCXRequest(cmd uint16, req any) (request, error) {
-	b, err := proto.Marshal(req.(proto.Message))
-	if err != nil {
-		return request{}, err
-	}
-	request := x.Pool.Get().(*request)
-	request.cmd = cmd
-	request.b = b
-	return *request, nil
-}
-
-func (x *conn) NewPingRequest() request {
-	request := x.Pool.Get().(*request)
-	request.cmd = math.MaxUint16
-	return *request
 }
 
 func (x *conn) NewRequest() any {
@@ -197,9 +183,10 @@ func (x *conn) push(_ context.Context, req request) error {
 }
 
 func (x *conn) Ping(ctx context.Context) error {
-	request := x.NewPingRequest()
-	defer x.Pool.Put(&request)
-	b, err := x.do(ctx, request)
+	request := x.Pool.Get().(*request)
+	request.cmd = math.MaxUint16
+	defer x.Pool.Put(request)
+	b, err := x.do(ctx, *request)
 	if err != nil {
 		return err
 	}

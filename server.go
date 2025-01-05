@@ -154,19 +154,16 @@ func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		switch v := reply.(type) {
-		case proto.Message:
-			b, err := proto.Marshal(v)
-			if err != nil {
-				return err
-			}
-			if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-				return err
-			}
-			w := response{seq: seq, cmd: cmd, b: b}
-			if _, err := w.WriteTo(c); err != nil {
-				return err
-			}
+		b, err := proto.Marshal(reply.(proto.Message))
+		if err != nil {
+			return err
+		}
+		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+			return err
+		}
+		w := response{seq: seq, cmd: cmd, b: b}
+		if _, err := w.WriteTo(c); err != nil {
+			return err
 		}
 	}
 }

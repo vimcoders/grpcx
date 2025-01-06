@@ -53,13 +53,10 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 }
 
 func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error {
-	b, err := proto.Marshal(req.(proto.Message))
+	request, err := x.NewRequest(cmd, req)
 	if err != nil {
 		return err
 	}
-	request := x.NewRequest()
-	request.cmd = cmd
-	request.b = b
 	for i := 1; i <= x.maxRetry; i++ {
 		response, err := x.do(ctx, request)
 		if err != nil {
@@ -75,12 +72,24 @@ func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error
 	return errors.New("faild")
 }
 
-func (x *conn) NewRequest() request {
+func (x *conn) NewRequest(cmd uint16, req any) (request, error) {
+	b, err := proto.Marshal(req.(proto.Message))
+	if err != nil {
+		return request{}, err
+	}
 	x.Lock()
 	defer x.Unlock()
 	seq := x.seq + 1
 	x.seq = seq % math.MaxUint16
-	return request{seq: seq, ch: make(chan buffer, 1)}
+	return request{seq: seq, cmd: cmd, b: b, ch: make(chan buffer, 1)}, nil
+}
+
+func (x *conn) NewPingRequest(cmd uint16) request {
+	x.Lock()
+	defer x.Unlock()
+	seq := x.seq + 1
+	x.seq = seq % math.MaxUint16
+	return request{seq: seq, cmd: cmd, ch: make(chan buffer, 1)}
 }
 
 func (x *conn) do(ctx context.Context, req request) (buffer, error) {
@@ -181,8 +190,7 @@ func (x *conn) push(_ context.Context, req request) error {
 }
 
 func (x *conn) Ping(ctx context.Context) error {
-	request := x.NewRequest()
-	request.cmd = math.MaxUint16
+	request := x.NewPingRequest(math.MaxUint16)
 	b, err := x.do(ctx, request)
 	if err != nil {
 		return err

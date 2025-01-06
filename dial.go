@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"math"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/discovery"
@@ -116,9 +115,6 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			pending:      make(map[uint16]request),
 			seq:          math.MaxUint8,
 		}
-		x.Pool = sync.Pool{
-			New: x.NewRequest,
-		}
 		return x, nil
 	case "udp":
 		c, err := quicx.Dial(addr, &tls.Config{
@@ -139,9 +135,6 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			clientOption: clientOpt,
 			pending:      make(map[uint16]request),
 			seq:          math.MaxUint8,
-		}
-		x.Pool = sync.Pool{
-			New: x.NewRequest,
 		}
 		return x, nil
 	}

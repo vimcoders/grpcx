@@ -23,7 +23,7 @@ type conn struct {
 	clientOption
 	grpc.ClientConnInterface
 	pending map[uint16]request
-	seq     uint16
+	ch      chan request
 	context.Context
 	context.CancelFunc
 	sync.RWMutex
@@ -53,17 +53,17 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 }
 
 func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error {
-	request, err := x.NewRequest(cmd, req)
+	request, err := x.NewRequest(ctx, cmd, req)
 	if err != nil {
 		return err
 	}
 	for i := 1; i <= x.maxRetry; i++ {
 		response, err := x.do(ctx, request)
 		if err != nil {
-			time.Sleep(x.retrySleep)
 			log.Error(err)
 			continue
 		}
+		x.ch <- request
 		if err := proto.Unmarshal(response.Bytes(), reply.(proto.Message)); err != nil {
 			return err
 		}
@@ -72,24 +72,24 @@ func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error
 	return errors.New("faild")
 }
 
-func (x *conn) NewRequest(cmd uint16, req any) (request, error) {
-	b, err := proto.Marshal(req.(proto.Message))
-	if err != nil {
-		return request{}, err
+func (x *conn) NewRequest(ctx context.Context, cmd uint16, req any) (request, error) {
+	select {
+	case v := <-x.ch:
+		if req == nil {
+			v.b = nil
+			v.cmd = cmd
+			return v, nil
+		}
+		b, err := proto.Marshal(req.(proto.Message))
+		if err != nil {
+			return request{}, err
+		}
+		v.b = b
+		v.cmd = cmd
+		return v, nil
+	case <-ctx.Done():
+		return request{}, errors.New("timeout")
 	}
-	x.Lock()
-	defer x.Unlock()
-	seq := x.seq + 1
-	x.seq = seq % math.MaxUint16
-	return request{seq: seq, cmd: cmd, b: b, ch: make(chan buffer, 1)}, nil
-}
-
-func (x *conn) NewPingRequest(cmd uint16) request {
-	x.Lock()
-	defer x.Unlock()
-	seq := x.seq + 1
-	x.seq = seq % math.MaxUint16
-	return request{seq: seq, cmd: cmd, ch: make(chan buffer, 1)}
 }
 
 func (x *conn) do(ctx context.Context, req request) (buffer, error) {
@@ -190,11 +190,15 @@ func (x *conn) push(_ context.Context, req request) error {
 }
 
 func (x *conn) Ping(ctx context.Context) error {
-	request := x.NewPingRequest(math.MaxUint16)
+	request, err := x.NewRequest(ctx, math.MaxUint16, nil)
+	if err != nil {
+		return err
+	}
 	b, err := x.do(ctx, request)
 	if err != nil {
 		return err
 	}
+	x.ch <- request
 	if len(x.Methods) > 0 {
 		return nil
 	}
@@ -204,4 +208,10 @@ func (x *conn) Ping(ctx context.Context) error {
 	}
 	x.Methods = methods
 	return nil
+}
+
+func (x *conn) init() {
+	for i := uint16(0); i < math.MaxUint16; i++ {
+		x.ch <- request{seq: i, ch: make(chan buffer, 1)}
+	}
 }

@@ -17,7 +17,6 @@ type clientOption struct {
 	timeout         time.Duration
 	Methods         []string
 	maxRetry        int
-	retrySleep      time.Duration
 	KeepaliveParams keepalive.ClientParameters
 }
 

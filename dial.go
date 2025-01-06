@@ -3,7 +3,6 @@ package grpcx
 import (
 	"context"
 	"crypto/tls"
-	"math"
 	"net"
 	"time"
 
@@ -77,6 +76,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		if err != nil {
 			panic(err)
 		}
+		cc.init()
 		go cc.serve(ctx)
 		if err := cc.Ping(ctx); err != nil {
 			panic(err)
@@ -97,7 +97,6 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 		buffsize:        opt.buffsize,
 		Methods:         opt.Methods,
 		maxRetry:        5,
-		retrySleep:      time.Second * 10,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
 	switch network {
@@ -113,7 +112,7 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
 			pending:      make(map[uint16]request),
-			seq:          math.MaxUint8,
+			ch:           make(chan request, 65535),
 		}
 		return x, nil
 	case "udp":
@@ -134,7 +133,7 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			CancelFunc:   cancelFunc,
 			clientOption: clientOpt,
 			pending:      make(map[uint16]request),
-			seq:          math.MaxUint8,
+			ch:           make(chan request, 65535),
 		}
 		return x, nil
 	}

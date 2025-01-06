@@ -63,23 +63,16 @@ func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error
 	request.b = b
 	defer x.Pool.Put(request)
 	for i := 1; i <= x.maxRetry; i++ {
-		err := x.push(ctx, *request)
+		response, err := x.do(ctx, *request)
 		if err != nil {
 			time.Sleep(x.retrySleep)
 			log.Error(err)
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return errors.New("timeout")
-		case <-x.Done():
-			return errors.New("shutdown")
-		case b := <-request.ch:
-			if err := proto.Unmarshal(b.Bytes(), reply.(proto.Message)); err != nil {
-				return err
-			}
-			return nil
+		if err := proto.Unmarshal(response.Bytes(), reply.(proto.Message)); err != nil {
+			return err
 		}
+		return nil
 	}
 	return errors.New("faild")
 }

@@ -87,6 +87,8 @@ func (x *conn) NewRequest(ctx context.Context, cmd uint16, req any) (request, er
 		v.b = b
 		v.cmd = cmd
 		return v, nil
+	case <-x.Done():
+		return request{}, errors.New("shutdown")
 	case <-ctx.Done():
 		return request{}, errors.New("timeout")
 	}

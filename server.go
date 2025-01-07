@@ -52,9 +52,6 @@ const (
 	defaultReadBufSize = 32 * 1024
 )
 
-type Handler interface {
-}
-
 // ListenAndServe binds port and handle requests, blocking until close
 func (x Server) ListenAndServe(ctx context.Context, listener net.Listener) {
 	defer func() {

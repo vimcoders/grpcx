@@ -9,10 +9,6 @@ type buffer struct {
 	b []byte
 }
 
-func (x *buffer) IsZero() bool {
-	return len(x.b) <= 0
-}
-
 func (x *buffer) Close() error {
 	x.b = x.b[:0]
 	return nil

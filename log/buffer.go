@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
-	"time"
 )
 
 type buffer struct {
@@ -18,7 +16,6 @@ func NewBuffer(size int) *buffer {
 
 func (x *buffer) Close() error {
 	x.b = x.b[:0]
-	bufferFree.Put(x)
 	return nil
 }
 
@@ -53,20 +50,6 @@ func (x *buffer) WriteTo(w io.Writer) (n int64, err error) {
 	return n, nil
 }
 
-func newPrinter(prefix string, a ...any) io.WriterTo {
-	buffer := bufferFree.Get().(*buffer)
-	buffer.Write(time.Now().Format("2006-01-02 15:04:05"))
-	buffer.Write(prefix)
-	buffer.Appendln(a...)
-	return buffer
-}
-
 // func newPrinterf(prefix, format string, a ...any) io.WriterTo {
 // 	return newPrinter(prefix, fmt.Sprintf(format, a...))
 // }
-
-var bufferFree sync.Pool = sync.Pool{
-	New: func() any {
-		return &buffer{}
-	},
-}

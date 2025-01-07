@@ -2,6 +2,7 @@ package log
 
 import (
 	"os"
+	"time"
 )
 
 var logger = NewSysLogger()
@@ -46,14 +47,12 @@ func (x *SysLogger) Error(a ...any) {
 }
 
 func (x *SysLogger) log(prefix string, a ...any) {
-	w := newPrinter(prefix, a...)
-	w.WriteTo(os.Stdout)
+	var buffer buffer
+	buffer.Write(time.Now().Format("2006-01-02 15:04:05"))
+	buffer.Write(prefix)
+	buffer.Appendln(a...)
+	buffer.WriteTo(os.Stdout)
 }
-
-// func (x *SysLogger) logf(prefix, format string, a ...any) {
-// 	w := newPrinterf(prefix, format, a...)
-// 	w.WriteTo(os.Stdout)
-// }
 
 func (x *SysLogger) Close() error {
 	return nil

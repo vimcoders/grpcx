@@ -109,30 +109,6 @@ func (x *conn) do(ctx context.Context, req request) (buffer, error) {
 	}
 }
 
-func (x *conn) keepalive(ctx context.Context) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			log.Error(e)
-			debug.PrintStack()
-		}
-		if err != nil {
-			log.Error(err)
-		}
-		x.Close()
-	}()
-	ticker := time.NewTicker(x.KeepaliveParams.Time)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.New("shutdown")
-		case <-ticker.C:
-			if err := x.Ping(ctx); err != nil {
-				return err
-			}
-		}
-	}
-}
 func (x *conn) serve(ctx context.Context) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -146,7 +122,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			log.Error(err)
 		}
 	}()
-	go x.keepalive(ctx)
+	x.init()
 	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
 	for {
 		select {

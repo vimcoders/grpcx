@@ -2,11 +2,14 @@ package grpcx
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/vimcoders/grpcx/balance"
 	"github.com/vimcoders/grpcx/discovery"
+	"github.com/vimcoders/grpcx/log"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -21,6 +24,7 @@ type clientOption struct {
 }
 
 type client struct {
+	clientOption
 	cc []*conn
 	grpc.ClientConnInterface
 	balance.Balancer
@@ -46,4 +50,35 @@ func (x *client) Invoke(ctx context.Context, method string, req any, reply any, 
 
 func (x *client) GetPicker(result discovery.Result) balance.Picker {
 	return balance.NewRandomPicker(result.Instances)
+}
+
+func (x *client) Keepalive(ctx context.Context) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error(e)
+			debug.PrintStack()
+		}
+		if err != nil {
+			log.Error(err)
+		}
+	}()
+	ticker := time.NewTicker(x.KeepaliveParams.Time)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New("shutdown")
+		case <-ticker.C:
+			x._keepalive(ctx)
+		}
+	}
+}
+
+func (x *client) _keepalive(ctx context.Context) (err error) {
+	for i := 0; i < len(x.cc); i++ {
+		if err := x.cc[i].Ping(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }

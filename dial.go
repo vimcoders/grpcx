@@ -45,14 +45,6 @@ func WithDial(network, address string) DialOption {
 	})
 }
 
-// func WithDialServiceDesc(info grpc.ServiceDesc) DialOption {
-// 	return newFuncDialOption(func(o *dialOption) {
-// 		for i := 0; i < len(info.Methods); i++ {
-// 			o.Methods = append(o.Methods, info.Methods[i].MethodName)
-// 		}
-// 	})
-// }
-
 func WithKeepaliveParams(kp keepalive.ClientParameters) DialOption {
 	return newFuncDialOption(func(o *dialOption) {
 		o.KeepaliveParams = kp
@@ -70,13 +62,19 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
 	}
-	var client client
+	clientOpt := clientOption{
+		timeout:         opt.timeout,
+		buffsize:        opt.buffsize,
+		Methods:         opt.Methods,
+		maxRetry:        5,
+		KeepaliveParams: opt.KeepaliveParams,
+	}
+	client := client{clientOption: clientOpt}
 	for i := 0; i < len(opt.address); i++ {
 		cc, err := dail(ctx, opt.address[i].Network(), opt.address[i].String(), opts...)
 		if err != nil {
 			panic(err)
 		}
-		cc.init()
 		go cc.serve(ctx)
 		if err := cc.Ping(ctx); err != nil {
 			panic(err)
@@ -84,6 +82,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		client.cc = append(client.cc, cc)
 		client.Instances = append(client.Instances, discovery.NewInstance(cc, i, nil))
 	}
+	go client.Keepalive(ctx)
 	return &client, nil
 }
 

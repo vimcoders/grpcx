@@ -49,7 +49,3 @@ func (x *buffer) WriteTo(w io.Writer) (n int64, err error) {
 	x.Close()
 	return n, nil
 }
-
-// func newPrinterf(prefix, format string, a ...any) io.WriterTo {
-// 	return newPrinter(prefix, fmt.Sprintf(format, a...))
-// }

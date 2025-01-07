@@ -43,7 +43,7 @@ func (x *SysLogger) Warn(a ...any) {
 }
 
 func (x *SysLogger) Error(a ...any) {
-	x.log(" [INFO] ", a...)
+	x.log(" [ERROR] ", a...)
 }
 
 func (x *SysLogger) log(prefix string, a ...any) {

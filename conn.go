@@ -122,7 +122,6 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			log.Error(err)
 		}
 	}()
-	x.init()
 	buf := bufio.NewReaderSize(x.Conn, int(x.buffsize))
 	for {
 		select {
@@ -186,10 +185,4 @@ func (x *conn) Ping(ctx context.Context) error {
 	}
 	x.Methods = methods
 	return nil
-}
-
-func (x *conn) init() {
-	for i := uint16(0); i < math.MaxUint16; i++ {
-		x.ch <- request{seq: i, ch: make(chan buffer, 1)}
-	}
 }

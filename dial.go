@@ -72,7 +72,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	}
 	client := client{clientOption: clientOpt}
 	for i := 0; i < len(opt.address); i++ {
-		cc, err := dail(ctx, opt.address[i].Network(), opt.address[i].String(), opts...)
+		cc, err := dail(ctx, opt.address[i], opts...)
 		if err != nil {
 			panic(err)
 		}
@@ -83,7 +83,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	return &client, nil
 }
 
-func dail(ctx context.Context, network string, addr string, opts ...DialOption) (*conn, error) {
+func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error) {
 	opt := defaultDialOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)
@@ -95,11 +95,11 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 		maxRetry:        5,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
-	dial := func() (net.Conn, error) {
-		if network == "tcp" {
-			return net.Dial("tcp", addr)
+	dial := func(_addr net.Addr) (net.Conn, error) {
+		if _addr.Network() == "tcp" {
+			return net.Dial("tcp", _addr.String())
 		}
-		return quicx.Dial(addr, &tls.Config{
+		return quicx.Dial(_addr.String(), &tls.Config{
 			InsecureSkipVerify: true,
 			NextProtos:         []string{"quic-echo-example"},
 			MaxVersion:         tls.VersionTLS13,
@@ -107,15 +107,13 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 			MaxIdleTimeout: time.Minute,
 		})
 	}
-	c, err := dial()
+	c, err := dial(addr)
 	if err != nil {
 		return nil, err
 	}
-	cancelCtx, cancelFunc := context.WithCancel(ctx)
 	x := &conn{
 		Conn:         c,
-		Context:      cancelCtx,
-		CancelFunc:   cancelFunc,
+		Context:      ctx,
 		clientOption: clientOpt,
 		pending:      make(map[uint16]request),
 		ch:           make(chan request, 65535),

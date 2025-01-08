@@ -3,6 +3,7 @@ package grpcx
 import (
 	"context"
 	"crypto/tls"
+	"math"
 	"net"
 	"time"
 
@@ -75,10 +76,6 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 		if err != nil {
 			panic(err)
 		}
-		go cc.serve(ctx)
-		if err := cc.Ping(ctx); err != nil {
-			panic(err)
-		}
 		client.cc = append(client.cc, cc)
 		client.Instances = append(client.Instances, discovery.NewInstance(cc, i, nil))
 	}
@@ -98,43 +95,37 @@ func dail(ctx context.Context, network string, addr string, opts ...DialOption) 
 		maxRetry:        5,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
-	switch network {
-	case "tcp":
-		c, err := net.Dial("tcp", addr)
-		if err != nil {
-			return nil, err
+	dial := func() (net.Conn, error) {
+		if network == "tcp" {
+			return net.Dial("tcp", addr)
 		}
-		cancelCtx, cancelFunc := context.WithCancel(ctx)
-		x := &conn{
-			Conn:         c,
-			Context:      cancelCtx,
-			CancelFunc:   cancelFunc,
-			clientOption: clientOpt,
-			pending:      make(map[uint16]request),
-			ch:           make(chan request, 65535),
-		}
-		return x, nil
-	case "udp":
-		c, err := quicx.Dial(addr, &tls.Config{
+		return quicx.Dial(addr, &tls.Config{
 			InsecureSkipVerify: true,
 			NextProtos:         []string{"quic-echo-example"},
 			MaxVersion:         tls.VersionTLS13,
 		}, &quicx.Config{
 			MaxIdleTimeout: time.Minute,
 		})
-		if err != nil {
-			return nil, err
-		}
-		cancelCtx, cancelFunc := context.WithCancel(ctx)
-		x := &conn{
-			Conn:         c,
-			Context:      cancelCtx,
-			CancelFunc:   cancelFunc,
-			clientOption: clientOpt,
-			pending:      make(map[uint16]request),
-			ch:           make(chan request, 65535),
-		}
-		return x, nil
 	}
-	return nil, nil
+	c, err := dial()
+	if err != nil {
+		return nil, err
+	}
+	cancelCtx, cancelFunc := context.WithCancel(ctx)
+	x := &conn{
+		Conn:         c,
+		Context:      cancelCtx,
+		CancelFunc:   cancelFunc,
+		clientOption: clientOpt,
+		pending:      make(map[uint16]request),
+		ch:           make(chan request, 65535),
+	}
+	for i := uint16(0); i < math.MaxUint16; i++ {
+		x.ch <- request{seq: i, ch: make(chan buffer, 1)}
+	}
+	go x.serve(ctx)
+	if err := x.Ping(ctx); err != nil {
+		return nil, err
+	}
+	return x, nil
 }

@@ -25,12 +25,11 @@ type conn struct {
 	pending map[uint16]request
 	ch      chan request
 	context.Context
-	context.CancelFunc
 	sync.RWMutex
+	dial func(addr net.Addr) (net.Conn, error)
 }
 
 func (x *conn) Close() error {
-	x.CancelFunc()
 	return x.Conn.Close()
 }
 

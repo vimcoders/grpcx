@@ -95,7 +95,7 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		maxRetry:        5,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
-	dial := func(_addr net.Addr) (net.Conn, error) {
+	_dial := func(_addr net.Addr) (net.Conn, error) {
 		if _addr.Network() == "tcp" {
 			return net.Dial("tcp", _addr.String())
 		}
@@ -107,7 +107,7 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 			MaxIdleTimeout: time.Minute,
 		})
 	}
-	c, err := dial(addr)
+	c, err := _dial(addr)
 	if err != nil {
 		return nil, err
 	}

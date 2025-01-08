@@ -117,7 +117,6 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		clientOption: clientOpt,
 		pending:      make(map[uint16]request),
 		ch:           make(chan request, 65535),
-		dial:         _dial,
 	}
 	for i := uint16(0); i < math.MaxUint16; i++ {
 		x.ch <- request{seq: i, ch: make(chan buffer, 1)}

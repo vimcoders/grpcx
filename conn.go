@@ -26,7 +26,6 @@ type conn struct {
 	ch      chan request
 	context.Context
 	sync.RWMutex
-	dial func(addr net.Addr) (net.Conn, error)
 }
 
 func (x *conn) Close() error {

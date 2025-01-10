@@ -115,7 +115,7 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		clientOption: clientOpt,
 		seq:          make(chan uint16, math.MaxUint16),
 	}
-	for i := uint16(0); i < math.MaxUint16; i++ {
+	for i := uint16(0); i < math.MaxUint8; i++ {
 		x.seq <- i
 		x.q = append(x.q, make(chan []byte, 1))
 	}

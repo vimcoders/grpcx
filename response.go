@@ -44,9 +44,13 @@ func readResponse(buf *bufio.Reader) (response, error) {
 	}
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
+	var buffer buffer
+	if _, err := buffer.Write(b[6:]); err != nil {
+		return response{}, err
+	}
 	return response{
 		seq: seq,
 		cmd: cmd,
-		b:   b[6:],
+		b:   buffer.Bytes(),
 	}, nil
 }

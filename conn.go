@@ -22,8 +22,8 @@ type conn struct {
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
-	pending map[uint16]request
-	ch      chan request
+	q  []chan *response
+	ch chan uint16
 	context.Context
 	sync.RWMutex
 }
@@ -51,59 +51,52 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 }
 
 func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error {
-	request, err := x.NewRequest(ctx, cmd, req)
-	if err != nil {
-		return err
-	}
 	for i := 1; i <= x.maxRetry; i++ {
-		response, err := x.do(ctx, request)
+		ch, err := x.do(ctx, cmd, req)
 		if err != nil {
 			log.Error(err)
 			continue
 		}
-		x.ch <- request
-		if err := proto.Unmarshal(response.Bytes(), reply.(proto.Message)); err != nil {
-			return err
+		select {
+		case <-x.Done():
+			return errors.New("shutdown")
+		case <-ctx.Done():
+			return errors.New("timeout")
+		case response := <-ch:
+			x.ch <- response.seq
+			if err := proto.Unmarshal(response.b, reply.(proto.Message)); err != nil {
+				return err
+			}
+			return nil
 		}
-		return nil
 	}
 	return errors.New("faild")
 }
 
-func (x *conn) NewRequest(ctx context.Context, cmd uint16, req any) (request, error) {
+func (x *conn) do(ctx context.Context, cmd uint16, req any) (<-chan *response, error) {
 	select {
-	case v := <-x.ch:
-		if req == nil {
-			v.b = nil
-			v.cmd = cmd
-			return v, nil
+	case seq := <-x.ch:
+		for i := 0; i < len(x.q[seq]); i++ {
+			<-x.q[seq]
 		}
-		b, err := proto.Marshal(req.(proto.Message))
-		if err != nil {
-			return request{}, err
+		request := request{cmd: cmd, seq: seq}
+		if req != nil {
+			b, err := proto.Marshal(req.(proto.Message))
+			if err != nil {
+				x.ch <- seq
+				return nil, err
+			}
+			request.b = b
 		}
-		v.b = b
-		v.cmd = cmd
-		return v, nil
+		if err := x.push(ctx, &request); err != nil {
+			x.ch <- seq
+			return nil, err
+		}
+		return x.q[seq], nil
 	case <-x.Done():
-		return request{}, errors.New("shutdown")
+		return nil, errors.New("shutdown")
 	case <-ctx.Done():
-		return request{}, errors.New("timeout")
-	}
-}
-
-func (x *conn) do(ctx context.Context, req request) (buffer, error) {
-	err := x.push(ctx, req)
-	if err != nil {
-		return buffer{}, err
-	}
-	select {
-	case <-ctx.Done():
-		return buffer{}, errors.New("timeout")
-	case <-x.Done():
-		return buffer{}, errors.New("shutdown")
-	case b := <-req.ch:
-		return b, nil
+		return nil, errors.New("timeout")
 	}
 }
 
@@ -133,51 +126,40 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			x.take(response)
+			x.q[response.seq] <- &response
 		}
 	}
 }
 
-func (x *conn) take(response response) error {
-	x.Lock()
-	defer x.Unlock()
-	if req, ok := x.pending[response.seq]; ok {
-		delete(x.pending, response.seq)
-		req.invoke(response.b)
-	}
-	return nil
-}
-
-func (x *conn) push(_ context.Context, req request) error {
+func (x *conn) push(_ context.Context, req *request) error {
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
 	}
-	x.Lock()
-	defer x.Unlock()
 	if _, err := req.WriteTo(x.Conn); err != nil {
 		return err
 	}
-	x.pending[req.seq] = req
 	return nil
 }
 
 func (x *conn) Ping(ctx context.Context) error {
-	request, err := x.NewRequest(ctx, math.MaxUint16, nil)
+	ch, err := x.do(ctx, math.MaxUint16, nil)
 	if err != nil {
 		return err
 	}
-	b, err := x.do(ctx, request)
-	if err != nil {
-		return err
-	}
-	x.ch <- request
-	if len(x.Methods) > 0 {
+	select {
+	case <-x.Done():
+		return errors.New("shutdown")
+	case <-ctx.Done():
+		return errors.New("timeout")
+	case response := <-ch:
+		if len(x.Methods) > 0 {
+			return nil
+		}
+		var methods []string
+		if err := json.Unmarshal(response.b, &methods); err != nil {
+			return err
+		}
+		x.Methods = methods
 		return nil
 	}
-	var methods []string
-	if err := json.Unmarshal(b.Bytes(), &methods); err != nil {
-		return err
-	}
-	x.Methods = methods
-	return nil
 }

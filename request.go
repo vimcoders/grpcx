@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/vimcoders/grpcx/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -14,7 +13,6 @@ type request struct {
 	seq uint16
 	cmd uint16
 	b   []byte
-	ch  chan buffer
 }
 
 func readRequest(buf *bufio.Reader) (request, error) {
@@ -60,16 +58,4 @@ func (x *request) dec(in any) error {
 		return err
 	}
 	return nil
-}
-
-func (x *request) invoke(b []byte) {
-	if len(x.ch) > 0 {
-		return
-	}
-	var buf buffer
-	if _, err := buf.Write(b); err != nil {
-		log.Error(err)
-		return
-	}
-	x.ch <- buf
 }

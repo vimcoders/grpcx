@@ -115,11 +115,12 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		Conn:         c,
 		Context:      ctx,
 		clientOption: clientOpt,
-		pending:      make(map[uint16]request),
-		ch:           make(chan request, 65535),
+		q:            make([]chan *response, 65535),
+		ch:           make(chan uint16, 65535),
 	}
 	for i := uint16(0); i < math.MaxUint16; i++ {
-		x.ch <- request{seq: i, ch: make(chan buffer, 1)}
+		x.ch <- i
+		x.q = append(x.q, make(chan *response, 1))
 	}
 	go x.serve(ctx)
 	if err := x.Ping(ctx); err != nil {

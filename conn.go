@@ -51,52 +51,49 @@ func (x *conn) Invoke(ctx context.Context, method string, req any, reply any, op
 }
 
 func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error {
+	b, err := proto.Marshal(req.(proto.Message))
+	if err != nil {
+		return err
+	}
 	for i := 1; i <= x.maxRetry; i++ {
-		ch, err := x.do(ctx, cmd, req)
+		response, err := x.do(ctx, cmd, b)
 		if err != nil {
 			log.Error(err)
 			continue
 		}
-		select {
-		case <-x.Done():
-			return errors.New("shutdown")
-		case <-ctx.Done():
-			return errors.New("timeout")
-		case response := <-ch:
-			x.ch <- response.seq
-			if err := proto.Unmarshal(response.b, reply.(proto.Message)); err != nil {
-				return err
-			}
-			return nil
+		if err := proto.Unmarshal(response, reply.(proto.Message)); err != nil {
+			return err
 		}
+		return nil
 	}
 	return errors.New("faild")
 }
 
-func (x *conn) do(ctx context.Context, cmd uint16, req any) (<-chan *response, error) {
+func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
+	var seq uint16
 	select {
-	case seq := <-x.ch:
+	case seq = <-x.ch:
 		for i := 0; i < len(x.q[seq]); i++ {
 			<-x.q[seq]
 		}
-		request := request{cmd: cmd, seq: seq}
-		if req != nil {
-			b, err := proto.Marshal(req.(proto.Message))
-			if err != nil {
-				x.ch <- seq
-				return nil, err
-			}
-			request.b = b
-		}
-		if err := x.push(ctx, &request); err != nil {
+		if err := x.push(ctx, &request{cmd: cmd, seq: seq, b: b}); err != nil {
 			x.ch <- seq
 			return nil, err
 		}
-		return x.q[seq], nil
 	case <-x.Done():
 		return nil, errors.New("shutdown")
 	case <-ctx.Done():
 		return nil, errors.New("timeout")
+	}
+	select {
+	case <-x.Done():
+		return nil, errors.New("shutdown")
+	case <-ctx.Done():
+		x.ch <- seq
+		return nil, errors.New("timeout")
+	case response := <-x.q[seq]:
+		x.ch <- response.seq
+		return response.b, nil
 	}
 }
 
@@ -142,24 +139,17 @@ func (x *conn) push(_ context.Context, req *request) error {
 }
 
 func (x *conn) Ping(ctx context.Context) error {
-	ch, err := x.do(ctx, math.MaxUint16, nil)
+	response, err := x.do(ctx, math.MaxUint16, nil)
 	if err != nil {
 		return err
 	}
-	select {
-	case <-x.Done():
-		return errors.New("shutdown")
-	case <-ctx.Done():
-		return errors.New("timeout")
-	case response := <-ch:
-		if len(x.Methods) > 0 {
-			return nil
-		}
-		var methods []string
-		if err := json.Unmarshal(response.b, &methods); err != nil {
-			return err
-		}
-		x.Methods = methods
+	if len(x.Methods) > 0 {
 		return nil
 	}
+	var methods []string
+	if err := json.Unmarshal(response, &methods); err != nil {
+		return err
+	}
+	x.Methods = methods
+	return nil
 }

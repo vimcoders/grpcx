@@ -81,7 +81,7 @@ func Dial(ctx context.Context, opts ...DialOption) (grpc.ClientConnInterface, er
 	return &client, nil
 }
 
-func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error) {
+func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (Conn, error) {
 	opt := defaultDialOptions
 	for i := 0; i < len(opts); i++ {
 		opts[i].apply(&opt)

@@ -25,7 +25,7 @@ type clientOption struct {
 
 type client struct {
 	clientOption
-	cc []*conn
+	cc []Conn
 	grpc.ClientConnInterface
 	balance.Balancer
 	discovery.Result

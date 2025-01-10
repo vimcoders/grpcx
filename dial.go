@@ -113,7 +113,6 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		Conn:         c,
 		Context:      ctx,
 		clientOption: clientOpt,
-		q:            make([]chan []byte, math.MaxUint16),
 		seq:          make(chan uint16, math.MaxUint16),
 	}
 	for i := uint16(0); i < math.MaxUint16; i++ {

@@ -97,7 +97,7 @@ func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 		x.ch <- seq
 		return nil, errors.New("timeout")
 	case response := <-x.q[seq]:
-		x.ch <- response.seq
+		x.ch <- seq
 		return response.b, nil
 	}
 }

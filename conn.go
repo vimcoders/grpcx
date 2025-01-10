@@ -76,7 +76,12 @@ func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 		for i := 0; i < len(x.q[seq]); i++ {
 			<-x.q[seq]
 		}
-		if err := x.push(ctx, &request{cmd: cmd, seq: seq, b: b}); err != nil {
+		if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+			x.ch <- seq
+			return nil, err
+		}
+		req := request{cmd: cmd, seq: seq, b: b}
+		if _, err := req.WriteTo(x.Conn); err != nil {
 			x.ch <- seq
 			return nil, err
 		}
@@ -126,16 +131,6 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			x.q[response.seq] <- &response
 		}
 	}
-}
-
-func (x *conn) push(_ context.Context, req *request) error {
-	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-		return err
-	}
-	if _, err := req.WriteTo(x.Conn); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (x *conn) Ping(ctx context.Context) error {

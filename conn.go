@@ -22,8 +22,8 @@ type conn struct {
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
-	q  []chan []byte
-	ch chan uint16
+	q   []chan []byte
+	seq chan uint16
 	context.Context
 	sync.RWMutex
 }
@@ -72,32 +72,32 @@ func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error
 func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 	var seq uint16
 	select {
-	case seq = <-x.ch:
-		for i := 0; i < len(x.q[seq]); i++ {
-			<-x.q[seq]
-		}
-		if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
-			x.ch <- seq
-			return nil, err
-		}
-		req := request{cmd: cmd, seq: seq, b: b}
-		if _, err := req.WriteTo(x.Conn); err != nil {
-			x.ch <- seq
-			return nil, err
-		}
 	case <-x.Done():
 		return nil, errors.New("shutdown")
 	case <-ctx.Done():
 		return nil, errors.New("timeout")
+	case seq = <-x.seq:
+		for i := 0; i < len(x.q[seq]); i++ {
+			<-x.q[seq]
+		}
+		if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+			x.seq <- seq
+			return nil, err
+		}
+		req := request{cmd: cmd, seq: seq, b: b}
+		if _, err := req.WriteTo(x.Conn); err != nil {
+			x.seq <- seq
+			return nil, err
+		}
 	}
 	select {
 	case <-x.Done():
 		return nil, errors.New("shutdown")
 	case <-ctx.Done():
-		x.ch <- seq
+		x.seq <- seq
 		return nil, errors.New("timeout")
 	case response := <-x.q[seq]:
-		x.ch <- seq
+		x.seq <- seq
 		return response, nil
 	}
 }

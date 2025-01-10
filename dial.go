@@ -114,10 +114,10 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		Context:      ctx,
 		clientOption: clientOpt,
 		q:            make([]chan []byte, math.MaxUint16),
-		ch:           make(chan uint16, math.MaxUint16),
+		seq:          make(chan uint16, math.MaxUint16),
 	}
 	for i := uint16(0); i < math.MaxUint16; i++ {
-		x.ch <- i
+		x.seq <- i
 		x.q = append(x.q, make(chan []byte, 1))
 	}
 	go x.serve(ctx)

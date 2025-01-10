@@ -27,7 +27,7 @@ func (x *response) WriteTo(w io.Writer) (int64, error) {
 }
 
 func readResponse(buf *bufio.Reader) (response, error) {
-	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+	headerBytes, err := buf.Peek(2)
 	if err != nil {
 		return response{}, err
 	}

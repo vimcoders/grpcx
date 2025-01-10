@@ -16,7 +16,7 @@ type request struct {
 }
 
 func readRequest(buf *bufio.Reader) (request, error) {
-	headerBytes, err := buf.Peek(_MESSAGE_HEADER)
+	headerBytes, err := buf.Peek(2)
 	if err != nil {
 		return request{}, err
 	}

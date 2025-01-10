@@ -149,14 +149,11 @@ func (x *conn) take(response response) error {
 }
 
 func (x *conn) push(_ context.Context, req request) error {
-	x.Lock()
-	defer x.Unlock()
-	if _, ok := x.pending[req.seq]; ok {
-		return errors.New("too many request")
-	}
 	if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 		return err
 	}
+	x.Lock()
+	defer x.Unlock()
 	if _, err := req.WriteTo(x.Conn); err != nil {
 		return err
 	}

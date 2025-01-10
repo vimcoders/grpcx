@@ -2,13 +2,11 @@ package grpcx
 
 import (
 	"context"
-	"crypto/tls"
 	"math"
 	"net"
 	"time"
 
 	"github.com/vimcoders/grpcx/discovery"
-	"github.com/vimcoders/grpcx/quicx"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
@@ -95,19 +93,19 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (*conn, error)
 		maxRetry:        5,
 		KeepaliveParams: opt.KeepaliveParams,
 	}
-	_dial := func(_addr net.Addr) (net.Conn, error) {
-		if _addr.Network() == "tcp" {
-			return net.Dial("tcp", _addr.String())
-		}
-		return quicx.Dial(_addr.String(), &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{"quic-echo-example"},
-			MaxVersion:         tls.VersionTLS13,
-		}, &quicx.Config{
-			MaxIdleTimeout: time.Minute,
-		})
-	}
-	c, err := _dial(addr)
+	// _dial := func(_addr net.Addr) (net.Conn, error) {
+	// 	if _addr.Network() == "tcp" {
+	// 		return net.Dial("tcp", _addr.String())
+	// 	}
+	// 	return quicx.Dial(_addr.String(), &tls.Config{
+	// 		InsecureSkipVerify: true,
+	// 		NextProtos:         []string{"quic-echo-example"},
+	// 		MaxVersion:         tls.VersionTLS13,
+	// 	}, &quicx.Config{
+	// 		MaxIdleTimeout: time.Minute,
+	// 	})
+	// }
+	c, err := net.Dial("tcp", addr.String())
 	if err != nil {
 		return nil, err
 	}

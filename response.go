@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"runtime/debug"
 	"time"
 
+	"github.com/vimcoders/grpcx/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -63,12 +66,10 @@ func readResponse(buf *bufio.Reader) (response, error) {
 
 type Handler struct {
 	serverOption
-	net.Conn
-	timeout time.Time
-	impl    any
+	impl any
 }
 
-func (x *Handler) Handle(ctx context.Context, req request) error {
+func (x *Handler) do(ctx context.Context, req request) (response, error) {
 	seq, cmd := req.seq, req.cmd
 	if int(cmd) >= len(x.Methods) {
 		var replay []string
@@ -77,31 +78,57 @@ func (x *Handler) Handle(ctx context.Context, req request) error {
 		}
 		ping, err := json.Marshal(replay)
 		if err != nil {
-			return err
+			return response{}, err
 		}
-		if err := x.SetWriteDeadline(x.timeout); err != nil {
-			return err
-		}
-		w := response{seq: seq, cmd: cmd, b: ping}
-		if _, err := w.WriteTo(x.Conn); err != nil {
-			return err
-		}
-		return nil
+		return response{seq: seq, cmd: cmd, b: ping}, nil
 	}
 	reply, err := x.Methods[req.cmd].Handler(x.impl, ctx, req.dec, x.Unary)
 	if err != nil {
-		return err
+		return response{}, err
 	}
 	b, err := proto.Marshal(reply.(proto.Message))
 	if err != nil {
-		return err
+		return response{}, err
 	}
-	if err := x.SetWriteDeadline(x.timeout); err != nil {
-		return err
+	return response{seq: req.seq, cmd: req.cmd, b: b}, nil
+}
+
+func (x *Handler) Handle(ctx context.Context, c net.Conn) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error(e)
+			debug.PrintStack()
+		}
+		if err != nil {
+			log.Error(err)
+		}
+		if err := c.Close(); err != nil {
+			log.Error(err)
+		}
+	}()
+	buf := bufio.NewReaderSize(c, x.readBufferSize)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.New("shutdown")
+		default:
+		}
+		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
+			return err
+		}
+		req, err := readRequest(buf)
+		if err != nil {
+			return err
+		}
+		response, err := x.do(ctx, req)
+		if err != nil {
+			return err
+		}
+		if err := c.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
+			return err
+		}
+		if _, err := response.WriteTo(c); err != nil {
+			return err
+		}
 	}
-	w := response{seq: req.seq, cmd: req.cmd, b: b}
-	if _, err := w.WriteTo(x.Conn); err != nil {
-		return err
-	}
-	return nil
 }

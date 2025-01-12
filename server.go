@@ -1,9 +1,7 @@
 package grpcx
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"net"
 	"runtime/debug"
 	"time"
@@ -65,7 +63,11 @@ func (x Server) ListenAndServe(ctx context.Context, listener net.Listener) {
 			continue
 		}
 		log.Info(conn.RemoteAddr())
-		go x.serve(ctx, conn)
+		h := &Handler{
+			serverOption: x.serverOption,
+			impl:         x.impl,
+		}
+		go h.Handle(ctx, conn)
 	}
 }
 
@@ -97,43 +99,4 @@ func NewServer(impl any, opt ...ServerOption) *Server {
 
 func (x *Server) Close() error {
 	return nil
-}
-
-func (x *Server) serve(ctx context.Context, c net.Conn) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			log.Error(e)
-			debug.PrintStack()
-		}
-		if err != nil {
-			log.Error(err)
-		}
-		if err := x.Close(); err != nil {
-			log.Error(err)
-		}
-	}()
-	h := Handler{
-		serverOption: x.serverOption,
-		Conn:         c,
-		impl:         x.impl,
-		timeout:      time.Now().Add(x.timeout),
-	}
-	buf := bufio.NewReaderSize(c, x.readBufferSize)
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.New("shutdown")
-		default:
-		}
-		if err := c.SetReadDeadline(time.Now().Add(x.timeout)); err != nil {
-			return err
-		}
-		req, err := readRequest(buf)
-		if err != nil {
-			return err
-		}
-		if err := h.Handle(ctx, req); err != nil {
-			return err
-		}
-	}
 }

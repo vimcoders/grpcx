@@ -18,12 +18,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type Conn interface {
-	net.Addr
-	grpc.ClientConnInterface
-	Ping(context.Context) error
-}
-
 type conn struct {
 	net.Conn
 	clientOption

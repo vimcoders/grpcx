@@ -48,7 +48,6 @@ const (
 	defaultReadBufSize = 32 * 1024
 )
 
-// ListenAndServe binds port and handle requests, blocking until close
 func (x Server) ListenAndServe(ctx context.Context, listener net.Listener, handler handler) {
 	defer func() {
 		if err := recover(); err != nil {
@@ -71,14 +70,13 @@ func (x Server) ListenAndServe(ctx context.Context, listener net.Listener, handl
 	}
 }
 
-// ListenAndServe binds port and handle requests, blocking until close
 func (x Server) Serve(ctx context.Context, listener net.Listener) {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()
 		}
 	}()
-	h := x.MakeHandler()
+	handler := x.MakeHandler()
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,7 +89,7 @@ func (x Server) Serve(ctx context.Context, listener net.Listener) {
 			continue
 		}
 		log.Info(conn.RemoteAddr())
-		go h.Handle(ctx, conn)
+		go handler.Handle(ctx, conn)
 	}
 }
 

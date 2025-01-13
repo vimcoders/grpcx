@@ -22,7 +22,7 @@ type dialOption struct {
 
 var defaultDialOptions = dialOption{
 	timeout:         120 * time.Second,
-	buffsize:        defaultReadBufSize,
+	buffsize:        32 * 1024,
 	KeepaliveParams: keepalive.ClientParameters{Time: time.Second * 60, Timeout: time.Second * 60},
 }
 

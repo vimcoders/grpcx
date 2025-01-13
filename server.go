@@ -44,29 +44,20 @@ func UnaryInterceptor(i UnaryServerInterceptor) ServerOption {
 	})
 }
 
-func (x Server) ListenAndServe(ctx context.Context, listener net.Listener, handler Handler) {
+func (x Server) ListenAndServe(ctx context.Context) error {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()
 		}
 	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-		log.Info(conn.RemoteAddr())
-		go handler.Handle(ctx, conn)
+	ln, err := net.Listen(x.Network(), x.String())
+	if err != nil {
+		return err
 	}
+	return x.Serve(ctx, ln)
 }
 
-func (x Server) Serve(ctx context.Context, listener net.Listener) {
+func (x Server) Serve(ctx context.Context, listener net.Listener) error {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()
@@ -76,7 +67,7 @@ func (x Server) Serve(ctx context.Context, listener net.Listener) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return errors.New("shutdown")
 		default:
 		}
 		conn, err := listener.Accept()
@@ -95,6 +86,7 @@ type serverOption struct {
 	timeout        time.Duration
 	Unary          UnaryServerInterceptor
 	Methods        []grpc.MethodDesc
+	net.Addr
 }
 
 var defaultServerOptions = serverOption{

@@ -44,10 +44,6 @@ func UnaryInterceptor(i UnaryServerInterceptor) ServerOption {
 	})
 }
 
-const (
-	defaultReadBufSize = 32 * 1024
-)
-
 func (x Server) ListenAndServe(ctx context.Context, listener net.Listener, handler Handler) {
 	defer func() {
 		if err := recover(); err != nil {
@@ -103,7 +99,7 @@ type serverOption struct {
 
 var defaultServerOptions = serverOption{
 	timeout:        120 * time.Second,
-	readBufferSize: defaultReadBufSize,
+	readBufferSize: 32 * 1024,
 }
 
 type Server struct {

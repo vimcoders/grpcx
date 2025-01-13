@@ -38,6 +38,12 @@ func WithServiceDesc(info grpc.ServiceDesc) ServerOption {
 	})
 }
 
+func WithServiceAddr(addr net.Addr) ServerOption {
+	return newFuncServerOption(func(o *serverOption) {
+		o.Addr = addr
+	})
+}
+
 func UnaryInterceptor(i UnaryServerInterceptor) ServerOption {
 	return newFuncServerOption(func(o *serverOption) {
 		o.Unary = i
@@ -50,7 +56,7 @@ func (x Server) ListenAndServe(ctx context.Context) error {
 			debug.PrintStack()
 		}
 	}()
-	ln, err := net.Listen(x.Network(), x.String())
+	ln, err := net.Listen(x.Addr.Network(), x.Addr.String())
 	if err != nil {
 		return err
 	}

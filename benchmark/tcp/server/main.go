@@ -19,16 +19,17 @@ import (
 func main() {
 	fmt.Println(runtime.NumCPU())
 	runtime.GOMAXPROCS(1)
-	listener, err := net.Listen("tcp", ":28889")
+	addr, err := net.ResolveTCPAddr("tcp", ":28889")
 	if err != nil {
 		panic(err)
 	}
 	opts := []grpcx.ServerOption{
 		//grpcx.UnaryInterceptor(x.UnaryInterceptor),
 		grpcx.WithServiceDesc(pb.Chat_ServiceDesc),
+		grpcx.WithServiceAddr(addr),
 	}
 	svr := grpcx.NewServer(MakeHandler(), opts...)
-	go svr.Serve(context.Background(), listener)
+	go svr.ListenAndServe(context.Background())
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	t := time.NewTicker(time.Second)

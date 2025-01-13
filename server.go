@@ -48,7 +48,7 @@ const (
 	defaultReadBufSize = 32 * 1024
 )
 
-func (x Server) ListenAndServe(ctx context.Context, listener net.Listener, handler handler) {
+func (x Server) ListenAndServe(ctx context.Context, listener net.Listener, handler Handler) {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()

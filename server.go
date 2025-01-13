@@ -50,6 +50,17 @@ func UnaryInterceptor(i UnaryServerInterceptor) ServerOption {
 	})
 }
 
+func ListenAndServe(ctx context.Context, impl any, opt ...ServerOption) error {
+	defer func() {
+		if err := recover(); err != nil {
+			debug.PrintStack()
+		}
+	}()
+	svr := NewServer(impl, opt...)
+	svr.ListenAndServe(ctx)
+	return nil
+}
+
 func (x Server) ListenAndServe(ctx context.Context) error {
 	defer func() {
 		if err := recover(); err != nil {

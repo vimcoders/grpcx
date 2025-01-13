@@ -28,8 +28,7 @@ func main() {
 		grpcx.WithServiceDesc(pb.Chat_ServiceDesc),
 		grpcx.WithServiceAddr(addr),
 	}
-	svr := grpcx.NewServer(MakeHandler(), opts...)
-	go svr.ListenAndServe(context.Background())
+	go grpcx.ListenAndServe(context.Background(), MakeHandler(), opts...)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
 	t := time.NewTicker(time.Second)

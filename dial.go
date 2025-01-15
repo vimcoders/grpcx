@@ -117,7 +117,7 @@ func dail(ctx context.Context, addr net.Addr, opts ...DialOption) (Conn, error) 
 	}
 	for i := uint16(0); i < math.MaxUint16; i++ {
 		x.seq <- i
-		x.q = append(x.q, make(chan []byte, 1))
+		x.ch = append(x.ch, make(chan []byte, 1))
 	}
 	go x.serve(ctx)
 	if err := x.Ping(ctx); err != nil {

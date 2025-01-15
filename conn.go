@@ -22,7 +22,7 @@ type conn struct {
 	net.Conn
 	clientOption
 	grpc.ClientConnInterface
-	q   []chan []byte
+	ch  []chan []byte
 	seq chan uint16
 	context.Context
 	sync.RWMutex
@@ -77,8 +77,8 @@ func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 	case <-ctx.Done():
 		return nil, errors.New("timeout")
 	case seq = <-x.seq:
-		for i := 0; i < len(x.q[seq]); i++ {
-			<-x.q[seq]
+		for i := 0; i < len(x.ch[seq]); i++ {
+			<-x.ch[seq]
 		}
 		if err := x.SetWriteDeadline(time.Now().Add(x.timeout)); err != nil {
 			x.seq <- seq
@@ -96,7 +96,7 @@ func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 	case <-ctx.Done():
 		x.seq <- seq
 		return nil, errors.New("timeout")
-	case response := <-x.q[seq]:
+	case response := <-x.ch[seq]:
 		x.seq <- seq
 		return response, nil
 	}
@@ -128,7 +128,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			x.q[response.seq] <- response.b
+			x.ch[response.seq] <- response.b
 		}
 	}
 }

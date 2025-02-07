@@ -10,9 +10,11 @@ import (
 )
 
 type request struct {
-	seq uint16
-	cmd uint16
-	b   []byte
+	seq     uint16
+	cmd     uint16
+	traceID [16]byte
+	spanID  [8]byte
+	b       []byte
 }
 
 func readRequest(buf *bufio.Reader) (request, error) {
@@ -31,22 +33,32 @@ func readRequest(buf *bufio.Reader) (request, error) {
 	if _, err := buf.Discard(len(b)); err != nil {
 		return request{}, err
 	}
+	var traceID [16]byte
+	var spanID [8]byte
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
+	copy(traceID[:], b[6:22])
+	copy(spanID[:], b[22:30])
 	return request{
-		seq: seq,
-		cmd: cmd,
-		b:   b[6:],
+		seq:     seq,
+		cmd:     cmd,
+		traceID: traceID,
+		spanID:  spanID,
+		b:       b[30:],
 	}, nil
 }
 
 func (x *request) WriteTo(w io.Writer) (int64, error) {
 	var buf buffer
 	if x.b == nil {
-		buf.WriteUint16(uint16(2+2+2), x.seq, x.cmd)
+		buf.WriteUint16(uint16(2+2+2+16+8), x.seq, x.cmd)
+		buf.Write(x.traceID[:])
+		buf.Write(x.spanID[:])
 		return buf.WriteTo(w)
 	}
-	buf.WriteUint16(uint16(2+2+2+len(x.b)), x.seq, x.cmd)
+	buf.WriteUint16(uint16(2+2+2+16+8+len(x.b)), x.seq, x.cmd)
+	buf.Write(x.traceID[:])
+	buf.Write(x.spanID[:])
 	if _, err := buf.Write(x.b); err != nil {
 		return 0, err
 	}

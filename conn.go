@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/vimcoders/grpcx/log"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -70,6 +71,7 @@ func (x *conn) invoke(ctx context.Context, cmd uint16, req any, reply any) error
 }
 
 func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
+	span := trace.SpanContextFromContext(ctx)
 	var seq uint16
 	select {
 	case <-x.Done():
@@ -84,7 +86,13 @@ func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 			x.seq <- seq
 			return nil, err
 		}
-		req := request{cmd: cmd, seq: seq, b: b}
+		req := request{
+			cmd:     cmd,
+			seq:     seq,
+			traceID: span.TraceID(),
+			spanID:  span.SpanID(),
+			b:       b,
+		}
 		if _, err := req.WriteTo(x.Conn); err != nil {
 			x.seq <- seq
 			return nil, err

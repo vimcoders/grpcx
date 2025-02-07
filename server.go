@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vimcoders/grpcx/log"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -150,7 +151,11 @@ func (x *handler) do(ctx context.Context, req request) (response, error) {
 		}
 		return response{seq: seq, cmd: cmd, b: ping}, nil
 	}
-	reply, err := x.Methods[req.cmd].Handler(x.impl, ctx, req.dec, x.Unary)
+	var span trace.SpanContext
+	span.WithTraceID(req.traceID)
+	span.WithSpanID(req.spanID)
+	handler := x.Methods[req.cmd].Handler
+	reply, err := handler(x.impl, trace.ContextWithRemoteSpanContext(ctx, span), req.dec, x.Unary)
 	if err != nil {
 		return response{}, err
 	}

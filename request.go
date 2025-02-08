@@ -33,17 +33,13 @@ func readRequest(buf *bufio.Reader) (request, error) {
 	if _, err := buf.Discard(len(b)); err != nil {
 		return request{}, err
 	}
-	var traceID [16]byte
-	var spanID [8]byte
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
-	copy(traceID[:], b[6:22])
-	copy(spanID[:], b[22:30])
 	return request{
 		seq:     seq,
 		cmd:     cmd,
-		traceID: traceID,
-		spanID:  spanID,
+		traceID: [16]byte(b[6:22]),
+		spanID:  [8]byte(b[22:30]),
 		b:       b[30:],
 	}, nil
 }

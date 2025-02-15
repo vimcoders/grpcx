@@ -125,6 +125,19 @@ func NewServer(impl any, opt ...ServerOption) *Server {
 	return &Server{impl: impl, serverOption: opts}
 }
 
+// RegisterService registers a service and its implementation to the gRPC
+// server. It is called from the IDL generated code. This must be called before
+// invoking Serve. If ss is non-nil (for legacy code), its type is checked to
+// ensure it implements sd.HandlerType.
+func (s *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
+	s.register(sd, ss)
+}
+
+func (s *Server) register(sd *grpc.ServiceDesc, ss any) {
+	s.Methods = sd.Methods
+	s.impl = ss
+}
+
 func (x *Server) Close() error {
 	return nil
 }

@@ -57,7 +57,7 @@ func ListenAndServe(ctx context.Context, impl any, opt ...ServerOption) error {
 	return nil
 }
 
-func (x Server) ListenAndServe(ctx context.Context, opt ...ServerOption) error {
+func (x *Server) ListenAndServe(ctx context.Context, opt ...ServerOption) error {
 	for i := 0; i < len(opt); i++ {
 		opt[i].apply(&x.serverOption)
 	}
@@ -68,13 +68,12 @@ func (x Server) ListenAndServe(ctx context.Context, opt ...ServerOption) error {
 	return x.Serve(ctx, ln)
 }
 
-func (x Server) Serve(ctx context.Context, listener net.Listener) error {
+func (x *Server) Serve(ctx context.Context, listener net.Listener) error {
 	defer func() {
 		if err := recover(); err != nil {
 			debug.PrintStack()
 		}
 	}()
-	handler := x.MakeHandler()
 	for {
 		select {
 		case <-ctx.Done():
@@ -87,7 +86,7 @@ func (x Server) Serve(ctx context.Context, listener net.Listener) error {
 			continue
 		}
 		log.Info(conn.RemoteAddr())
-		go handler.Handle(ctx, conn)
+		go x.Handle(ctx, conn)
 	}
 }
 
@@ -135,16 +134,7 @@ func (x *Server) Close() error {
 	return nil
 }
 
-func (x Server) MakeHandler() Handler {
-	return &handler{serverOption: x.serverOption, impl: x.impl}
-}
-
-type handler struct {
-	serverOption
-	impl any
-}
-
-func (x *handler) do(ctx context.Context, req request) (response, error) {
+func (x *Server) do(ctx context.Context, req request) (response, error) {
 	seq, cmd := req.seq, req.cmd
 	if int(cmd) >= len(x.Methods) {
 		var replay []string
@@ -172,7 +162,7 @@ func (x *handler) do(ctx context.Context, req request) (response, error) {
 	return response{seq: req.seq, cmd: req.cmd, payload: b}, nil
 }
 
-func (x *handler) Handle(ctx context.Context, c net.Conn) (err error) {
+func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			log.Error(e)

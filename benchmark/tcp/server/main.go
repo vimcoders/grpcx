@@ -52,10 +52,6 @@ type Handler struct {
 	sync.RWMutex
 }
 
-type OpenTracing interface {
-	GetOpentracing() *pb.Opentracing
-}
-
 // MakeHandler creates a Handler instance
 func MakeHandler() *Handler {
 	return &Handler{}

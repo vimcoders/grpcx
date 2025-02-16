@@ -52,22 +52,15 @@ func UnaryInterceptor(i UnaryServerInterceptor) ServerOption {
 }
 
 func ListenAndServe(ctx context.Context, impl any, opt ...ServerOption) error {
-	defer func() {
-		if err := recover(); err != nil {
-			debug.PrintStack()
-		}
-	}()
 	svr := NewServer(impl, opt...)
 	svr.ListenAndServe(ctx)
 	return nil
 }
 
-func (x Server) ListenAndServe(ctx context.Context) error {
-	defer func() {
-		if err := recover(); err != nil {
-			debug.PrintStack()
-		}
-	}()
+func (x Server) ListenAndServe(ctx context.Context, opt ...ServerOption) error {
+	for i := 0; i < len(opt); i++ {
+		opt[i].apply(&x.serverOption)
+	}
 	ln, err := net.Listen(x.Addr.Network(), x.Addr.String())
 	if err != nil {
 		return err

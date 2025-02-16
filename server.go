@@ -162,7 +162,7 @@ func (x *handler) do(ctx context.Context, req request) (response, error) {
 		if err != nil {
 			return response{}, err
 		}
-		return response{seq: seq, cmd: cmd, b: ping}, nil
+		return response{seq: seq, cmd: cmd, payload: ping}, nil
 	}
 	var span trace.SpanContext
 	span.WithTraceID(req.traceID)
@@ -176,7 +176,7 @@ func (x *handler) do(ctx context.Context, req request) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	return response{seq: req.seq, cmd: req.cmd, b: b}, nil
+	return response{seq: req.seq, cmd: req.cmd, payload: b}, nil
 }
 
 func (x *handler) Handle(ctx context.Context, c net.Conn) (err error) {

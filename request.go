@@ -14,7 +14,7 @@ type request struct {
 	cmd     uint16
 	traceID [16]byte
 	spanID  [8]byte
-	b       []byte
+	payload []byte
 }
 
 func readRequest(buf *bufio.Reader) (request, error) {
@@ -42,29 +42,29 @@ func readRequest(buf *bufio.Reader) (request, error) {
 		cmd:     cmd,
 		traceID: traceID,
 		spanID:  spanID,
-		b:       b[30:],
+		payload: b[30:],
 	}, nil
 }
 
 func (x *request) WriteTo(w io.Writer) (int64, error) {
 	var buf buffer
-	if x.b == nil {
+	if x.payload == nil {
 		buf.WriteUint16(uint16(2+2+2+16+8), x.seq, x.cmd)
 		buf.Write(x.traceID[:])
 		buf.Write(x.spanID[:])
 		return buf.WriteTo(w)
 	}
-	buf.WriteUint16(uint16(2+2+2+16+8+len(x.b)), x.seq, x.cmd)
+	buf.WriteUint16(uint16(2+2+2+16+8+len(x.payload)), x.seq, x.cmd)
 	buf.Write(x.traceID[:])
 	buf.Write(x.spanID[:])
-	if _, err := buf.Write(x.b); err != nil {
+	if _, err := buf.Write(x.payload); err != nil {
 		return 0, err
 	}
 	return buf.WriteTo(w)
 }
 
 func (x *request) dec(in any) error {
-	if err := proto.Unmarshal(x.b, in.(proto.Message)); err != nil {
+	if err := proto.Unmarshal(x.payload, in.(proto.Message)); err != nil {
 		return err
 	}
 	return nil

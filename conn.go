@@ -91,7 +91,7 @@ func (x *conn) do(ctx context.Context, cmd uint16, b []byte) ([]byte, error) {
 			seq:     seq,
 			traceID: span.TraceID(),
 			spanID:  span.SpanID(),
-			b:       b,
+			payload: b,
 		}
 		if _, err := req.WriteTo(x.Conn); err != nil {
 			x.seq <- seq
@@ -136,7 +136,7 @@ func (x *conn) serve(ctx context.Context) (err error) {
 			if err != nil {
 				return err
 			}
-			x.ch[response.seq] <- response.b
+			x.ch[response.seq] <- response.payload
 		}
 	}
 }

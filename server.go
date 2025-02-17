@@ -107,6 +107,7 @@ var defaultServerOptions = serverOption{
 type Server struct {
 	serverOption
 	impl any
+	Handler
 }
 
 func NewServer(impl any, opt ...ServerOption) *Server {

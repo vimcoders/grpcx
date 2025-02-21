@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/vimcoders/grpcx/bytes"
 )
 
 type response struct {
@@ -14,7 +16,7 @@ type response struct {
 }
 
 func (x *response) WriteTo(w io.Writer) (int64, error) {
-	var buf buffer
+	var buf bytes.Buffer
 	if x.payload == nil {
 		buf.WriteUint16(uint16(2+2+2), x.seq, x.cmd)
 		return buf.WriteTo(w)
@@ -44,7 +46,7 @@ func readResponse(buf *bufio.Reader) (response, error) {
 	}
 	seq := binary.BigEndian.Uint16(b[2:])
 	cmd := binary.BigEndian.Uint16(b[4:])
-	var buffer buffer
+	var buffer bytes.Buffer
 	if _, err := buffer.Write(b[6:]); err != nil {
 		return response{}, err
 	}

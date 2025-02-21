@@ -3,6 +3,8 @@ package log
 import (
 	"os"
 	"time"
+
+	"github.com/vimcoders/grpcx/bytes"
 )
 
 var logger = NewSysLogger()
@@ -47,9 +49,9 @@ func (x *SysLogger) Error(a ...any) {
 }
 
 func (x *SysLogger) log(prefix string, a ...any) {
-	var buffer buffer
-	buffer.Write(time.Now().Format("2006-01-02 15:04:05"))
-	buffer.Write(prefix)
+	var buffer bytes.Buffer
+	buffer.WriteString(time.Now().Format("2006-01-02 15:04:05"))
+	buffer.WriteString(prefix)
 	buffer.Appendln(a...)
 	buffer.WriteTo(os.Stdout)
 }

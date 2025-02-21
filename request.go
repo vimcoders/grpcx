@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/vimcoders/grpcx/bytes"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -47,7 +48,7 @@ func readRequest(buf *bufio.Reader) (request, error) {
 }
 
 func (x *request) WriteTo(w io.Writer) (int64, error) {
-	var buf buffer
+	var buf bytes.Buffer
 	if x.payload == nil {
 		buf.WriteUint16(uint16(2+2+2+16+8), x.seq, x.cmd)
 		buf.Write(x.traceID[:])

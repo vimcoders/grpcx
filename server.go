@@ -151,8 +151,8 @@ func (x *Server) do(ctx context.Context, req request) (response, error) {
 	var span trace.SpanContext
 	span.WithTraceID(req.traceID)
 	span.WithSpanID(req.spanID)
-	handler := x.Methods[req.cmd].Handler
-	reply, err := handler(x.impl, trace.ContextWithRemoteSpanContext(ctx, span), req.dec, x.Unary)
+	method := x.Methods[req.cmd]
+	reply, err := method.Handler(x.impl, trace.ContextWithRemoteSpanContext(ctx, span), req.dec, x.Unary)
 	if err != nil {
 		return response{}, err
 	}

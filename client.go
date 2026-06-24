@@ -34,8 +34,8 @@ type Client struct {
 	channel *channel
 
 	streamLock   sync.RWMutex
-	streams      map[streamID]*stream
-	nextStreamID streamID
+	streams      map[uint32]*stream
+	nextStreamID uint32
 	sendLock     sync.Mutex
 
 	ctx    context.Context
@@ -62,7 +62,7 @@ func NewClient(conn net.Conn, opts ...ClientOpts) grpc.ClientConnInterface {
 	c := &Client{
 		codec:           codec{},
 		channel:         channel,
-		streams:         make(map[streamID]*stream),
+		streams:         make(map[uint32]*stream),
 		nextStreamID:    1,
 		closed:          cancel,
 		ctx:             ctx,
@@ -102,8 +102,7 @@ func (c *Client) receiveLoop() error {
 					return filterCloseErr(err)
 				}
 			}
-			sid := streamID(h.StreamID)
-			s := c.getStream(sid)
+			s := c.getStream(h.StreamID)
 			if s == nil {
 				continue
 			}
@@ -160,7 +159,7 @@ func (c *Client) createStream(h, b []byte) (*stream, error) {
 		return nil, err
 	}
 
-	if err := c.channel.send(uint32(s.id), h, b); err != nil {
+	if err := s.send(h, b); err != nil {
 		return s, filterCloseErr(err)
 	}
 
@@ -174,7 +173,7 @@ func (c *Client) deleteStream(s *stream) {
 	s.closeWithError(nil)
 }
 
-func (c *Client) getStream(sid streamID) *stream {
+func (c *Client) getStream(sid uint32) *stream {
 	c.streamLock.RLock()
 	s := c.streams[sid]
 	c.streamLock.RUnlock()

@@ -21,15 +21,13 @@ import (
 	"sync"
 )
 
-type streamID uint32
-
 type streamMessage struct {
 	header  []byte
 	payload []byte
 }
 
 type stream struct {
-	id     streamID
+	id     uint32
 	sender sender
 	recv   chan *streamMessage
 
@@ -38,7 +36,7 @@ type stream struct {
 	recvClose chan struct{}
 }
 
-func newStream(id streamID, send sender) *stream {
+func newStream(id uint32, send sender) *stream {
 	return &stream{
 		id:        id,
 		sender:    send,
@@ -60,7 +58,7 @@ func (s *stream) closeWithError(err error) error {
 }
 
 func (s *stream) send(h, b []byte) error {
-	return s.sender.send(uint32(s.id), h, b)
+	return s.sender.send(s.id, h, b)
 }
 
 func (s *stream) receive(ctx context.Context, msg *streamMessage) error {

@@ -26,14 +26,14 @@ type MD map[string][]string
 
 // Get returns the metadata for a given key when they exist.
 // If there is no metadata, a nil slice and false are returned.
-func (m MD) Get(key string) ([]string, bool) {
+func (m MD) Get(key string) (string, bool) {
 	key = strings.ToLower(key)
 	list, ok := m[key]
 	if !ok || len(list) == 0 {
-		return nil, false
+		return "", false
 	}
 
-	return list, true
+	return list[0], true
 }
 
 // Set sets the provided values for a given key.
@@ -106,7 +106,7 @@ func GetMetadataValue(ctx context.Context, name string) (string, bool) {
 	}
 
 	if list, ok := metadata.Get(name); ok {
-		return list[0], true
+		return list, true
 	}
 
 	return "", false

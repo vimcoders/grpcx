@@ -136,20 +136,29 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 		}
 	}()
 	channel := newChannel(c)
+	br, bw := bytes.Buffer{}, bytes.Buffer{}
+	enc, dec := gob.NewEncoder(&bw), gob.NewDecoder(&br)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
+			bw.Reset()
+			br.Reset()
 			h, meta, payload, err := channel.recv()
 			if err != nil {
 				return err
 			}
+			br.Write(meta)
 			var md MD
-			if err := gob.NewDecoder(bytes.NewBuffer(meta)).Decode(&md); err != nil {
+			if err := dec.Decode(&md); err != nil {
 				return err
 			}
-			handler, ok := x.Methods["r.URL.Path"]
+			path, ok := md.Get("path")
+			if !ok {
+				return InvalidArgument
+			}
+			handler, ok := x.Methods[path]
 			if !ok {
 				return NotFound
 			}
@@ -160,19 +169,18 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
-			buf := new(bytes.Buffer)
-			if err := gob.NewEncoder(buf).Encode(md); err != nil {
+			if err := enc.Encode(md); err != nil {
 				return err
 			}
 			if err := channel.writeMessageHeader(messageHeader{
 				StreamID: h.StreamID,
 				Length:   uint32(len(response)),
-				Offset:   uint16(len(buf.Bytes())),
+				Offset:   uint16(len(bw.Bytes())),
 			}); err != nil {
 				return err
 			}
-			if len(buf.Bytes()) > 0 {
-				_, err := channel.bw.Write(buf.Bytes())
+			if len(bw.Bytes()) > 0 {
+				_, err := channel.bw.Write(bw.Bytes())
 				if err != nil {
 					return err
 				}

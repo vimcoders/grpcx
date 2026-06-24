@@ -9,3 +9,13 @@ message Metas {
     string Encoding = 4;
     string Code = 5;
 }
+
+message Request {
+    Metas metas = 1;
+    bytes payload = 2;
+}
+
+message Response {
+    Metas metas = 1;
+    bytes payload = 2;
+}

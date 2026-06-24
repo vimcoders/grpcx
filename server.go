@@ -141,15 +141,15 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 		case <-ctx.Done():
 			return nil
 		default:
-			h, meta, payload, err := channel.recv()
+			h, payload, err := channel.recv()
 			if err != nil {
 				return err
 			}
-			var metas api.Metas
-			if err := proto.Unmarshal(meta, &metas); err != nil {
+			var request api.Request
+			if err := proto.Unmarshal(payload, &request); err != nil {
 				return err
 			}
-			handler, ok := x.Methods[metas.Path]
+			handler, ok := x.Methods[request.Metas.Path]
 			if !ok {
 				return NotFound
 			}
@@ -160,24 +160,21 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
-			md, err := proto.Marshal(&api.Metas{})
+			b, err := proto.Marshal(&api.Response{
+				Metas:   request.Metas,
+				Payload: response,
+			})
 			if err != nil {
 				return err
 			}
 			if err := channel.writeMessageHeader(messageHeader{
 				StreamID: h.StreamID,
-				Length:   uint32(len(response)),
-				Offset:   uint16(len(md)),
+				Length:   uint32(len(b)),
 			}); err != nil {
 				return err
 			}
-			if len(md) > 0 {
-				if _, err := channel.bw.Write(md); err != nil {
-					return err
-				}
-			}
-			if len(response) > 0 {
-				if _, err := channel.bw.Write(response); err != nil {
+			if len(b) > 0 {
+				if _, err := channel.bw.Write(b); err != nil {
 					return err
 				}
 			}

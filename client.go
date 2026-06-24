@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"ttrpc/generated/api"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
@@ -93,7 +94,7 @@ func (c *Client) receiveLoop() error {
 		case <-c.ctx.Done():
 			return ErrClosed
 		default:
-			h, header, payload, err := c.channel.recv()
+			h, payload, err := c.channel.recv()
 			if err != nil {
 				_, ok := status.FromError(err)
 				if !ok {
@@ -110,7 +111,7 @@ func (c *Client) receiveLoop() error {
 			if err != nil {
 				s.closeWithError(err)
 			} else {
-				if err := s.receive(c.ctx, &streamMessage{header: header, payload: payload}); err != nil {
+				if err := s.receive(c.ctx, &api.Response{Payload: payload}); err != nil {
 				}
 			}
 		}
@@ -119,7 +120,7 @@ func (c *Client) receiveLoop() error {
 
 // createStream creates a new stream and registers it with the client
 // Introduce stream types for multiple or single response
-func (c *Client) createStream(meta, b []byte) (*stream, error) {
+func (c *Client) createStream(ctx context.Context, b []byte) (*stream, error) {
 	// sendLock must be held across both allocation of the stream ID and sending it across the wire.
 	// This ensures that new stream IDs sent on the wire are always increasing, which is a
 	// requirement of the TTRPC protocol.
@@ -159,7 +160,7 @@ func (c *Client) createStream(meta, b []byte) (*stream, error) {
 		return nil, err
 	}
 
-	if err := s.send(meta, b); err != nil {
+	if err := s.send(ctx, b); err != nil {
 		return s, filterCloseErr(err)
 	}
 
@@ -237,7 +238,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 		return ErrClosed
 	case <-s.recvClose:
 	case msg := <-s.recv:
-		if err = c.codec.Unmarshal(msg.payload, reply); err != nil {
+		if err = c.codec.Unmarshal(msg.Payload, reply); err != nil {
 			return err
 		}
 	}

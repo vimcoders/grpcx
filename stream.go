@@ -19,17 +19,13 @@ package ttrpc
 import (
 	"context"
 	"sync"
+	"ttrpc/generated/api"
 )
-
-type streamMessage struct {
-	header  []byte
-	payload []byte
-}
 
 type stream struct {
 	id     uint32
 	sender sender
-	recv   chan *streamMessage
+	recv   chan *api.Response
 
 	closeOnce sync.Once
 	recvErr   error
@@ -40,7 +36,7 @@ func newStream(id uint32, send sender) *stream {
 	return &stream{
 		id:        id,
 		sender:    send,
-		recv:      make(chan *streamMessage, 1),
+		recv:      make(chan *api.Response, 1),
 		recvClose: make(chan struct{}),
 	}
 }
@@ -57,11 +53,11 @@ func (s *stream) closeWithError(err error) error {
 	return nil
 }
 
-func (s *stream) send(h, b []byte) error {
-	return s.sender.send(s.id, h, b)
+func (s *stream) send(ctx context.Context, b []byte) error {
+	return s.sender.send(s.id, b)
 }
 
-func (s *stream) receive(ctx context.Context, msg *streamMessage) error {
+func (s *stream) receive(ctx context.Context, msg *api.Response) error {
 	select {
 	case <-s.recvClose:
 		return s.recvErr
@@ -78,5 +74,5 @@ func (s *stream) receive(ctx context.Context, msg *streamMessage) error {
 }
 
 type sender interface {
-	send(uint32, []byte, []byte) error
+	send(uint32, []byte) error
 }

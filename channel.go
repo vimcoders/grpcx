@@ -101,7 +101,7 @@ func (ch *channel) recv() (messageHeader, []byte, []byte, error) {
 
 	var h []byte
 	if mh.Offset > 0 {
-		h = ch.getmbuf(int(mh.Length))
+		h = ch.getmbuf(int(mh.Offset))
 		if _, err := io.ReadFull(ch.br, h); err != nil {
 			return messageHeader{}, nil, nil, fmt.Errorf("failed reading message: %w", err)
 		}

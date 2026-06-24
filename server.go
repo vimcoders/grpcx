@@ -1,7 +1,9 @@
 package ttrpc
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"log/slog"
 	"math"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type ServerOption interface {
@@ -31,6 +35,7 @@ type ServerOptions struct {
 	Methods              map[string]grpc.MethodHandler
 	interceptor          grpc.UnaryServerInterceptor
 	MaxConcurrentStreams uint32
+	codec
 }
 
 var defaultServerOptions = ServerOptions{
@@ -136,30 +141,61 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 		case <-ctx.Done():
 			return nil
 		default:
-			h, header, payload, err := channel.recv()
+			h, meta, payload, err := channel.recv()
 			if err != nil {
 				return err
 			}
-			if err := channel.writeMessageHeader(h); err != nil {
+			var md MD
+			if err := gob.NewDecoder(bytes.NewBuffer(meta)).Decode(&md); err != nil {
 				return err
 			}
-			if len(header) > 0 {
-				_, err := channel.bw.Write(header)
+			handler, ok := x.Methods["r.URL.Path"]
+			if !ok {
+				return NotFound
+			}
+			reply, err := handler(x.impl, ctx, func(in any) error {
+				return x.codec.Unmarshal(payload, in)
+			}, x.interceptor)
+			response, err := x.codec.Marshal(reply)
+			if err != nil {
+				return err
+			}
+			buf := new(bytes.Buffer)
+			if err := gob.NewEncoder(buf).Encode(md); err != nil {
+				return err
+			}
+			if err := channel.writeMessageHeader(messageHeader{
+				StreamID: h.StreamID,
+				Length:   uint32(len(response)),
+				Offset:   uint16(len(buf.Bytes())),
+			}); err != nil {
+				return err
+			}
+			if len(buf.Bytes()) > 0 {
+				_, err := channel.bw.Write(buf.Bytes())
 				if err != nil {
 					return err
 				}
 			}
-
-			if len(payload) > 0 {
-				_, err := channel.bw.Write(payload)
+			if len(response) > 0 {
+				_, err := channel.bw.Write(response)
 				if err != nil {
 					return err
 				}
 			}
-
 			if err := channel.bw.Flush(); err != nil {
 				return err
 			}
 		}
 	}
 }
+
+var Unavailable = status.Error(codes.Unavailable, codes.Unavailable.String())                   // 框架默认，可重试
+var OK = status.Error(codes.OK, codes.OK.String())                                              // 执行成功
+var InvalidArgument = status.Error(codes.InvalidArgument, codes.Internal.String())              // 客户端传参错误
+var ResourceExhausted = status.Error(codes.ResourceExhausted, codes.ResourceExhausted.String()) // 告诉客户端退避
+
+var Canceled = status.Error(codes.Canceled, codes.Canceled.String())                      // 被取消
+var Unauthenticated = status.Error(codes.Unauthenticated, codes.Unauthenticated.String()) // 需要重新登录 / 换 Token
+var Unknown = status.Error(codes.Unknown, codes.Unknown.String())                         // 未知错误
+var NotFound = status.Error(codes.NotFound, codes.NotFound.String())                      // 没有找到对应的方法

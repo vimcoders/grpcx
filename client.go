@@ -119,7 +119,7 @@ func (c *Client) receiveLoop() error {
 
 // createStream creates a new stream and registers it with the client
 // Introduce stream types for multiple or single response
-func (c *Client) createStream(h, b []byte) (*stream, error) {
+func (c *Client) createStream(meta, b []byte) (*stream, error) {
 	// sendLock must be held across both allocation of the stream ID and sending it across the wire.
 	// This ensures that new stream IDs sent on the wire are always increasing, which is a
 	// requirement of the TTRPC protocol.
@@ -159,7 +159,7 @@ func (c *Client) createStream(h, b []byte) (*stream, error) {
 		return nil, err
 	}
 
-	if err := s.send(h, b); err != nil {
+	if err := s.send(meta, b); err != nil {
 		return s, filterCloseErr(err)
 	}
 

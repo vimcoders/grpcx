@@ -57,6 +57,7 @@ func (ch *channel) readMessageHeader() (messageHeader, error) {
 func (ch *channel) writeMessageHeader(mh messageHeader) error {
 	binary.BigEndian.PutUint32(ch.hwbuf[:4], mh.Length)
 	binary.BigEndian.PutUint32(ch.hwbuf[4:8], mh.StreamID)
+	binary.BigEndian.PutUint16(ch.hwbuf[9:10], mh.Offset)
 	_, err := ch.bw.Write(ch.hwbuf[:])
 	return err
 }

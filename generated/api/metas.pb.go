@@ -23,7 +23,10 @@ const (
 
 type Metas struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Meats         []string               `protobuf:"bytes,1,rep,name=Meats,proto3" json:"Meats,omitempty"`
+	Path          string                 `protobuf:"bytes,1,opt,name=Path,proto3" json:"Path,omitempty"`
+	Authority     string                 `protobuf:"bytes,2,opt,name=Authority,proto3" json:"Authority,omitempty"`
+	Origin        string                 `protobuf:"bytes,3,opt,name=Origin,proto3" json:"Origin,omitempty"`
+	Encoding      string                 `protobuf:"bytes,4,opt,name=Encoding,proto3" json:"Encoding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -58,20 +61,44 @@ func (*Metas) Descriptor() ([]byte, []int) {
 	return file_proto_metas_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Metas) GetMeats() []string {
+func (x *Metas) GetPath() string {
 	if x != nil {
-		return x.Meats
+		return x.Path
 	}
-	return nil
+	return ""
+}
+
+func (x *Metas) GetAuthority() string {
+	if x != nil {
+		return x.Authority
+	}
+	return ""
+}
+
+func (x *Metas) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *Metas) GetEncoding() string {
+	if x != nil {
+		return x.Encoding
+	}
+	return ""
 }
 
 var File_proto_metas_proto protoreflect.FileDescriptor
 
 const file_proto_metas_proto_rawDesc = "" +
 	"\n" +
-	"\x11proto/metas.proto\x12\x02pb\"\x1d\n" +
-	"\x05Metas\x12\x14\n" +
-	"\x05Meats\x18\x01 \x03(\tR\x05MeatsB\bZ\x06./;apib\x06proto3"
+	"\x11proto/metas.proto\x12\x02pb\"m\n" +
+	"\x05Metas\x12\x12\n" +
+	"\x04Path\x18\x01 \x01(\tR\x04Path\x12\x1c\n" +
+	"\tAuthority\x18\x02 \x01(\tR\tAuthority\x12\x16\n" +
+	"\x06Origin\x18\x03 \x01(\tR\x06Origin\x12\x1a\n" +
+	"\bEncoding\x18\x04 \x01(\tR\bEncodingB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_proto_metas_proto_rawDescOnce sync.Once

@@ -149,12 +149,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err := proto.Unmarshal(meta, &metas); err != nil {
 				return err
 			}
-			var md MD = metas.Meats
-			path, ok := md.Get("path")
-			if !ok {
-				return InvalidArgument
-			}
-			handler, ok := x.Methods[path]
+			handler, ok := x.Methods[metas.Path]
 			if !ok {
 				return NotFound
 			}
@@ -165,15 +160,24 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
+			md, err := proto.Marshal(&api.Metas{})
+			if err != nil {
+				return err
+			}
 			if err := channel.writeMessageHeader(messageHeader{
 				StreamID: h.StreamID,
 				Length:   uint32(len(response)),
+				Offset:   uint16(len(md)),
 			}); err != nil {
 				return err
 			}
+			if len(md) > 0 {
+				if _, err := channel.bw.Write(md); err != nil {
+					return err
+				}
+			}
 			if len(response) > 0 {
-				_, err := channel.bw.Write(response)
-				if err != nil {
+				if _, err := channel.bw.Write(response); err != nil {
 					return err
 				}
 			}

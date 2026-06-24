@@ -3,5 +3,9 @@ package pb;
 option go_package = "./;api";
 
 message Metas {
-    repeated string Meats = 1;
+    string Path = 1;
+    string Authority = 2;
+    string Origin = 3;
+    string Encoding = 4;
+    string Code = 5;
 }

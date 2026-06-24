@@ -135,6 +135,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			debug.PrintStack()
 		}
 	}()
+	var md MD
 	channel := newChannel(c)
 	br, bw := bytes.Buffer{}, bytes.Buffer{}
 	enc, dec := gob.NewEncoder(&bw), gob.NewDecoder(&br)
@@ -150,7 +151,6 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 				return err
 			}
 			br.Write(meta)
-			var md MD
 			if err := dec.Decode(&md); err != nil {
 				return err
 			}

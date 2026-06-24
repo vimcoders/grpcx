@@ -205,18 +205,20 @@ var File_proto_grpc_proto protoreflect.FileDescriptor
 
 const file_proto_grpc_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/grpc.proto\x12\x02pb\"\x81\x01\n" +
+	"\x10proto/grpc.proto\x12\x03api\"\x81\x01\n" +
 	"\x05Metas\x12\x12\n" +
 	"\x04Path\x18\x01 \x01(\tR\x04Path\x12\x1c\n" +
 	"\tAuthority\x18\x02 \x01(\tR\tAuthority\x12\x16\n" +
 	"\x06Origin\x18\x03 \x01(\tR\x06Origin\x12\x1a\n" +
 	"\bEncoding\x18\x04 \x01(\tR\bEncoding\x12\x12\n" +
-	"\x04Code\x18\x05 \x01(\tR\x04Code\"D\n" +
-	"\aRequest\x12\x1f\n" +
-	"\x05metas\x18\x01 \x01(\v2\t.pb.MetasR\x05metas\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload\"E\n" +
-	"\bResponse\x12\x1f\n" +
-	"\x05metas\x18\x01 \x01(\v2\t.pb.MetasR\x05metas\x12\x18\n" +
+	"\x04Code\x18\x05 \x01(\tR\x04Code\"E\n" +
+	"\aRequest\x12 \n" +
+	"\x05metas\x18\x01 \x01(\v2\n" +
+	".api.MetasR\x05metas\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\"F\n" +
+	"\bResponse\x12 \n" +
+	"\x05metas\x18\x01 \x01(\v2\n" +
+	".api.MetasR\x05metas\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayloadB\bZ\x06./;apib\x06proto3"
 
 var (
@@ -233,13 +235,13 @@ func file_proto_grpc_proto_rawDescGZIP() []byte {
 
 var file_proto_grpc_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_proto_grpc_proto_goTypes = []any{
-	(*Metas)(nil),    // 0: pb.Metas
-	(*Request)(nil),  // 1: pb.Request
-	(*Response)(nil), // 2: pb.Response
+	(*Metas)(nil),    // 0: api.Metas
+	(*Request)(nil),  // 1: api.Request
+	(*Response)(nil), // 2: api.Response
 }
 var file_proto_grpc_proto_depIdxs = []int32{
-	0, // 0: pb.Request.metas:type_name -> pb.Metas
-	0, // 1: pb.Response.metas:type_name -> pb.Metas
+	0, // 0: api.Request.metas:type_name -> api.Metas
+	0, // 1: api.Response.metas:type_name -> api.Metas
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

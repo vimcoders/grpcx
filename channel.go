@@ -92,7 +92,7 @@ func (ch *channel) recv() (messageHeader, []byte, []byte, error) {
 	}
 
 	if mh.Length > uint32(messageLengthMax) {
-		if _, err := ch.br.Discard(int(mh.Length)); err != nil {
+		if _, err := ch.br.Discard(int(mh.Length) + int(mh.Offset)); err != nil {
 			return mh, nil, nil, fmt.Errorf("failed to discard after receiving oversized message: %w", err)
 		}
 

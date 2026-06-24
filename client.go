@@ -226,7 +226,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
-	s, err := c.createStream(nil, payload)
+	s, err := c.createStream(ctx, payload)
 	if err != nil {
 		return err
 	}

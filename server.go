@@ -154,7 +154,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 				return NotFound
 			}
 			reply, err := handler(x.impl, ctx, func(in any) error {
-				return x.codec.Unmarshal(payload, in)
+				return x.codec.Unmarshal(request.Payload, in)
 			}, x.interceptor)
 			response, err := x.codec.Marshal(reply)
 			if err != nil {

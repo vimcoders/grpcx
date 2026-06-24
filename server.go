@@ -1,9 +1,7 @@
 package ttrpc
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"fmt"
 	"log/slog"
 	"math"
@@ -11,10 +9,12 @@ import (
 	"path"
 	"runtime/debug"
 	"time"
+	"ttrpc/generated/api"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type ServerOption interface {
@@ -135,25 +135,21 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			debug.PrintStack()
 		}
 	}()
-	var md MD
 	channel := newChannel(c)
-	br, bw := bytes.Buffer{}, bytes.Buffer{}
-	enc, dec := gob.NewEncoder(&bw), gob.NewDecoder(&br)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-			bw.Reset()
-			br.Reset()
 			h, meta, payload, err := channel.recv()
 			if err != nil {
 				return err
 			}
-			br.Write(meta)
-			if err := dec.Decode(&md); err != nil {
+			var metas api.Metas
+			if err := proto.Unmarshal(meta, &metas); err != nil {
 				return err
 			}
+			var md MD = metas.Meats
 			path, ok := md.Get("path")
 			if !ok {
 				return InvalidArgument
@@ -169,21 +165,11 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
-			if err := enc.Encode(md); err != nil {
-				return err
-			}
 			if err := channel.writeMessageHeader(messageHeader{
 				StreamID: h.StreamID,
 				Length:   uint32(len(response)),
-				Offset:   uint16(len(bw.Bytes())),
 			}); err != nil {
 				return err
-			}
-			if len(bw.Bytes()) > 0 {
-				_, err := channel.bw.Write(bw.Bytes())
-				if err != nil {
-					return err
-				}
 			}
 			if len(response) > 0 {
 				_, err := channel.bw.Write(response)

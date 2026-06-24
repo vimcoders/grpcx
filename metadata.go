@@ -22,44 +22,34 @@ import (
 )
 
 // MD is the user type for ttrpc metadata
-type MD map[string][]string
+type MD []string
 
 // Get returns the metadata for a given key when they exist.
 // If there is no metadata, a nil slice and false are returned.
 func (m MD) Get(key string) (string, bool) {
 	key = strings.ToLower(key)
-	list, ok := m[key]
-	if !ok || len(list) == 0 {
-		return "", false
+	for i := 0; i < len(m); i += 2 {
+		if strings.ToLower(m[i]) == key {
+			return m[i+1], true
+		}
 	}
-
-	return list[0], true
-}
-
-// Set sets the provided values for a given key.
-// The values will overwrite any existing values.
-// If no values provided, a key will be deleted.
-func (m MD) Set(key string, values ...string) {
-	key = strings.ToLower(key)
-	if len(values) == 0 {
-		delete(m, key)
-		return
-	}
-	m[key] = values
+	return "", false
 }
 
 // Append appends additional values to the given key.
-func (m MD) Append(key string, values ...string) {
+func (m MD) Append(key string, values string) {
 	key = strings.ToLower(key)
 	if len(values) == 0 {
+		// Find and remove the key-value pair
+		for i := 0; i < len(m); i += 2 {
+			if strings.ToLower(m[i]) == key {
+				return
+			}
+		}
 		return
 	}
-	current, ok := m[key]
-	if ok {
-		m.Set(key, append(current, values...)...)
-	} else {
-		m.Set(key, values...)
-	}
+	// Key not found, append the new key-value pair
+	m = append(m, key, values)
 }
 
 // Clone returns a copy of MD or nil if it's nil.
@@ -70,23 +60,9 @@ func (m MD) Clone() MD {
 		return nil
 	}
 
-	// Find total number of values.
-	nv := 0
-	for _, vv := range m {
-		nv += len(vv)
-	}
-	sv := make([]string, nv) // shared backing array for headers' values
 	m2 := make(MD, len(m))
-	for k, vv := range m {
-		if vv == nil {
-			// Preserve nil values.
-			m2[k] = nil
-			continue
-		}
-		n := copy(sv, vv)
-		m2[k] = sv[:n:n]
-		sv = sv[n:]
-	}
+	copy(m2, m)
+
 	return m2
 }
 

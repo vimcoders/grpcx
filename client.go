@@ -27,6 +27,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type Client struct {
@@ -226,7 +227,14 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
-	s, err := c.createStream(ctx, payload)
+	b, err := proto.Marshal(&api.Request{
+		Metas:   &api.Metas{},
+		Payload: payload,
+	})
+	if err != nil {
+		return err
+	}
+	s, err := c.createStream(ctx, b)
 	if err != nil {
 		return err
 	}

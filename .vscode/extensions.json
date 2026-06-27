@@ -1,0 +1,13 @@
+{
+  // 推荐的扩展（会自动提示安装缺失的扩展）
+  "recommendations": [
+    // Protobuf 语法支持
+    "zxh404.vscode-proto3",
+    // 监听proto文件变化
+    "appulate.filewatcher",
+    // Go for Visual Studio Code
+    "golang.go",
+  ],
+  // 不推荐的扩展（可选）
+  "unwantedRecommendations": []
+}

@@ -26,6 +26,7 @@ import (
 	"ttrpc/generated/api"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -220,6 +221,28 @@ func filterCloseErr(err error) error {
 	}
 
 	return err
+}
+
+func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	b, err := proto.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	s, err := c.createStream(ctx, b)
+	if err != nil {
+		return nil, err
+	}
+	defer c.deleteStream(s)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.ctx.Done():
+		return nil, ErrClosed
+	case <-s.recvClose:
+		return nil, status.Errorf(codes.Canceled, "stream closed")
+	case msg := <-s.recv:
+		return msg, nil
+	}
 }
 
 func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {

@@ -6,4 +6,3 @@
 --go_out=%~dp0api ^
 --go-grpc_out=%~dp0api ^
 %~dp0proto\*.proto
-pause

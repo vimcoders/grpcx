@@ -95,12 +95,14 @@ func (c *Client) receiveLoop() error {
 			if s == nil {
 				continue
 			}
-
-			if err != nil {
+			var response api.Response
+			if err := proto.Unmarshal(payload, &response); err != nil {
 				s.closeWithError(err)
-			} else {
-				if err := s.receive(c.ctx, &api.Response{Payload: payload}); err != nil {
-				}
+				continue
+			}
+			if err := s.receive(c.ctx, &response); err != nil {
+				s.closeWithError(err)
+				continue
 			}
 		}
 	}

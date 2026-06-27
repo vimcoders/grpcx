@@ -145,10 +145,12 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
+			slog.Info("Handle", "h", h, "payload", payload)
 			var request api.Request
 			if err := proto.Unmarshal(payload, &request); err != nil {
 				return err
 			}
+			slog.Info("Handle", "request", &request, "methods", x.Methods)
 			handler, ok := x.Methods[request.Metas.Path]
 			if !ok {
 				return NotFound

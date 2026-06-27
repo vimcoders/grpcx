@@ -236,28 +236,13 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
-	b, err := proto.Marshal(&api.Request{
-		Metas:   &api.Metas{},
-		Payload: payload,
-	})
+	response, err := c.RoundTrip(ctx, &api.Request{Metas: &api.Metas{Path: method}, Payload: payload})
 	if err != nil {
 		return err
 	}
-	s, err := c.createStream(ctx, b)
-	if err != nil {
+
+	if err = c.codec.Unmarshal(response.Payload, reply); err != nil {
 		return err
-	}
-	defer c.deleteStream(s)
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-c.ctx.Done():
-		return ErrClosed
-	case <-s.recvClose:
-	case msg := <-s.recv:
-		if err = c.codec.Unmarshal(msg.Payload, reply); err != nil {
-			return err
-		}
 	}
 	return nil
 }

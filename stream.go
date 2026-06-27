@@ -26,6 +26,7 @@ type stream struct {
 	id     uint32
 	sender sender
 	recv   chan *api.Response
+	codec
 
 	closeOnce sync.Once
 	recvErr   error
@@ -53,11 +54,19 @@ func (s *stream) closeWithError(err error) error {
 	return nil
 }
 
-func (s *stream) send(ctx context.Context, b []byte) error {
+func (s *stream) send(ctx context.Context, req *api.Request) error {
+	if req.Metas == nil {
+		req.Metas = &api.Metas{}
+	}
+	req.Metas.StreamID = s.id
+	b, err := s.codec.Marshal(req)
+	if err != nil {
+		return err
+	}
 	return s.sender.send(s.id, b)
 }
 
-func (s *stream) receive(ctx context.Context, msg *api.Response) error {
+func (s *stream) receive(ctx context.Context, response *api.Response) error {
 	select {
 	case <-s.recvClose:
 		return s.recvErr
@@ -66,7 +75,7 @@ func (s *stream) receive(ctx context.Context, msg *api.Response) error {
 	select {
 	case <-s.recvClose:
 		return s.recvErr
-	case s.recv <- msg:
+	case s.recv <- response:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

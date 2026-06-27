@@ -215,11 +215,7 @@ func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	if req.Metas != nil {
 		req.Metas.StreamID = s.id
 	}
-	b, err := proto.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.send(ctx, b); err != nil {
+	if err := s.send(ctx, req); err != nil {
 		return nil, err
 	}
 	select {

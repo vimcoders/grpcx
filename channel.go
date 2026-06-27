@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -29,36 +30,12 @@ import (
 )
 
 const (
-	messageHeaderLength = 8
+	messageHeaderLength = 4
 	messageLengthMax    = 4 << 20
 )
 
 // messageHeader represents the fixed-length message header of 10 bytes sent
 // with every request.
-type messageHeader struct {
-	Length   uint32 // length excluding this header. b[:4]
-	StreamID uint32 // identifies which request stream message is a part of. b[4:8]
-}
-
-func (ch *channel) readMessageHeader() (messageHeader, error) {
-	_, err := io.ReadFull(ch.br, ch.hrbuf[:])
-	if err != nil {
-		return messageHeader{}, err
-	}
-
-	return messageHeader{
-		Length:   binary.BigEndian.Uint32(ch.hrbuf[:4]),
-		StreamID: binary.BigEndian.Uint32(ch.hrbuf[4:8]),
-	}, nil
-}
-
-func (ch *channel) writeMessageHeader(mh messageHeader) error {
-	binary.BigEndian.PutUint32(ch.hwbuf[:4], mh.Length)
-	binary.BigEndian.PutUint32(ch.hwbuf[4:8], mh.StreamID)
-	_, err := ch.bw.Write(ch.hwbuf[:])
-	return err
-}
-
 var buffers sync.Pool
 
 type channel struct {
@@ -83,40 +60,40 @@ func newChannel(conn net.Conn) *channel {
 // returned will be valid and caller should send that along to
 // the correct consumer. The bytes on the underlying channel
 // will be discarded.
-func (ch *channel) recv() (messageHeader, []byte, error) {
-	mh, err := ch.readMessageHeader()
+func (ch *channel) recv() ([]byte, error) {
+	_, err := io.ReadFull(ch.br, ch.hrbuf[:])
 	if err != nil {
-		return messageHeader{}, nil, err
+		return nil, err
 	}
 
-	if mh.Length > uint32(messageLengthMax) {
-		if _, err := ch.br.Discard(int(mh.Length)); err != nil {
-			return mh, nil, fmt.Errorf("failed to discard after receiving oversized message: %w", err)
+	mh := binary.BigEndian.Uint32(ch.hrbuf[:4])
+	slog.Info("recv", "messageHeader", mh)
+
+	if mh > uint32(messageLengthMax) {
+		if _, err := ch.br.Discard(int(mh)); err != nil {
+			return nil, fmt.Errorf("failed to discard after receiving oversized message: %w", err)
 		}
 
-		return mh, nil, status.Errorf(codes.ResourceExhausted, "message length %v exceed maximum message size of %v", mh.Length, messageLengthMax)
+		return nil, status.Errorf(codes.ResourceExhausted, "message length %v exceed maximum message size of %v", mh, messageLengthMax)
 	}
 
 	var p []byte
-	if mh.Length > 0 {
-		p = ch.getmbuf(int(mh.Length))
+	if mh > 0 {
+		p = ch.getmbuf(int(mh))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
-			return messageHeader{}, nil, fmt.Errorf("failed reading message: %w", err)
+			return nil, fmt.Errorf("failed reading message: %w", err)
 		}
 	}
 
-	return mh, p, nil
+	return p, nil
 }
 
 func (ch *channel) send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
 		return OversizedMessageError(len(p))
 	}
-
-	if err := ch.writeMessageHeader(messageHeader{
-		Length:   uint32(len(p)),
-		StreamID: streamID,
-	}); err != nil {
+	binary.BigEndian.PutUint32(ch.hwbuf[:4], uint32(len(p)))
+	if _, err := ch.bw.Write(ch.hwbuf[:]); err != nil {
 		return err
 	}
 

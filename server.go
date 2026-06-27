@@ -2,6 +2,7 @@ package ttrpc
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"math"
@@ -141,16 +142,14 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 		case <-ctx.Done():
 			return nil
 		default:
-			h, payload, err := channel.recv()
+			payload, err := channel.recv()
 			if err != nil {
 				return err
 			}
-			slog.Info("Handle", "h", h, "payload", payload)
 			var request api.Request
 			if err := proto.Unmarshal(payload, &request); err != nil {
 				return err
 			}
-			slog.Info("Handle", "request", &request, "methods", x.Methods)
 			handler, ok := x.Methods[request.Metas.Path]
 			if !ok {
 				return NotFound
@@ -169,10 +168,8 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
-			if err := channel.writeMessageHeader(messageHeader{
-				StreamID: h.StreamID,
-				Length:   uint32(len(b)),
-			}); err != nil {
+			binary.BigEndian.PutUint32(channel.hwbuf[:], uint32(len(b)))
+			if _, err := channel.bw.Write(channel.hwbuf[:]); err != nil {
 				return err
 			}
 			if len(b) > 0 {

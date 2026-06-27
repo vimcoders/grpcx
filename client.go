@@ -72,8 +72,11 @@ func NewClient(conn net.Conn, opts ...ClientOpts) grpc.ClientConnInterface {
 
 func (c *Client) run() {
 	err := c.receiveLoop()
-	c.Close()
-	c.cleanupStreams(err)
+	if err != nil {
+		c.Close()
+		c.cleanupStreams(err)
+		slog.Error("receiveLoop", "err", err)
+	}
 }
 
 func (c *Client) receiveLoop() error {
@@ -82,7 +85,7 @@ func (c *Client) receiveLoop() error {
 		case <-c.ctx.Done():
 			return ErrClosed
 		default:
-			h, payload, err := c.channel.recv()
+			payload, err := c.channel.recv()
 			if err != nil {
 				_, ok := status.FromError(err)
 				if !ok {
@@ -91,15 +94,15 @@ func (c *Client) receiveLoop() error {
 					return filterCloseErr(err)
 				}
 			}
-			s := c.getStream(h.StreamID)
+			var response api.Response
+			if err := proto.Unmarshal(payload, &response); err != nil {
+				return err
+			}
+			s := c.getStream(response.Metas.StreamID)
 			if s == nil {
 				continue
 			}
-			var response api.Response
-			if err := proto.Unmarshal(payload, &response); err != nil {
-				s.closeWithError(err)
-				continue
-			}
+
 			if err := s.receive(c.ctx, &response); err != nil {
 				s.closeWithError(err)
 				continue
@@ -110,7 +113,7 @@ func (c *Client) receiveLoop() error {
 
 // createStream creates a new stream and registers it with the client
 // Introduce stream types for multiple or single response
-func (c *Client) createStream(ctx context.Context, b []byte) (*stream, error) {
+func (c *Client) createStream(_ context.Context) (*stream, error) {
 	// sendLock must be held across both allocation of the stream ID and sending it across the wire.
 	// This ensures that new stream IDs sent on the wire are always increasing, which is a
 	// requirement of the TTRPC protocol.
@@ -145,10 +148,6 @@ func (c *Client) createStream(ctx context.Context, b []byte) (*stream, error) {
 		return nil
 	}(); err != nil {
 		return nil, err
-	}
-
-	if err := s.send(ctx, b); err != nil {
-		return s, filterCloseErr(err)
 	}
 
 	return s, nil
@@ -208,17 +207,21 @@ func filterCloseErr(err error) error {
 }
 
 func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	s, err := c.createStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.deleteStream(s)
+	if req.Metas != nil {
+		req.Metas.StreamID = s.id
+	}
 	b, err := proto.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	slog.Info("RoundTrip", "b", b)
-	s, err := c.createStream(ctx, b)
-	if err != nil {
+	if err := s.send(ctx, b); err != nil {
 		return nil, err
 	}
-	slog.Info("RoundTrip", "stream", b)
-	defer c.deleteStream(s)
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -236,7 +239,6 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
-	slog.Info("Invoke", "payload", payload)
 	response, err := c.RoundTrip(ctx, &api.Request{Metas: &api.Metas{Path: method}, Payload: payload})
 	if err != nil {
 		return err

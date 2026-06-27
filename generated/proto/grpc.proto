@@ -8,6 +8,7 @@ message Metas {
     string Origin = 3;
     string Encoding = 4;
     string Code = 5;
+    uint32 StreamID = 6;
 }
 
 message Request {

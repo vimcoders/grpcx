@@ -32,11 +32,9 @@ func TestEcho(t *testing.T) {
 		return
 	}
 	slog.Info("connected 127.0.0.1:50051")
-	client := ttrpc.NewClient(c)
-	slog.Info("NewCliented")
+	cc := ttrpc.NewClient(c)
 	req := &api.EchoRequest{Message: "Hello, ttrpc!"}
-	resp := &api.EchoResponse{}
-	err = client.Invoke(context.Background(), "/api.EchoService/Echo", req, resp)
+	resp, err := api.NewEchoServiceClient(cc).Echo(context.Background(), req)
 	if err != nil {
 		t.Errorf("failed to call Echo: %v", err)
 		return

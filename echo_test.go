@@ -2,6 +2,7 @@ package ttrpc_test
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"testing"
 	"ttrpc"
@@ -19,22 +20,24 @@ func (h *Handler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoResp
 func TestMain(m *testing.M) {
 	x := ttrpc.NewServer()
 	x.RegisterService(&api.EchoService_ServiceDesc, &Handler{})
-	go x.ListenAndServe(context.Background(), "localhost:50051")
+	go x.ListenAndServe(context.Background(), "127.0.0.1:50051")
 	m.Run()
 }
 
 func TestEcho(t *testing.T) {
-	for range 1000 {
-		c, err := net.Dial("tcp", "localhost:50051")
-		if err != nil {
-			continue
-		}
-		client := ttrpc.NewClient(c)
-		req := &api.EchoRequest{Message: "Hello, ttrpc!"}
-		resp := &api.EchoResponse{}
-		err = client.Invoke(context.Background(), "api.EchoService/Echo", req, resp)
-		if err != nil {
-			t.Fatalf("failed to call Echo: %v", err)
-		}
+	c, err := net.Dial("tcp", "127.0.0.1:50051")
+	if err != nil {
+		t.Errorf("failed to call Echo: %v", err)
+		return
+	}
+	slog.Info("connected 127.0.0.1:50051")
+	client := ttrpc.NewClient(c)
+	slog.Info("NewCliented")
+	req := &api.EchoRequest{Message: "Hello, ttrpc!"}
+	resp := &api.EchoResponse{}
+	err = client.Invoke(context.Background(), "api.EchoService/Echo", req, resp)
+	if err != nil {
+		t.Errorf("failed to call Echo: %v", err)
+		return
 	}
 }

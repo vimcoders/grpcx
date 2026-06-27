@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -36,10 +37,9 @@ type Client struct {
 	conn    net.Conn
 	channel *channel
 
-	streamLock   sync.RWMutex
 	streams      map[uint32]*stream
 	nextStreamID uint32
-	sendLock     sync.Mutex
+	sync.RWMutex
 
 	ctx    context.Context
 	closed func()
@@ -114,8 +114,8 @@ func (c *Client) createStream(ctx context.Context, b []byte) (*stream, error) {
 	// requirement of the TTRPC protocol.
 	// This use of sendLock could be split into another mutex that covers stream creation + first send,
 	// and just use sendLock to guard writing to the wire, but for now it seems simpler to have fewer mutexes.
-	c.sendLock.Lock()
-	defer c.sendLock.Unlock()
+	c.Lock()
+	defer c.Unlock()
 
 	// Check if closed since lock acquired to prevent adding
 	// anything after cleanup completes
@@ -128,9 +128,6 @@ func (c *Client) createStream(ctx context.Context, b []byte) (*stream, error) {
 	var s *stream
 	if err := func() error {
 		// In the future this could be replaced with a sync.Map instead of streamLock+map.
-		c.streamLock.Lock()
-		defer c.streamLock.Unlock()
-
 		// Check if closed since lock acquired to prevent adding
 		// anything after cleanup completes
 		select {
@@ -156,23 +153,22 @@ func (c *Client) createStream(ctx context.Context, b []byte) (*stream, error) {
 }
 
 func (c *Client) deleteStream(s *stream) {
-	c.streamLock.Lock()
+	c.Lock()
+	defer c.Unlock()
 	delete(c.streams, s.id)
-	c.streamLock.Unlock()
 	s.closeWithError(nil)
 }
 
 func (c *Client) getStream(sid uint32) *stream {
-	c.streamLock.RLock()
+	c.RLock()
+	defer c.RUnlock()
 	s := c.streams[sid]
-	c.streamLock.RUnlock()
 	return s
 }
 
 func (c *Client) cleanupStreams(err error) {
-	c.streamLock.Lock()
-	defer c.streamLock.Unlock()
-
+	c.Lock()
+	defer c.Unlock()
 	for sid, s := range c.streams {
 		s.closeWithError(err)
 		delete(c.streams, sid)
@@ -214,10 +210,12 @@ func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("RoundTrip", "b", b)
 	s, err := c.createStream(ctx, b)
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("RoundTrip", "stream", b)
 	defer c.deleteStream(s)
 	select {
 	case <-ctx.Done():
@@ -236,6 +234,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
+	slog.Info("Invoke", "payload", payload)
 	response, err := c.RoundTrip(ctx, &api.Request{Metas: &api.Metas{Path: method}, Payload: payload})
 	if err != nil {
 		return err

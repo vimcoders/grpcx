@@ -44,33 +44,22 @@ type Client struct {
 	ctx    context.Context
 	closed func()
 
-	closeOnce       sync.Once
-	userCloseFunc   func()
-	userCloseWaitCh chan struct{}
+	closeOnce sync.Once
 }
 
 type ClientOpts func(c *Client)
-
-// WithOnClose sets the close func whenever the client's Close() method is called
-func WithOnClose(onClose func()) ClientOpts {
-	return func(c *Client) {
-		c.userCloseFunc = onClose
-	}
-}
 
 // NewClient creates a new ttrpc client using the given connection
 func NewClient(conn net.Conn, opts ...ClientOpts) grpc.ClientConnInterface {
 	ctx, cancel := context.WithCancel(context.Background())
 	channel := newChannel(conn)
 	c := &Client{
-		codec:           codec{},
-		channel:         channel,
-		streams:         make(map[uint32]*stream),
-		nextStreamID:    1,
-		closed:          cancel,
-		ctx:             ctx,
-		userCloseFunc:   func() {},
-		userCloseWaitCh: make(chan struct{}),
+		codec:        codec{},
+		channel:      channel,
+		streams:      make(map[uint32]*stream),
+		nextStreamID: 1,
+		closed:       cancel,
+		ctx:          ctx,
 	}
 
 	for _, o := range opts {
@@ -85,9 +74,6 @@ func (c *Client) run() {
 	err := c.receiveLoop()
 	c.Close()
 	c.cleanupStreams(err)
-
-	c.userCloseFunc()
-	close(c.userCloseWaitCh)
 }
 
 func (c *Client) receiveLoop() error {

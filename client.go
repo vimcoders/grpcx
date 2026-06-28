@@ -180,7 +180,13 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 		return err
 	}
 	for range c.retries {
-		response, err := c.RoundTrip(ctx, &api.Request{Metas: &api.Metas{Path: method}, Payload: payload})
+		response, err := c.RoundTrip(ctx, &api.Request{
+			Metas: &api.Metas{
+				Path:      method,
+				Authority: GetAuthority(ctx),
+			},
+			Payload: payload,
+		})
 		if err != nil {
 			return err
 		}

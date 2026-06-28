@@ -171,7 +171,7 @@ func (x *Server) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 			Message: fmt.Sprintf("no such method %s", req.Metas.Path),
 		}, nil
 	}
-	reply, err := handler(x.impl, ctx, func(in any) error {
+	reply, err := handler(x.impl, WithAuthority(ctx, req.Metas.Authority), func(in any) error {
 		return x.codec.Unmarshal(req.Payload, in)
 	}, x.interceptor)
 	if err != nil {

@@ -88,7 +88,7 @@ func (c *Client) run(ctx context.Context) {
 		c.channel = newChannel(cc)
 		c.ctx = ctx
 		c.closed = cancel
-		go c.run(ctx)
+		c.run(ctx)
 	}
 }
 

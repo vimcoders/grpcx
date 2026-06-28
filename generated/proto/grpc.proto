@@ -7,16 +7,15 @@ message Metas {
     string Authority = 2;
     string Origin = 3;
     string Encoding = 4;
-    string Status = 5;
-    uint32 StreamID = 6;
 }
 
 message Request {
-    Metas metas = 1;
-    bytes payload = 2;
+    Metas Metas = 1;
+    bytes Payload = 2;
 }
 
 message Response {
-    Metas metas = 1;
-    bytes payload = 2;
+    uint32 Code = 2;
+    string Message = 1;
+    bytes Payload = 3;
 }

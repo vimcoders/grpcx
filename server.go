@@ -13,7 +13,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -129,12 +128,6 @@ func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ServerO
 }
 
 func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			slog.Error(fmt.Sprintf("%s", e))
-			debug.PrintStack()
-		}
-	}()
 	channel := newChannel(c)
 	for {
 		select {
@@ -150,23 +143,11 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 				return err
 			}
 			channel.putmbuf(payload)
-			handler, ok := x.Methods[request.Metas.Path]
-			if !ok {
-				return NotFound.Err()
-			}
-			reply, err := handler(x.impl, ctx, func(in any) error {
-				return x.codec.Unmarshal(request.Payload, in)
-			}, x.interceptor)
-			metas := api.Metas{Status: OK.Message()}
-			response, err := x.codec.Marshal(reply)
+			response, err := x.RoundTrip(ctx, &request)
 			if err != nil {
-				metas.Status = Unavailable.Message()
 				return err
 			}
-			b, err := x.codec.Marshal(&api.Response{
-				Metas:   &metas,
-				Payload: response,
-			})
+			b, err := x.codec.Marshal(response)
 			if err != nil {
 				return err
 			}
@@ -177,11 +158,39 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-var Unavailable = status.New(codes.Unavailable, codes.Unavailable.String())                   // 框架默认，可重试
-var OK = status.New(codes.OK, codes.OK.String())                                              // 执行成功
-var InvalidArgument = status.New(codes.InvalidArgument, codes.Internal.String())              // 客户端传参错误
-var ResourceExhausted = status.New(codes.ResourceExhausted, codes.ResourceExhausted.String()) // 告诉客户端退避
-var Canceled = status.New(codes.Canceled, codes.Canceled.String())                            // 被取消
-var Unauthenticated = status.New(codes.Unauthenticated, codes.Unauthenticated.String())       // 需要重新登录 / 换 Token
-var Unknown = status.New(codes.Unknown, codes.Unknown.String())                               // 未知错误
-var NotFound = status.New(codes.NotFound, codes.NotFound.String())                            // 没有找到对应的方法
+func (x *Server) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	defer func() {
+		if e := recover(); e != nil {
+			slog.Error(fmt.Sprintf("%s", e))
+			debug.PrintStack()
+		}
+	}()
+	handler, ok := x.Methods[req.Metas.Path]
+	if !ok {
+		return &api.Response{
+			Code:    uint32(codes.NotFound),
+			Message: fmt.Sprintf("no such method %s", req.Metas.Path),
+		}, nil
+	}
+	reply, err := handler(x.impl, ctx, func(in any) error {
+		return x.codec.Unmarshal(req.Payload, in)
+	}, x.interceptor)
+	if err != nil {
+		return &api.Response{
+			Code:    uint32(codes.Unavailable),
+			Message: err.Error(),
+		}, nil
+	}
+	response, err := x.codec.Marshal(reply)
+	if err != nil {
+		return &api.Response{
+			Code:    uint32(codes.Unavailable),
+			Message: err.Error(),
+		}, nil
+	}
+	return &api.Response{
+		Code:    uint32(codes.OK),
+		Message: codes.OK.String(),
+		Payload: response,
+	}, nil
+}

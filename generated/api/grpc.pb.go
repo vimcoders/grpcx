@@ -27,8 +27,6 @@ type Metas struct {
 	Authority     string                 `protobuf:"bytes,2,opt,name=Authority,proto3" json:"Authority,omitempty"`
 	Origin        string                 `protobuf:"bytes,3,opt,name=Origin,proto3" json:"Origin,omitempty"`
 	Encoding      string                 `protobuf:"bytes,4,opt,name=Encoding,proto3" json:"Encoding,omitempty"`
-	Status        string                 `protobuf:"bytes,5,opt,name=Status,proto3" json:"Status,omitempty"`
-	StreamID      uint32                 `protobuf:"varint,6,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -91,24 +89,10 @@ func (x *Metas) GetEncoding() string {
 	return ""
 }
 
-func (x *Metas) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
-}
-
-func (x *Metas) GetStreamID() uint32 {
-	if x != nil {
-		return x.StreamID
-	}
-	return 0
-}
-
 type Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Metas         *Metas                 `protobuf:"bytes,1,opt,name=metas,proto3" json:"metas,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
+	Metas         *Metas                 `protobuf:"bytes,1,opt,name=Metas,proto3" json:"Metas,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -159,8 +143,9 @@ func (x *Request) GetPayload() []byte {
 
 type Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Metas         *Metas                 `protobuf:"bytes,1,opt,name=metas,proto3" json:"metas,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
+	Code          uint32                 `protobuf:"varint,2,opt,name=Code,proto3" json:"Code,omitempty"`
+	Message       string                 `protobuf:"bytes,1,opt,name=Message,proto3" json:"Message,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,3,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -195,11 +180,18 @@ func (*Response) Descriptor() ([]byte, []int) {
 	return file_proto_grpc_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *Response) GetMetas() *Metas {
+func (x *Response) GetCode() uint32 {
 	if x != nil {
-		return x.Metas
+		return x.Code
 	}
-	return nil
+	return 0
+}
+
+func (x *Response) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
 }
 
 func (x *Response) GetPayload() []byte {
@@ -213,22 +205,20 @@ var File_proto_grpc_proto protoreflect.FileDescriptor
 
 const file_proto_grpc_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/grpc.proto\x12\x03api\"\xa1\x01\n" +
+	"\x10proto/grpc.proto\x12\x03api\"m\n" +
 	"\x05Metas\x12\x12\n" +
 	"\x04Path\x18\x01 \x01(\tR\x04Path\x12\x1c\n" +
 	"\tAuthority\x18\x02 \x01(\tR\tAuthority\x12\x16\n" +
 	"\x06Origin\x18\x03 \x01(\tR\x06Origin\x12\x1a\n" +
-	"\bEncoding\x18\x04 \x01(\tR\bEncoding\x12\x16\n" +
-	"\x06Status\x18\x05 \x01(\tR\x06Status\x12\x1a\n" +
-	"\bStreamID\x18\x06 \x01(\rR\bStreamID\"E\n" +
+	"\bEncoding\x18\x04 \x01(\tR\bEncoding\"E\n" +
 	"\aRequest\x12 \n" +
-	"\x05metas\x18\x01 \x01(\v2\n" +
-	".api.MetasR\x05metas\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload\"F\n" +
-	"\bResponse\x12 \n" +
-	"\x05metas\x18\x01 \x01(\v2\n" +
-	".api.MetasR\x05metas\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayloadB\bZ\x06./;apib\x06proto3"
+	"\x05Metas\x18\x01 \x01(\v2\n" +
+	".api.MetasR\x05Metas\x12\x18\n" +
+	"\aPayload\x18\x02 \x01(\fR\aPayload\"R\n" +
+	"\bResponse\x12\x12\n" +
+	"\x04Code\x18\x02 \x01(\rR\x04Code\x12\x18\n" +
+	"\aMessage\x18\x01 \x01(\tR\aMessage\x12\x18\n" +
+	"\aPayload\x18\x03 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_proto_grpc_proto_rawDescOnce sync.Once
@@ -249,13 +239,12 @@ var file_proto_grpc_proto_goTypes = []any{
 	(*Response)(nil), // 2: api.Response
 }
 var file_proto_grpc_proto_depIdxs = []int32{
-	0, // 0: api.Request.metas:type_name -> api.Metas
-	0, // 1: api.Response.metas:type_name -> api.Metas
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // 0: api.Request.Metas:type_name -> api.Metas
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_proto_grpc_proto_init() }

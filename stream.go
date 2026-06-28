@@ -46,8 +46,6 @@ func (s *stream) closeWithError(err error) error {
 	s.closeOnce.Do(func() {
 		if err != nil {
 			s.recvErr = err
-		} else {
-			s.recvErr = ErrClosed
 		}
 		close(s.recvClose)
 	})
@@ -55,16 +53,10 @@ func (s *stream) closeWithError(err error) error {
 }
 
 func (s *stream) send(ctx context.Context, b []byte) error {
-
 	return s.sender.send(s.id, b)
 }
 
 func (s *stream) receive(ctx context.Context, response *api.Response) error {
-	select {
-	case <-s.recvClose:
-		return s.recvErr
-	default:
-	}
 	select {
 	case <-s.recvClose:
 		return s.recvErr

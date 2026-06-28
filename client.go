@@ -17,13 +17,9 @@ package ttrpc
 
 import (
 	"context"
-	"errors"
-	"io"
 	"log/slog"
 	"net"
-	"strings"
 	"sync"
-	"syscall"
 	"ttrpc/generated/api"
 
 	"google.golang.org/grpc"
@@ -42,6 +38,7 @@ type Client struct {
 	ctx          context.Context
 	closed       func()
 	closeOnce    sync.Once
+	retries      int32
 }
 
 type ClientOpts func(c *Client)
@@ -57,6 +54,7 @@ func NewClient(conn net.Conn, opts ...ClientOpts) grpc.ClientConnInterface {
 		nextStreamID: 1,
 		closed:       cancel,
 		ctx:          ctx,
+		retries:      3,
 	}
 
 	for _, o := range opts {
@@ -80,16 +78,11 @@ func (c *Client) receiveLoop() error {
 	for {
 		select {
 		case <-c.ctx.Done():
-			return ErrClosed
+			return Canceled.Err()
 		default:
 			streamID, payload, err := c.channel.recv()
 			if err != nil {
-				_, ok := status.FromError(err)
-				if !ok {
-					// treat all errors that are not an rpc status as terminal.
-					// all others poison the connection.
-					return filterCloseErr(err)
-				}
+				return err
 			}
 			var response api.Response
 			if err := proto.Unmarshal(payload, &response); err != nil {
@@ -124,9 +117,9 @@ func (c *Client) createStream(ctx context.Context) (*stream, error) {
 	// anything after cleanup completes
 	select {
 	case <-c.ctx.Done():
-		return nil, ErrClosed
+		return nil, Canceled.Err()
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, Canceled.Err()
 	default:
 		s := newStream(c.nextStreamID, c.channel)
 		c.streams[s.id] = s
@@ -158,52 +151,13 @@ func (c *Client) cleanupStreams(err error) {
 	}
 }
 
-// filterCloseErr rewrites EOF and EPIPE errors to ErrClosed. Use when
-// returning from call or handling errors from main read loop.
-//
-// This purposely ignores errors with a wrapped cause.
-func filterCloseErr(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case err == io.EOF:
-		return ErrClosed
-	case errors.Is(err, io.ErrClosedPipe):
-		return ErrClosed
-	case errors.Is(err, io.EOF):
-		return ErrClosed
-	case strings.Contains(err.Error(), "use of closed network connection"):
-		return ErrClosed
-	default:
-		// if we have an epipe on a write or econnreset on a read , we cast to errclosed
-		var oerr *net.OpError
-		if errors.As(err, &oerr) {
-			if (oerr.Op == "write" && errors.Is(err, syscall.EPIPE)) ||
-				(oerr.Op == "read" && errors.Is(err, syscall.ECONNRESET)) {
-				return ErrClosed
-			}
-		}
-	}
-
-	return err
-}
-
 func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.deleteStream(s)
-	b, err := c.codec.Marshal(&api.Request{
-		Metas: &api.Metas{
-			Path:      req.Metas.Path,
-			StreamID:  req.Metas.StreamID,
-			Authority: req.Metas.Authority,
-			Origin:    req.Metas.Origin,
-			Encoding:  req.Metas.Encoding,
-		},
-		Payload: req.Payload,
-	})
+	b, err := c.codec.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
@@ -214,9 +168,9 @@ func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.ctx.Done():
-		return nil, ErrClosed
+		return nil, status.New(codes.Canceled, codes.Canceled.String()).Err()
 	case <-s.recvClose:
-		return nil, status.Errorf(codes.Canceled, "stream closed")
+		return nil, status.New(codes.Canceled, codes.Canceled.String()).Err()
 	case msg := <-s.recv:
 		return msg, nil
 	}
@@ -227,15 +181,24 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
-	response, err := c.RoundTrip(ctx, &api.Request{Metas: &api.Metas{Path: method}, Payload: payload})
-	if err != nil {
-		return err
+	for range c.retries {
+		response, err := c.RoundTrip(ctx, &api.Request{Metas: &api.Metas{Path: method}, Payload: payload})
+		if err != nil {
+			return err
+		}
+		switch codes.Code(response.Code) {
+		case codes.OK:
+			if err = c.codec.Unmarshal(response.Payload, reply); err != nil {
+				return err
+			}
+			return nil
+		case codes.Unavailable:
+			continue
+		default:
+			return status.New(codes.Code(response.Code), response.Message).Err()
+		}
 	}
-
-	if err = c.codec.Unmarshal(response.Payload, reply); err != nil {
-		return err
-	}
-	return nil
+	return status.New(codes.Unavailable, codes.Unavailable.String()).Err()
 }
 
 // NewStream creates a new stream with the given stream descriptor to the

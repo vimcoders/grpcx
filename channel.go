@@ -19,13 +19,9 @@ package ttrpc
 import (
 	"bufio"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"sync"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 const (
@@ -69,17 +65,17 @@ func (ch *channel) recv() (uint32, []byte, error) {
 
 	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {
-			return 0, nil, fmt.Errorf("failed to discard after receiving oversized message: %w", err)
+			return 0, nil, DataLoss.Err()
 		}
 
-		return 0, nil, status.Errorf(codes.ResourceExhausted, "message length %v exceed maximum message size of %v", h, messageLengthMax)
+		return 0, nil, DataLoss.Err()
 	}
 
 	var p []byte
 	if h > 0 {
 		p = ch.getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
-			return 0, nil, fmt.Errorf("failed reading message: %w", err)
+			return 0, nil, DataLoss.Err()
 		}
 	}
 
@@ -88,7 +84,7 @@ func (ch *channel) recv() (uint32, []byte, error) {
 
 func (ch *channel) send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
-		return OversizedMessageError(len(p))
+		return DataLoss.Err()
 	}
 	hwbuf := ch.getmbuf(messageHeaderLength)
 	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))

@@ -3,7 +3,6 @@ package ttrpc_test
 import (
 	"context"
 	"log/slog"
-	"net"
 	"testing"
 	"ttrpc"
 	"ttrpc/generated/api"
@@ -26,13 +25,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestEcho(t *testing.T) {
-	c, err := net.Dial("tcp", "127.0.0.1:50051")
+	cc, err := ttrpc.Dial("127.0.0.1:50051")
 	if err != nil {
 		t.Errorf("failed to call Echo: %v", err)
 		return
 	}
-	slog.Info("connected 127.0.0.1:50051")
-	cc := ttrpc.NewClient(c)
 	req := &api.EchoRequest{Message: "Hello, ttrpc!"}
 	resp, err := api.NewEchoServiceClient(cc).Echo(context.Background(), req)
 	if err != nil {

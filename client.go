@@ -17,7 +17,6 @@ package ttrpc
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"sync"
 	"ttrpc/generated/api"
@@ -30,54 +29,75 @@ import (
 
 type Client struct {
 	sync.RWMutex
-	codec        codec
-	conn         net.Conn
-	channel      *channel
-	streams      map[uint32]*stream
-	nextStreamID uint32
-	ctx          context.Context
-	closed       func()
-	closeOnce    sync.Once
-	retries      int32
+	codec    codec
+	conn     net.Conn
+	channel  *channel
+	streams  map[uint32]*stream
+	streamID uint32
+	ctx      context.Context
+	closed   func()
+	retries  int32
+	target   string
 }
 
 type ClientOpts func(c *Client)
 
-// NewClient creates a new ttrpc client using the given connection
-func NewClient(conn net.Conn, opts ...ClientOpts) grpc.ClientConnInterface {
+func DialContext(ctx context.Context, target string, opts ...ClientOpts) (grpc.ClientConnInterface, error) {
+	d := net.Dialer{}
+	cc, err := d.DialContext(ctx, "tcp", target)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	channel := newChannel(conn)
+	channel := newChannel(cc)
 	c := &Client{
-		codec:        codec{},
-		channel:      channel,
-		streams:      make(map[uint32]*stream),
-		nextStreamID: 1,
-		closed:       cancel,
-		ctx:          ctx,
-		retries:      3,
+		codec:    codec{},
+		channel:  channel,
+		streams:  make(map[uint32]*stream),
+		streamID: 1,
+		closed:   cancel,
+		ctx:      ctx,
+		retries:  3,
+		target:   target,
 	}
 
 	for _, o := range opts {
 		o(c)
 	}
 
-	go c.run()
-	return c
+	go c.run(ctx)
+	return c, nil
 }
 
-func (c *Client) run() {
-	err := c.receiveLoop()
-	if err != nil {
-		c.Close()
-		c.cleanupStreams(err)
-		slog.Error("receiveLoop", "err", err)
+func Dial(target string, opts ...ClientOpts) (grpc.ClientConnInterface, error) {
+	return DialContext(context.Background(), target, opts...)
+}
+
+func (c *Client) run(ctx context.Context) {
+	err := c.receiveLoop(ctx)
+	c.cleanupStreams(err)
+	c.Close()
+	for range c.retries {
+		d := net.Dialer{}
+		cc, err := d.DialContext(ctx, "tcp", c.target)
+		if err != nil {
+			continue
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		c.conn = cc
+		c.channel = newChannel(cc)
+		c.ctx = ctx
+		c.closed = cancel
+		go c.run(ctx)
 	}
 }
 
-func (c *Client) receiveLoop() error {
+func (c *Client) receiveLoop(ctx context.Context) error {
 	for {
 		select {
 		case <-c.ctx.Done():
+			return Canceled.Err()
+		case <-ctx.Done():
 			return Canceled.Err()
 		default:
 			streamID, payload, err := c.channel.recv()
@@ -119,9 +139,9 @@ func (c *Client) createStream(ctx context.Context) (*stream, error) {
 	case <-ctx.Done():
 		return nil, Canceled.Err()
 	default:
-		s := newStream(c.nextStreamID, c.channel)
+		s := newStream(c.streamID, c.channel)
 		c.streams[s.id] = s
-		c.nextStreamID = c.nextStreamID + 2
+		c.streamID = c.streamID + 2
 		return s, nil
 	}
 }
@@ -214,10 +234,8 @@ func (c *Client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 
 // Close closes the ttrpc connection and underlying connection
 func (c *Client) Close() error {
-	c.closeOnce.Do(func() {
+	if c.closed != nil {
 		c.closed()
-
-		c.conn.Close()
-	})
-	return nil
+	}
+	return c.conn.Close()
 }

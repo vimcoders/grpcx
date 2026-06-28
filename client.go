@@ -95,6 +95,7 @@ func (c *Client) receiveLoop() error {
 			if err := proto.Unmarshal(payload, &response); err != nil {
 				return err
 			}
+			c.channel.putmbuf(payload)
 			s := c.getStream(streamID)
 			if s == nil {
 				continue

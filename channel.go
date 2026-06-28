@@ -42,8 +42,6 @@ type channel struct {
 	bw    *bufio.Writer
 	br    *bufio.Reader
 	hrbuf [messageHeaderLength]byte // avoid alloc when reading header
-	hwbuf [messageHeaderLength]byte
-	sync.Mutex
 }
 
 func newChannel(conn net.Conn) *channel {
@@ -89,14 +87,15 @@ func (ch *channel) recv() (uint32, []byte, error) {
 }
 
 func (ch *channel) send(streamID uint32, p []byte) error {
-	ch.Lock()
-	defer ch.Unlock()
 	if len(p) > messageLengthMax {
 		return OversizedMessageError(len(p))
 	}
-	binary.BigEndian.PutUint32(ch.hwbuf[:4], uint32(len(p)))
-	binary.BigEndian.PutUint32(ch.hwbuf[4:8], streamID)
-	if _, err := ch.bw.Write(ch.hwbuf[:]); err != nil {
+	hwbuf := ch.getmbuf(messageHeaderLength)
+	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
+	binary.BigEndian.PutUint32(hwbuf[4:8], streamID)
+	defer ch.putmbuf(hwbuf)
+	defer ch.putmbuf(p)
+	if _, err := ch.bw.Write(hwbuf[:]); err != nil {
 		return err
 	}
 

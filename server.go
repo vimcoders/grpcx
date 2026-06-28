@@ -149,6 +149,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err := proto.Unmarshal(payload, &request); err != nil {
 				return err
 			}
+			channel.putmbuf(payload)
 			handler, ok := x.Methods[request.Metas.Path]
 			if !ok {
 				return NotFound

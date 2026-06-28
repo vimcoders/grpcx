@@ -17,6 +17,7 @@ package ttrpc
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"sync"
 	"ttrpc/generated/api"
@@ -74,9 +75,13 @@ func Dial(target string, opts ...ClientOpts) (grpc.ClientConnInterface, error) {
 }
 
 func (c *Client) run(ctx context.Context) {
-	err := c.receiveLoop(ctx)
-	c.cleanupStreams(err)
-	c.Close()
+	if err := c.receiveLoop(ctx); err != nil {
+		slog.Error("run", "receiveLoop", err)
+	}
+	c.cleanupStreams()
+	if err := c.Close(); err != nil {
+		slog.Error("run", "close", err)
+	}
 	for range c.retries {
 		d := net.Dialer{}
 		cc, err := d.DialContext(ctx, "tcp", c.target)
@@ -95,8 +100,6 @@ func (c *Client) run(ctx context.Context) {
 func (c *Client) receiveLoop(ctx context.Context) error {
 	for {
 		select {
-		case <-c.ctx.Done():
-			return Canceled.Err()
 		case <-ctx.Done():
 			return Canceled.Err()
 		default:
@@ -112,8 +115,7 @@ func (c *Client) receiveLoop(ctx context.Context) error {
 			if s == nil {
 				continue
 			}
-			if err := s.receive(c.ctx, &response); err != nil {
-				s.closeWithError(err)
+			if err := s.receive(ctx, &response); err != nil {
 				continue
 			}
 		}
@@ -134,8 +136,6 @@ func (c *Client) createStream(ctx context.Context) (*stream, error) {
 	// Check if closed since lock acquired to prevent adding
 	// anything after cleanup completes
 	select {
-	case <-c.ctx.Done():
-		return nil, Canceled.Err()
 	case <-ctx.Done():
 		return nil, Canceled.Err()
 	default:
@@ -150,7 +150,7 @@ func (c *Client) deleteStream(s *stream) {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.streams, s.id)
-	s.closeWithError(nil)
+	s.close()
 }
 
 func (c *Client) getStream(sid uint32) *stream {
@@ -160,12 +160,12 @@ func (c *Client) getStream(sid uint32) *stream {
 	return s
 }
 
-func (c *Client) cleanupStreams(err error) {
+func (c *Client) cleanupStreams() {
 	c.Lock()
 	defer c.Unlock()
 	for sid, s := range c.streams {
-		s.closeWithError(err)
 		delete(c.streams, sid)
+		s.close()
 	}
 }
 
@@ -184,12 +184,13 @@ func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	}
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, Canceled.Err()
 	case <-c.ctx.Done():
-		return nil, status.New(codes.Canceled, codes.Canceled.String()).Err()
-	case <-s.recvClose:
-		return nil, status.New(codes.Canceled, codes.Canceled.String()).Err()
-	case msg := <-s.recv:
+		return nil, Canceled.Err()
+	case msg, ok := <-s.recv:
+		if !ok {
+			return nil, Unavailable.Err()
+		}
 		return msg, nil
 	}
 }

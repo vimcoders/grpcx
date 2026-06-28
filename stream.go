@@ -29,26 +29,18 @@ type stream struct {
 	codec
 
 	closeOnce sync.Once
-	recvErr   error
-	recvClose chan struct{}
 }
 
 func newStream(id uint32, send sender) *stream {
 	return &stream{
-		id:        id,
-		sender:    send,
-		recv:      make(chan *api.Response, 1),
-		recvClose: make(chan struct{}),
+		id:     id,
+		sender: send,
+		recv:   make(chan *api.Response, 1),
 	}
 }
 
-func (s *stream) closeWithError(err error) error {
-	s.closeOnce.Do(func() {
-		if err != nil {
-			s.recvErr = err
-		}
-		close(s.recvClose)
-	})
+func (s *stream) close() error {
+	s.closeOnce.Do(func() { close(s.recv) })
 	return nil
 }
 
@@ -58,12 +50,12 @@ func (s *stream) send(ctx context.Context, b []byte) error {
 
 func (s *stream) receive(ctx context.Context, response *api.Response) error {
 	select {
-	case <-s.recvClose:
-		return s.recvErr
 	case s.recv <- response:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return s.close()
+	default:
+		return s.close()
 	}
 }
 

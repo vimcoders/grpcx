@@ -189,15 +189,21 @@ func filterCloseErr(err error) error {
 }
 
 func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	if req.Metas == nil {
-		req.Metas = &api.Metas{}
-	}
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.deleteStream(s)
-	b, err := c.codec.Marshal(req)
+	b, err := c.codec.Marshal(&api.Request{
+		Metas: &api.Metas{
+			Path:      req.Metas.Path,
+			StreamID:  req.Metas.StreamID,
+			Authority: req.Metas.Authority,
+			Origin:    req.Metas.Origin,
+			Encoding:  req.Metas.Encoding,
+		},
+		Payload: req.Payload,
+	})
 	if err != nil {
 		return nil, err
 	}

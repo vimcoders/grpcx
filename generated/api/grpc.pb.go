@@ -27,7 +27,7 @@ type Metas struct {
 	Authority     string                 `protobuf:"bytes,2,opt,name=Authority,proto3" json:"Authority,omitempty"`
 	Origin        string                 `protobuf:"bytes,3,opt,name=Origin,proto3" json:"Origin,omitempty"`
 	Encoding      string                 `protobuf:"bytes,4,opt,name=Encoding,proto3" json:"Encoding,omitempty"`
-	Code          string                 `protobuf:"bytes,5,opt,name=Code,proto3" json:"Code,omitempty"`
+	Status        string                 `protobuf:"bytes,5,opt,name=Status,proto3" json:"Status,omitempty"`
 	StreamID      uint32                 `protobuf:"varint,6,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -91,9 +91,9 @@ func (x *Metas) GetEncoding() string {
 	return ""
 }
 
-func (x *Metas) GetCode() string {
+func (x *Metas) GetStatus() string {
 	if x != nil {
-		return x.Code
+		return x.Status
 	}
 	return ""
 }
@@ -213,13 +213,13 @@ var File_proto_grpc_proto protoreflect.FileDescriptor
 
 const file_proto_grpc_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/grpc.proto\x12\x03api\"\x9d\x01\n" +
+	"\x10proto/grpc.proto\x12\x03api\"\xa1\x01\n" +
 	"\x05Metas\x12\x12\n" +
 	"\x04Path\x18\x01 \x01(\tR\x04Path\x12\x1c\n" +
 	"\tAuthority\x18\x02 \x01(\tR\tAuthority\x12\x16\n" +
 	"\x06Origin\x18\x03 \x01(\tR\x06Origin\x12\x1a\n" +
-	"\bEncoding\x18\x04 \x01(\tR\bEncoding\x12\x12\n" +
-	"\x04Code\x18\x05 \x01(\tR\x04Code\x12\x1a\n" +
+	"\bEncoding\x18\x04 \x01(\tR\bEncoding\x12\x16\n" +
+	"\x06Status\x18\x05 \x01(\tR\x06Status\x12\x1a\n" +
 	"\bStreamID\x18\x06 \x01(\rR\bStreamID\"E\n" +
 	"\aRequest\x12 \n" +
 	"\x05metas\x18\x01 \x01(\v2\n" +

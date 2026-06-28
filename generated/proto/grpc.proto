@@ -7,7 +7,7 @@ message Metas {
     string Authority = 2;
     string Origin = 3;
     string Encoding = 4;
-    string Code = 5;
+    string Status = 5;
     uint32 StreamID = 6;
 }
 

@@ -152,17 +152,19 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			channel.putmbuf(payload)
 			handler, ok := x.Methods[request.Metas.Path]
 			if !ok {
-				return NotFound
+				return NotFound.Err()
 			}
 			reply, err := handler(x.impl, ctx, func(in any) error {
 				return x.codec.Unmarshal(request.Payload, in)
 			}, x.interceptor)
+			metas := api.Metas{Status: OK.Message()}
 			response, err := x.codec.Marshal(reply)
 			if err != nil {
+				metas.Status = Unavailable.Message()
 				return err
 			}
-			b, err := proto.Marshal(&api.Response{
-				Metas:   request.Metas,
+			b, err := x.codec.Marshal(&api.Response{
+				Metas:   &metas,
 				Payload: response,
 			})
 			if err != nil {
@@ -175,12 +177,11 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-var Unavailable = status.Error(codes.Unavailable, codes.Unavailable.String())                   // 框架默认，可重试
-var OK = status.Error(codes.OK, codes.OK.String())                                              // 执行成功
-var InvalidArgument = status.Error(codes.InvalidArgument, codes.Internal.String())              // 客户端传参错误
-var ResourceExhausted = status.Error(codes.ResourceExhausted, codes.ResourceExhausted.String()) // 告诉客户端退避
-
-var Canceled = status.Error(codes.Canceled, codes.Canceled.String())                      // 被取消
-var Unauthenticated = status.Error(codes.Unauthenticated, codes.Unauthenticated.String()) // 需要重新登录 / 换 Token
-var Unknown = status.Error(codes.Unknown, codes.Unknown.String())                         // 未知错误
-var NotFound = status.Error(codes.NotFound, codes.NotFound.String())                      // 没有找到对应的方法
+var Unavailable = status.New(codes.Unavailable, codes.Unavailable.String())                   // 框架默认，可重试
+var OK = status.New(codes.OK, codes.OK.String())                                              // 执行成功
+var InvalidArgument = status.New(codes.InvalidArgument, codes.Internal.String())              // 客户端传参错误
+var ResourceExhausted = status.New(codes.ResourceExhausted, codes.ResourceExhausted.String()) // 告诉客户端退避
+var Canceled = status.New(codes.Canceled, codes.Canceled.String())                            // 被取消
+var Unauthenticated = status.New(codes.Unauthenticated, codes.Unauthenticated.String())       // 需要重新登录 / 换 Token
+var Unknown = status.New(codes.Unknown, codes.Unknown.String())                               // 未知错误
+var NotFound = status.New(codes.NotFound, codes.NotFound.String())                            // 没有找到对应的方法

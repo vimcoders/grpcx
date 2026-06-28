@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"sync"
 
@@ -30,7 +29,7 @@ import (
 )
 
 const (
-	messageHeaderLength = 4
+	messageHeaderLength = 8
 	messageLengthMax    = 4 << 20
 )
 
@@ -44,6 +43,7 @@ type channel struct {
 	br    *bufio.Reader
 	hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 	hwbuf [messageHeaderLength]byte
+	sync.Mutex
 }
 
 func newChannel(conn net.Conn) *channel {
@@ -60,39 +60,42 @@ func newChannel(conn net.Conn) *channel {
 // returned will be valid and caller should send that along to
 // the correct consumer. The bytes on the underlying channel
 // will be discarded.
-func (ch *channel) recv() ([]byte, error) {
+func (ch *channel) recv() (uint32, []byte, error) {
 	_, err := io.ReadFull(ch.br, ch.hrbuf[:])
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
-	mh := binary.BigEndian.Uint32(ch.hrbuf[:4])
-	slog.Info("recv", "messageHeader", mh)
+	h := binary.BigEndian.Uint32(ch.hrbuf[:4])
+	s := binary.BigEndian.Uint32(ch.hrbuf[4:])
 
-	if mh > uint32(messageLengthMax) {
-		if _, err := ch.br.Discard(int(mh)); err != nil {
-			return nil, fmt.Errorf("failed to discard after receiving oversized message: %w", err)
+	if h > uint32(messageLengthMax) {
+		if _, err := ch.br.Discard(int(h)); err != nil {
+			return 0, nil, fmt.Errorf("failed to discard after receiving oversized message: %w", err)
 		}
 
-		return nil, status.Errorf(codes.ResourceExhausted, "message length %v exceed maximum message size of %v", mh, messageLengthMax)
+		return 0, nil, status.Errorf(codes.ResourceExhausted, "message length %v exceed maximum message size of %v", h, messageLengthMax)
 	}
 
 	var p []byte
-	if mh > 0 {
-		p = ch.getmbuf(int(mh))
+	if h > 0 {
+		p = ch.getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
-			return nil, fmt.Errorf("failed reading message: %w", err)
+			return 0, nil, fmt.Errorf("failed reading message: %w", err)
 		}
 	}
 
-	return p, nil
+	return s, p, nil
 }
 
 func (ch *channel) send(streamID uint32, p []byte) error {
+	ch.Lock()
+	defer ch.Unlock()
 	if len(p) > messageLengthMax {
 		return OversizedMessageError(len(p))
 	}
 	binary.BigEndian.PutUint32(ch.hwbuf[:4], uint32(len(p)))
+	binary.BigEndian.PutUint32(ch.hwbuf[4:8], streamID)
 	if _, err := ch.bw.Write(ch.hwbuf[:]); err != nil {
 		return err
 	}

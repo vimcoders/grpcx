@@ -2,7 +2,6 @@ package ttrpc
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"math"
@@ -142,7 +141,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 		case <-ctx.Done():
 			return nil
 		default:
-			payload, err := channel.recv()
+			streamID, payload, err := channel.recv()
 			if err != nil {
 				return err
 			}
@@ -168,16 +167,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
-			binary.BigEndian.PutUint32(channel.hwbuf[:], uint32(len(b)))
-			if _, err := channel.bw.Write(channel.hwbuf[:]); err != nil {
-				return err
-			}
-			if len(b) > 0 {
-				if _, err := channel.bw.Write(b); err != nil {
-					return err
-				}
-			}
-			if err := channel.bw.Flush(); err != nil {
+			if err := channel.send(streamID, b); err != nil {
 				return err
 			}
 		}

@@ -54,15 +54,8 @@ func (s *stream) closeWithError(err error) error {
 	return nil
 }
 
-func (s *stream) send(ctx context.Context, req *api.Request) error {
-	if req.Metas == nil {
-		req.Metas = &api.Metas{}
-	}
-	req.Metas.StreamID = s.id
-	b, err := s.codec.Marshal(req)
-	if err != nil {
-		return err
-	}
+func (s *stream) send(ctx context.Context, b []byte) error {
+
 	return s.sender.send(s.id, b)
 }
 

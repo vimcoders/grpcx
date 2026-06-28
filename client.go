@@ -33,18 +33,15 @@ import (
 )
 
 type Client struct {
-	codec   codec
-	conn    net.Conn
-	channel *channel
-
+	sync.RWMutex
+	codec        codec
+	conn         net.Conn
+	channel      *channel
 	streams      map[uint32]*stream
 	nextStreamID uint32
-	sync.RWMutex
-
-	ctx    context.Context
-	closed func()
-
-	closeOnce sync.Once
+	ctx          context.Context
+	closed       func()
+	closeOnce    sync.Once
 }
 
 type ClientOpts func(c *Client)
@@ -85,7 +82,7 @@ func (c *Client) receiveLoop() error {
 		case <-c.ctx.Done():
 			return ErrClosed
 		default:
-			payload, err := c.channel.recv()
+			streamID, payload, err := c.channel.recv()
 			if err != nil {
 				_, ok := status.FromError(err)
 				if !ok {
@@ -98,7 +95,7 @@ func (c *Client) receiveLoop() error {
 			if err := proto.Unmarshal(payload, &response); err != nil {
 				return err
 			}
-			s := c.getStream(response.Metas.StreamID)
+			s := c.getStream(streamID)
 			if s == nil {
 				continue
 			}
@@ -113,7 +110,7 @@ func (c *Client) receiveLoop() error {
 
 // createStream creates a new stream and registers it with the client
 // Introduce stream types for multiple or single response
-func (c *Client) createStream(_ context.Context) (*stream, error) {
+func (c *Client) createStream(ctx context.Context) (*stream, error) {
 	// sendLock must be held across both allocation of the stream ID and sending it across the wire.
 	// This ensures that new stream IDs sent on the wire are always increasing, which is a
 	// requirement of the TTRPC protocol.
@@ -127,30 +124,14 @@ func (c *Client) createStream(_ context.Context) (*stream, error) {
 	select {
 	case <-c.ctx.Done():
 		return nil, ErrClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	default:
-	}
-
-	var s *stream
-	if err := func() error {
-		// In the future this could be replaced with a sync.Map instead of streamLock+map.
-		// Check if closed since lock acquired to prevent adding
-		// anything after cleanup completes
-		select {
-		case <-c.ctx.Done():
-			return ErrClosed
-		default:
-		}
-
-		s = newStream(c.nextStreamID, c.channel)
+		s := newStream(c.nextStreamID, c.channel)
 		c.streams[s.id] = s
 		c.nextStreamID = c.nextStreamID + 2
-
-		return nil
-	}(); err != nil {
-		return nil, err
+		return s, nil
 	}
-
-	return s, nil
 }
 
 func (c *Client) deleteStream(s *stream) {
@@ -207,15 +188,19 @@ func filterCloseErr(err error) error {
 }
 
 func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	if req.Metas == nil {
+		req.Metas = &api.Metas{}
+	}
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.deleteStream(s)
-	if req.Metas != nil {
-		req.Metas.StreamID = s.id
+	b, err := c.codec.Marshal(req)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.send(ctx, req); err != nil {
+	if err := s.send(ctx, b); err != nil {
 		return nil, err
 	}
 	select {

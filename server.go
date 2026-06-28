@@ -188,6 +188,12 @@ func (x *Server) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 			Message: err.Error(),
 		}, nil
 	}
+	if len(response) > messageLengthMax {
+		return &api.Response{
+			Code:    uint32(codes.OutOfRange),
+			Message: codes.OutOfRange.String(),
+		}, nil
+	}
 	return &api.Response{
 		Code:    uint32(codes.OK),
 		Message: codes.OK.String(),

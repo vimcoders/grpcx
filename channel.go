@@ -20,13 +20,14 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
+	"math"
 	"net"
 	"sync"
 )
 
 const (
 	messageHeaderLength = 8
-	messageLengthMax    = 4 << 20
+	messageLengthMax    = math.MaxUint16
 )
 
 // messageHeader represents the fixed-length message header of 10 bytes sent

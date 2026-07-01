@@ -72,6 +72,8 @@ type Transport struct {
 	closed   func()
 	retries  int32
 	target   string
+
+	interceptor UnaryClientInterceptor
 }
 
 type Option func(c *Transport)
@@ -93,6 +95,9 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 		ctx:      ctx,
 		retries:  3,
 		target:   target,
+		interceptor: func(ctx context.Context, req *api.Request, i Invoker) (*api.Response, error) {
+			return i(ctx, req)
+		},
 	}
 
 	for _, o := range opts {
@@ -234,13 +239,13 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 		return err
 	}
 	for range c.retries {
-		response, err := c.RoundTrip(ctx, &api.Request{
+		response, err := c.interceptor(ctx, &api.Request{
 			Metas: &api.Metas{
 				Path:      method,
 				Authority: GetAuthority(ctx),
 			},
 			Payload: payload,
-		})
+		}, c.RoundTrip)
 		if err != nil {
 			return err
 		}

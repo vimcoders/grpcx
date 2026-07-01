@@ -28,7 +28,40 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type Client struct {
+// RoundTripper is an interface representing the ability to execute a
+// single HTTP transaction, obtaining the [Response] for a given [Request].
+//
+// A RoundTripper must be safe for concurrent use by multiple
+// goroutines.
+type RoundTripper interface {
+	// RoundTrip executes a single HTTP transaction, returning
+	// a Response for the provided Request.
+	//
+	// RoundTrip should not attempt to interpret the response. In
+	// particular, RoundTrip must return err == nil if it obtained
+	// a response, regardless of the response's HTTP status code.
+	// A non-nil err should be reserved for failure to obtain a
+	// response. Similarly, RoundTrip should not attempt to
+	// handle higher-level protocol details such as redirects,
+	// authentication, or cookies.
+	//
+	// RoundTrip should not modify the request, except for
+	// consuming and closing the Request's Body. RoundTrip may
+	// read fields of the request in a separate goroutine. Callers
+	// should not mutate or reuse the request until the Response's
+	// Body has been closed.
+	//
+	// RoundTrip must always close the body, including on errors,
+	// but depending on the implementation may do so in a separate
+	// goroutine even after RoundTrip returns. This means that
+	// callers wanting to reuse the body for subsequent requests
+	// must arrange to wait for the Close call before doing so.
+	//
+	// The Request's URL and Header fields must be initialized.
+	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+}
+
+type Transport struct {
 	sync.RWMutex
 	codec    codec
 	conn     net.Conn
@@ -41,9 +74,9 @@ type Client struct {
 	target   string
 }
 
-type ClientOpts func(c *Client)
+type Option func(c *Transport)
 
-func DialContext(ctx context.Context, target string, opts ...ClientOpts) (grpc.ClientConnInterface, error) {
+func DialContext(ctx context.Context, target string, opts ...Option) (grpc.ClientConnInterface, error) {
 	d := net.Dialer{}
 	cc, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
@@ -51,7 +84,7 @@ func DialContext(ctx context.Context, target string, opts ...ClientOpts) (grpc.C
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	channel := newChannel(cc)
-	c := &Client{
+	c := &Transport{
 		codec:    codec{},
 		channel:  channel,
 		streams:  make(map[uint32]*stream),
@@ -70,11 +103,11 @@ func DialContext(ctx context.Context, target string, opts ...ClientOpts) (grpc.C
 	return c, nil
 }
 
-func Dial(target string, opts ...ClientOpts) (grpc.ClientConnInterface, error) {
+func Dial(target string, opts ...Option) (grpc.ClientConnInterface, error) {
 	return DialContext(context.Background(), target, opts...)
 }
 
-func (c *Client) run(ctx context.Context) {
+func (c *Transport) run(ctx context.Context) {
 	if err := c.receiveLoop(ctx); err != nil {
 		slog.Error("run", "receiveLoop", err)
 	}
@@ -97,7 +130,7 @@ func (c *Client) run(ctx context.Context) {
 	}
 }
 
-func (c *Client) receiveLoop(ctx context.Context) error {
+func (c *Transport) receiveLoop(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -124,7 +157,7 @@ func (c *Client) receiveLoop(ctx context.Context) error {
 
 // createStream creates a new stream and registers it with the client
 // Introduce stream types for multiple or single response
-func (c *Client) createStream(ctx context.Context) (*stream, error) {
+func (c *Transport) createStream(ctx context.Context) (*stream, error) {
 	// sendLock must be held across both allocation of the stream ID and sending it across the wire.
 	// This ensures that new stream IDs sent on the wire are always increasing, which is a
 	// requirement of the TTRPC protocol.
@@ -146,21 +179,21 @@ func (c *Client) createStream(ctx context.Context) (*stream, error) {
 	}
 }
 
-func (c *Client) deleteStream(s *stream) {
+func (c *Transport) deleteStream(s *stream) {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.streams, s.id)
 	s.close()
 }
 
-func (c *Client) getStream(sid uint32) *stream {
+func (c *Transport) getStream(sid uint32) *stream {
 	c.RLock()
 	defer c.RUnlock()
 	s := c.streams[sid]
 	return s
 }
 
-func (c *Client) cleanupStreams() {
+func (c *Transport) cleanupStreams() {
 	c.Lock()
 	defer c.Unlock()
 	for sid, s := range c.streams {
@@ -169,7 +202,7 @@ func (c *Client) cleanupStreams() {
 	}
 }
 
-func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
@@ -195,7 +228,7 @@ func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	}
 }
 
-func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
+func (c *Transport) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	payload, err := c.codec.Marshal(req)
 	if err != nil {
 		return err
@@ -229,12 +262,12 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 // NewStream creates a new stream with the given stream descriptor to the
 // specified service and method. If not a streaming client, the request object
 // may be provided.
-func (c *Client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func (c *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, nil
 }
 
 // Close closes the ttrpc connection and underlying connection
-func (c *Client) Close() error {
+func (c *Transport) Close() error {
 	if c.closed != nil {
 		c.closed()
 	}

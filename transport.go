@@ -162,7 +162,7 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 
 // createStream creates a new stream and registers it with the client
 // Introduce stream types for multiple or single response
-func (c *Transport) createStream(ctx context.Context) (*stream, error) {
+func (c *Transport) createStream(ctx context.Context, b []byte) (*stream, error) {
 	// sendLock must be held across both allocation of the stream ID and sending it across the wire.
 	// This ensures that new stream IDs sent on the wire are always increasing, which is a
 	// requirement of the TTRPC protocol.
@@ -180,6 +180,9 @@ func (c *Transport) createStream(ctx context.Context) (*stream, error) {
 		s := newStream(c.streamID, c.channel)
 		c.streams[s.id] = s
 		c.streamID = c.streamID + 2
+		if err := s.send(ctx, b); err != nil {
+			return nil, err
+		}
 		return s, nil
 	}
 }
@@ -208,18 +211,15 @@ func (c *Transport) cleanupStreams() {
 }
 
 func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	s, err := c.createStream(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer c.deleteStream(s)
 	b, err := c.codec.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.send(ctx, b); err != nil {
+	s, err := c.createStream(ctx, b)
+	if err != nil {
 		return nil, err
 	}
+	defer c.deleteStream(s)
 	select {
 	case <-ctx.Done():
 		return nil, Canceled.Err()

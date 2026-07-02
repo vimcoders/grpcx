@@ -5,9 +5,7 @@ import (
 	"ttrpc/generated/api"
 )
 
-type Invoker func(context.Context, *api.Request) (*api.Response, error)
-
-type UnaryClientInterceptor func(context.Context, *api.Request, Invoker) (*api.Response, error)
+type UnaryClientInterceptor func(context.Context, *api.Request, RoundTripper) (*api.Response, error)
 
 func WithUnaryInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *Transport) {

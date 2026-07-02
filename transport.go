@@ -95,9 +95,10 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 		ctx:      ctx,
 		retries:  3,
 		target:   target,
-		interceptor: func(ctx context.Context, req *api.Request, i Invoker) (*api.Response, error) {
-			return i(ctx, req)
-		},
+	}
+
+	c.interceptor = func(ctx context.Context, r *api.Request, rt RoundTripper) (*api.Response, error) {
+		return rt.RoundTrip(ctx, r)
 	}
 
 	for _, o := range opts {
@@ -245,7 +246,7 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 				Authority: GetAuthority(ctx),
 			},
 			Payload: payload,
-		}, c.RoundTrip)
+		}, c)
 		if err != nil {
 			return err
 		}

@@ -35,10 +35,9 @@ const (
 var buffers sync.Pool
 
 type channel struct {
-	conn  net.Conn
-	bw    *bufio.Writer
-	br    *bufio.Reader
-	hrbuf [messageHeaderLength]byte // avoid alloc when reading header
+	conn net.Conn
+	bw   *bufio.Writer
+	br   *bufio.Reader
 }
 
 func newChannel(conn net.Conn) *channel {
@@ -56,13 +55,14 @@ func newChannel(conn net.Conn) *channel {
 // the correct consumer. The bytes on the underlying channel
 // will be discarded.
 func (ch *channel) recv() (uint32, []byte, error) {
-	_, err := io.ReadFull(ch.br, ch.hrbuf[:])
+	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
+	_, err := io.ReadFull(ch.br, hrbuf[:])
 	if err != nil {
 		return 0, nil, err
 	}
 
-	h := binary.BigEndian.Uint32(ch.hrbuf[:4])
-	s := binary.BigEndian.Uint32(ch.hrbuf[4:])
+	h := binary.BigEndian.Uint32(hrbuf[:4])
+	s := binary.BigEndian.Uint32(hrbuf[4:])
 
 	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {

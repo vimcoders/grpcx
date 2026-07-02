@@ -2,8 +2,8 @@ package ttrpc
 
 import (
 	"context"
-	"ttrpc/driver"
-	"ttrpc/generated/api"
+	"grpcx/driver"
+	"grpcx/generated/api"
 )
 
 type UnaryClientInterceptor func(context.Context, *api.Request, driver.RoundTripper) (*api.Response, error)

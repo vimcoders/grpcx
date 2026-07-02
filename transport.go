@@ -17,10 +17,10 @@ package ttrpc
 
 import (
 	"context"
+	"grpcx/generated/api"
 	"log/slog"
 	"net"
 	"sync"
-	"ttrpc/generated/api"
 )
 
 type Transport struct {

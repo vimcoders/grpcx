@@ -2,7 +2,7 @@ package driver
 
 import (
 	"context"
-	"ttrpc/generated/api"
+	"grpcx/generated/api"
 )
 
 type Picker interface {

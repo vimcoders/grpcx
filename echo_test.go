@@ -2,10 +2,11 @@ package ttrpc_test
 
 import (
 	"context"
+	grpcx "grpcx"
+	ttrpc "grpcx"
+	"grpcx/generated/api"
 	"log/slog"
 	"testing"
-	"ttrpc"
-	"ttrpc/generated/api"
 )
 
 type Handler struct {
@@ -18,7 +19,7 @@ func (h *Handler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoResp
 }
 
 func TestMain(m *testing.M) {
-	x := ttrpc.NewServer()
+	x := grpcx.NewServer()
 	x.RegisterService(&api.EchoService_ServiceDesc, &Handler{})
 	go x.ListenAndServe(context.Background(), "127.0.0.1:50051")
 	m.Run()

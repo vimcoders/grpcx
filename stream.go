@@ -18,8 +18,8 @@ package ttrpc
 
 import (
 	"context"
+	"grpcx/generated/api"
 	"sync"
-	"ttrpc/generated/api"
 )
 
 type stream struct {

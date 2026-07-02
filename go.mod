@@ -1,4 +1,4 @@
-module ttrpc
+module grpcx
 
 go 1.26.3
 

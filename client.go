@@ -2,10 +2,10 @@ package ttrpc
 
 import (
 	"context"
+	"grpcx/balancer"
+	"grpcx/driver"
+	"grpcx/generated/api"
 	"net"
-	"ttrpc/balancer"
-	"ttrpc/driver"
-	"ttrpc/generated/api"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

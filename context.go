@@ -6,8 +6,6 @@ const (
 	grpc_authority = "Authority"
 )
 
-type contextKey string
-
 func WithAuthority(ctx context.Context, authority string) context.Context {
 	return context.WithValue(ctx, grpc_authority, authority)
 }

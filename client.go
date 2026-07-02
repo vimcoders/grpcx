@@ -17,9 +17,9 @@ import (
 type Option func(c *Client)
 
 type Client struct {
-	rts []driver.RoundTripper
 	codec.Codec
 	retries     int32
+	rts         []driver.RoundTripper
 	interceptor UnaryClientInterceptor
 }
 

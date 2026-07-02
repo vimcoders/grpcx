@@ -148,6 +148,7 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 			if err := c.codec.Unmarshal(payload, &response); err != nil {
 				return err
 			}
+			c.channel.putmbuf(payload)
 			s := c.getStream(streamID)
 			if s == nil {
 				continue

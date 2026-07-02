@@ -141,6 +141,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err := x.codec.Unmarshal(payload, &request); err != nil {
 				return err
 			}
+			channel.putmbuf(payload)
 			response, err := x.RoundTrip(ctx, &request)
 			if err != nil {
 				return err

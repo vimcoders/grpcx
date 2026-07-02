@@ -34,8 +34,8 @@ type Transport struct {
 	streams  map[uint32]*stream
 	streamID uint32
 	ctx      context.Context
-	Closed   func()
-	Retries  int32
+	closed   func()
+	retries  int32
 }
 
 func NewRoundTripper(c net.Conn) driver.RoundTripper {
@@ -44,9 +44,9 @@ func NewRoundTripper(c net.Conn) driver.RoundTripper {
 		channel:  NewChannel(c),
 		c:        c,
 		streamID: 1,
-		Retries:  3,
+		retries:  3,
 		ctx:      ctx,
-		Closed:   cancel,
+		closed:   cancel,
 		streams:  make(map[uint32]*stream),
 	}
 	go rt.Run(ctx)
@@ -61,7 +61,7 @@ func (c *Transport) Run(ctx context.Context) {
 	if err := c.Close(); err != nil {
 		slog.Error("run", "close", err)
 	}
-	for range c.Retries {
+	for range c.retries {
 		d := net.Dialer{}
 		network, address := c.c.RemoteAddr().Network(), c.c.RemoteAddr().String()
 		cc, err := d.DialContext(ctx, network, address)
@@ -72,7 +72,7 @@ func (c *Transport) Run(ctx context.Context) {
 		c.c = cc
 		c.channel = NewChannel(cc)
 		c.ctx = ctx
-		c.Closed = cancel
+		c.closed = cancel
 		c.Run(ctx)
 	}
 }
@@ -178,8 +178,8 @@ func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 
 // Close closes the ttrpc connection and underlying connection
 func (c *Transport) Close() error {
-	if c.Closed != nil {
-		c.Closed()
+	if c.closed != nil {
+		c.closed()
 	}
 	return c.c.Close()
 }

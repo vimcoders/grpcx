@@ -71,7 +71,6 @@ type Transport struct {
 	ctx      context.Context
 	closed   func()
 	retries  int32
-	target   string
 
 	interceptor UnaryClientInterceptor
 }
@@ -94,7 +93,6 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 		closed:   cancel,
 		ctx:      ctx,
 		retries:  3,
-		target:   target,
 	}
 
 	c.interceptor = func(ctx context.Context, r *api.Request, rt RoundTripper) (*api.Response, error) {
@@ -123,7 +121,8 @@ func (c *Transport) run(ctx context.Context) {
 	}
 	for range c.retries {
 		d := net.Dialer{}
-		cc, err := d.DialContext(ctx, "tcp", c.target)
+		network, address := c.conn.RemoteAddr().Network(), c.conn.RemoteAddr().String()
+		cc, err := d.DialContext(ctx, network, address)
 		if err != nil {
 			continue
 		}

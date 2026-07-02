@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 // RoundTripper is an interface representing the ability to execute a
@@ -146,7 +145,7 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 				return err
 			}
 			var response api.Response
-			if err := proto.Unmarshal(payload, &response); err != nil {
+			if err := c.codec.Unmarshal(payload, &response); err != nil {
 				return err
 			}
 			s := c.getStream(streamID)

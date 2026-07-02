@@ -13,7 +13,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/proto"
 )
 
 type ServerOption interface {
@@ -139,7 +138,7 @@ func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
 				return err
 			}
 			var request api.Request
-			if err := proto.Unmarshal(payload, &request); err != nil {
+			if err := x.codec.Unmarshal(payload, &request); err != nil {
 				return err
 			}
 			response, err := x.RoundTrip(ctx, &request)

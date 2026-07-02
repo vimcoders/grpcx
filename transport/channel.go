@@ -14,11 +14,12 @@
    limitations under the License.
 */
 
-package grpcx
+package transport
 
 import (
 	"bufio"
 	"encoding/binary"
+	"grpcx/status"
 	"io"
 	"math"
 	"net"
@@ -34,14 +35,14 @@ const (
 // with every request.
 var buffers sync.Pool
 
-type channel struct {
+type Channel struct {
 	conn net.Conn
 	bw   *bufio.Writer
 	br   *bufio.Reader
 }
 
-func newChannel(conn net.Conn) *channel {
-	return &channel{
+func NewChannel(conn net.Conn) *Channel {
+	return &Channel{
 		conn: conn,
 		bw:   bufio.NewWriter(conn),
 		br:   bufio.NewReader(conn),
@@ -54,7 +55,7 @@ func newChannel(conn net.Conn) *channel {
 // returned will be valid and caller should send that along to
 // the correct consumer. The bytes on the underlying channel
 // will be discarded.
-func (ch *channel) recv() (uint32, []byte, error) {
+func (ch *Channel) Recv() (uint32, []byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 	_, err := io.ReadFull(ch.br, hrbuf[:])
 	if err != nil {
@@ -66,26 +67,26 @@ func (ch *channel) recv() (uint32, []byte, error) {
 
 	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {
-			return 0, nil, DataLoss.Err()
+			return 0, nil, status.DataLoss.Err()
 		}
 
-		return 0, nil, DataLoss.Err()
+		return 0, nil, status.DataLoss.Err()
 	}
 
 	var p []byte
 	if h > 0 {
 		p = ch.getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
-			return 0, nil, DataLoss.Err()
+			return 0, nil, status.DataLoss.Err()
 		}
 	}
 
 	return s, p, nil
 }
 
-func (ch *channel) send(streamID uint32, p []byte) error {
+func (ch *Channel) Send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
-		return DataLoss.Err()
+		return status.DataLoss.Err()
 	}
 	var hwbuf [messageHeaderLength]byte
 	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
@@ -104,7 +105,7 @@ func (ch *channel) send(streamID uint32, p []byte) error {
 	return ch.bw.Flush()
 }
 
-func (ch *channel) getmbuf(size int) []byte {
+func (ch *Channel) getmbuf(size int) []byte {
 	// we can't use the standard New method on pool because we want to allocate
 	// based on size.
 	b, ok := buffers.Get().(*[]byte)
@@ -120,6 +121,6 @@ func (ch *channel) getmbuf(size int) []byte {
 	return *b
 }
 
-func (ch *channel) putmbuf(p []byte) {
+func (ch *Channel) Putmbuf(p []byte) {
 	buffers.Put(&p)
 }

@@ -3,8 +3,10 @@ package grpcx
 import (
 	"context"
 	"grpcx/balancer"
+	"grpcx/codec"
 	"grpcx/driver"
 	"grpcx/generated/api"
+	"grpcx/transport"
 	"net"
 
 	"google.golang.org/grpc"
@@ -15,8 +17,8 @@ import (
 type Option func(c *Client)
 
 type Client struct {
-	rts         []driver.RoundTripper
-	codec       codec
+	rts []driver.RoundTripper
+	codec.Codec
 	retries     int32
 	interceptor UnaryClientInterceptor
 }
@@ -37,20 +39,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		channel := newChannel(cc)
-		c := &Transport{
-			codec:    codec{},
-			channel:  channel,
-			streams:  make(map[uint32]*stream),
-			streamID: 1,
-			closed:   cancel,
-			ctx:      ctx,
-			retries:  3,
-		}
-
-		go c.run(ctx)
-		client.rts = append(client.rts, c)
+		client.rts = append(client.rts, transport.NewRoundTripper(cc))
 	}
 	return &client, nil
 }
@@ -60,7 +49,7 @@ func Dial(target string, opts ...Option) (grpc.ClientConnInterface, error) {
 }
 
 func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	payload, err := c.codec.Marshal(req)
+	payload, err := c.Marshal(req)
 	if err != nil {
 		return err
 	}
@@ -82,7 +71,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 		}
 		switch codes.Code(response.Code) {
 		case codes.OK:
-			if err = c.codec.Unmarshal(response.Payload, reply); err != nil {
+			if err = c.Unmarshal(response.Payload, reply); err != nil {
 				return err
 			}
 			return nil

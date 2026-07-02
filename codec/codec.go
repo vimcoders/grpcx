@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package grpcx
+package codec
 
 import (
 	"fmt"
@@ -22,9 +22,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type codec struct{}
+type Codec struct{}
 
-func (c codec) Marshal(msg any) ([]byte, error) {
+func (c Codec) Marshal(msg any) ([]byte, error) {
 	switch v := msg.(type) {
 	case proto.Message:
 		return proto.Marshal(v)
@@ -33,7 +33,7 @@ func (c codec) Marshal(msg any) ([]byte, error) {
 	}
 }
 
-func (c codec) Unmarshal(p []byte, msg any) error {
+func (c Codec) Unmarshal(p []byte, msg any) error {
 	switch v := msg.(type) {
 	case proto.Message:
 		return proto.Unmarshal(p, v)

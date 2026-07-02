@@ -3,7 +3,9 @@ package grpcx
 import (
 	"context"
 	"fmt"
+	"grpcx/codec"
 	"grpcx/generated/api"
+	"grpcx/transport"
 	"log/slog"
 	"math"
 	"net"
@@ -33,7 +35,7 @@ type ServerOptions struct {
 	Methods              map[string]grpc.MethodHandler
 	interceptor          grpc.UnaryServerInterceptor
 	MaxConcurrentStreams uint32
-	codec
+	codec.Codec
 }
 
 var defaultServerOptions = ServerOptions{
@@ -127,30 +129,30 @@ func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ServerO
 }
 
 func (x *Server) Handle(ctx context.Context, c net.Conn) (err error) {
-	channel := newChannel(c)
+	channel := transport.NewChannel(c)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-			streamID, payload, err := channel.recv()
+			streamID, payload, err := channel.Recv()
 			if err != nil {
 				return err
 			}
 			var request api.Request
-			if err := x.codec.Unmarshal(payload, &request); err != nil {
+			if err := x.Unmarshal(payload, &request); err != nil {
 				return err
 			}
-			channel.putmbuf(payload)
+			channel.Putmbuf(payload)
 			response, err := x.RoundTrip(ctx, &request)
 			if err != nil {
 				return err
 			}
-			b, err := x.codec.Marshal(response)
+			b, err := x.Marshal(response)
 			if err != nil {
 				return err
 			}
-			if err := channel.send(streamID, b); err != nil {
+			if err := channel.Send(streamID, b); err != nil {
 				return err
 			}
 		}
@@ -172,7 +174,7 @@ func (x *Server) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 		}, nil
 	}
 	reply, err := handler(x.impl, WithAuthority(ctx, req.Metas.Authority), func(in any) error {
-		return x.codec.Unmarshal(req.Payload, in)
+		return x.Unmarshal(req.Payload, in)
 	}, x.interceptor)
 	if err != nil {
 		return &api.Response{
@@ -180,19 +182,19 @@ func (x *Server) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 			Message: err.Error(),
 		}, nil
 	}
-	response, err := x.codec.Marshal(reply)
+	response, err := x.Marshal(reply)
 	if err != nil {
 		return &api.Response{
 			Code:    uint32(codes.Unavailable),
 			Message: err.Error(),
 		}, nil
 	}
-	if len(response) > messageLengthMax {
-		return &api.Response{
-			Code:    uint32(codes.OutOfRange),
-			Message: codes.OutOfRange.String(),
-		}, nil
-	}
+	// if len(response) > messageLengthMax {
+	// 	return &api.Response{
+	// 		Code:    uint32(codes.OutOfRange),
+	// 		Message: codes.OutOfRange.String(),
+	// 	}, nil
+	// }
 	return &api.Response{
 		Code:    uint32(codes.OK),
 		Message: codes.OK.String(),

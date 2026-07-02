@@ -13,11 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-package grpcx
+package transport
 
 import (
 	"context"
+	"grpcx/codec"
+	"grpcx/driver"
 	"grpcx/generated/api"
+	"grpcx/status"
 	"log/slog"
 	"net"
 	"sync"
@@ -25,17 +28,32 @@ import (
 
 type Transport struct {
 	sync.RWMutex
-	codec    codec
-	conn     net.Conn
-	channel  *channel
+	codec.Codec
+	c        net.Conn
+	channel  *Channel
 	streams  map[uint32]*stream
 	streamID uint32
 	ctx      context.Context
-	closed   func()
-	retries  int32
+	Closed   func()
+	Retries  int32
 }
 
-func (c *Transport) run(ctx context.Context) {
+func NewRoundTripper(c net.Conn) driver.RoundTripper {
+	ctx, cancel := context.WithCancel(context.Background())
+	rt := &Transport{
+		channel:  NewChannel(c),
+		c:        c,
+		streamID: 1,
+		Retries:  3,
+		ctx:      ctx,
+		Closed:   cancel,
+		streams:  make(map[uint32]*stream),
+	}
+	go rt.Run(ctx)
+	return rt
+}
+
+func (c *Transport) Run(ctx context.Context) {
 	if err := c.receiveLoop(ctx); err != nil {
 		slog.Error("run", "receiveLoop", err)
 	}
@@ -43,19 +61,19 @@ func (c *Transport) run(ctx context.Context) {
 	if err := c.Close(); err != nil {
 		slog.Error("run", "close", err)
 	}
-	for range c.retries {
+	for range c.Retries {
 		d := net.Dialer{}
-		network, address := c.conn.RemoteAddr().Network(), c.conn.RemoteAddr().String()
+		network, address := c.c.RemoteAddr().Network(), c.c.RemoteAddr().String()
 		cc, err := d.DialContext(ctx, network, address)
 		if err != nil {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		c.conn = cc
-		c.channel = newChannel(cc)
+		c.c = cc
+		c.channel = NewChannel(cc)
 		c.ctx = ctx
-		c.closed = cancel
-		c.run(ctx)
+		c.Closed = cancel
+		c.Run(ctx)
 	}
 }
 
@@ -63,17 +81,17 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return Canceled.Err()
+			return status.Canceled.Err()
 		default:
-			streamID, payload, err := c.channel.recv()
+			streamID, payload, err := c.channel.Recv()
 			if err != nil {
 				return err
 			}
 			var response api.Response
-			if err := c.codec.Unmarshal(payload, &response); err != nil {
+			if err := c.Unmarshal(payload, &response); err != nil {
 				return err
 			}
-			c.channel.putmbuf(payload)
+			c.channel.Putmbuf(payload)
 			s := c.getStream(streamID)
 			if s == nil {
 				continue
@@ -100,7 +118,7 @@ func (c *Transport) createStream(ctx context.Context, b []byte) (*stream, error)
 	// anything after cleanup completes
 	select {
 	case <-ctx.Done():
-		return nil, Canceled.Err()
+		return nil, status.Canceled.Err()
 	default:
 		s := newStream(c.streamID, c.channel)
 		c.streams[s.id] = s
@@ -136,7 +154,7 @@ func (c *Transport) cleanupStreams() {
 }
 
 func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	b, err := c.codec.Marshal(req)
+	b, err := c.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
@@ -147,12 +165,12 @@ func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	defer c.deleteStream(s)
 	select {
 	case <-ctx.Done():
-		return nil, Canceled.Err()
+		return nil, status.Canceled.Err()
 	case <-c.ctx.Done():
-		return nil, Canceled.Err()
+		return nil, status.Canceled.Err()
 	case msg, ok := <-s.recv:
 		if !ok {
-			return nil, Unavailable.Err()
+			return nil, status.Unavailable.Err()
 		}
 		return msg, nil
 	}
@@ -160,8 +178,8 @@ func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 
 // Close closes the ttrpc connection and underlying connection
 func (c *Transport) Close() error {
-	if c.closed != nil {
-		c.closed()
+	if c.Closed != nil {
+		c.Closed()
 	}
-	return c.conn.Close()
+	return c.c.Close()
 }

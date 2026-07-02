@@ -5,14 +5,6 @@ import (
 	"grpcx/generated/api"
 )
 
-type Picker interface {
-	Pick(context.Context, PickInfo) (RoundTripper, error)
-}
-
-type PickInfo struct {
-	FullMethodName string // 请求方法名
-}
-
 // RoundTripper is an interface representing the ability to execute a
 // single HTTP transaction, obtaining the [Response] for a given [Request].
 //

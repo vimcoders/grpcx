@@ -1,4 +1,4 @@
-package grpcx
+package status
 
 import (
 	"google.golang.org/grpc/codes"

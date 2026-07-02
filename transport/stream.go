@@ -14,24 +14,26 @@
    limitations under the License.
 */
 
-package grpcx
+package transport
 
 import (
 	"context"
+	"grpcx/codec"
+	"grpcx/driver"
 	"grpcx/generated/api"
 	"sync"
 )
 
 type stream struct {
 	id     uint32
-	sender sender
+	sender driver.Sender
 	recv   chan *api.Response
-	codec
+	codec.Codec
 
 	closeOnce sync.Once
 }
 
-func newStream(id uint32, send sender) *stream {
+func newStream(id uint32, send driver.Sender) *stream {
 	return &stream{
 		id:     id,
 		sender: send,
@@ -45,7 +47,7 @@ func (s *stream) close() error {
 }
 
 func (s *stream) send(ctx context.Context, b []byte) error {
-	return s.sender.send(s.id, b)
+	return s.sender.Send(s.id, b)
 }
 
 func (s *stream) receive(ctx context.Context, response *api.Response) error {
@@ -57,8 +59,4 @@ func (s *stream) receive(ctx context.Context, response *api.Response) error {
 	default:
 		return s.close()
 	}
-}
-
-type sender interface {
-	send(uint32, []byte) error
 }

@@ -1,4 +1,4 @@
-package ttrpc
+package grpcx
 
 import (
 	"google.golang.org/grpc/codes"

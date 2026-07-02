@@ -1,4 +1,4 @@
-package ttrpc_test
+package grpcx_test
 
 import (
 	"context"

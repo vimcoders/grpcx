@@ -46,7 +46,7 @@ func (s *stream) close() error {
 	return nil
 }
 
-func (s *stream) send(ctx context.Context, b []byte) error {
+func (s *stream) send(_ context.Context, b []byte) error {
 	return s.sender.Send(s.id, b)
 }
 

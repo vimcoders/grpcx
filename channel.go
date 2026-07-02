@@ -91,7 +91,6 @@ func (ch *channel) send(streamID uint32, p []byte) error {
 	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
 	binary.BigEndian.PutUint32(hwbuf[4:], streamID)
 	defer ch.putmbuf(hwbuf)
-	defer ch.putmbuf(p)
 	if _, err := ch.bw.Write(hwbuf[:]); err != nil {
 		return err
 	}

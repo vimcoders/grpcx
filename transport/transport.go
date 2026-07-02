@@ -49,11 +49,11 @@ func NewRoundTripper(c net.Conn) driver.RoundTripper {
 		closed:   cancel,
 		streams:  make(map[uint32]*stream),
 	}
-	go rt.Run(ctx)
+	go rt.run(ctx)
 	return rt
 }
 
-func (c *Transport) Run(ctx context.Context) {
+func (c *Transport) run(ctx context.Context) {
 	if err := c.receiveLoop(ctx); err != nil {
 		slog.Error("run", "receiveLoop", err)
 	}
@@ -73,7 +73,7 @@ func (c *Transport) Run(ctx context.Context) {
 		c.channel = NewChannel(cc)
 		c.ctx = ctx
 		c.closed = cancel
-		c.Run(ctx)
+		c.run(ctx)
 	}
 }
 

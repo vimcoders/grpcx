@@ -2,8 +2,9 @@ package ttrpc
 
 import (
 	"context"
-	"math/rand/v2"
 	"net"
+	"ttrpc/balancer"
+	"ttrpc/driver"
 	"ttrpc/generated/api"
 
 	"google.golang.org/grpc"
@@ -14,7 +15,7 @@ import (
 type Option func(c *Client)
 
 type Client struct {
-	Transports  []RoundTripper
+	rts         []driver.RoundTripper
 	codec       codec
 	retries     int32
 	interceptor UnaryClientInterceptor
@@ -23,7 +24,7 @@ type Client struct {
 func DialContext(ctx context.Context, target string, opts ...Option) (grpc.ClientConnInterface, error) {
 	client := Client{
 		retries: 3,
-		interceptor: func(ctx context.Context, r *api.Request, rt RoundTripper) (*api.Response, error) {
+		interceptor: func(ctx context.Context, r *api.Request, rt driver.RoundTripper) (*api.Response, error) {
 			return rt.RoundTrip(ctx, r)
 		},
 	}
@@ -49,7 +50,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 		}
 
 		go c.run(ctx)
-		client.Transports = append(client.Transports, c)
+		client.rts = append(client.rts, c)
 	}
 	return &client, nil
 }
@@ -63,14 +64,19 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
+	r := balancer.NewRandPicker(c.rts...)
 	for range c.retries {
+		rt, err := r.Pick(ctx, driver.PickInfo{})
+		if err != nil {
+			return err
+		}
 		response, err := c.interceptor(ctx, &api.Request{
 			Metas: &api.Metas{
 				Path:      method,
 				Authority: GetAuthority(ctx),
 			},
 			Payload: payload,
-		}, c.Transports[rand.N(len(c.Transports))])
+		}, rt)
 		if err != nil {
 			return err
 		}

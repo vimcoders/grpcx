@@ -79,10 +79,7 @@ func (c *Transport) run(ctx context.Context) {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		c.c = cc
-		c.channel = newChannel(cc)
-		c.ctx = ctx
-		c.closed = cancel
+		c.channel, c.c, c.ctx, c.closed = newChannel(cc), cc, ctx, cancel
 		c.run(ctx)
 	}
 }
@@ -196,5 +193,5 @@ func (c *Transport) Close() error {
 		c.closed()
 	}
 	c.cleanupStreams()
-	return c.c.Close()
+	return nil
 }

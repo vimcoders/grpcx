@@ -4,7 +4,7 @@ import (
 	"context"
 	"grpcx/balancer"
 	"grpcx/generated/api"
-	"grpcx/transport"
+	"grpcx/ttrpc"
 	"net"
 
 	"grpcx/encoding"
@@ -22,7 +22,7 @@ type Client struct {
 	idle        int32
 	retries     int32
 	interceptor UnaryClientInterceptor
-	opts        []transport.Option
+	opts        []ttrpc.Option
 }
 
 func DialContext(ctx context.Context, target string, opts ...Option) (grpc.ClientConnInterface, error) {
@@ -30,21 +30,21 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 		idle:    1,
 		retries: 3,
 		Codec:   encoding.GetCodec(encoding.Name),
-		interceptor: func(ctx context.Context, r *api.Request, rt transport.RoundTripper) (*api.Response, error) {
+		interceptor: func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
 			return rt.RoundTrip(ctx, r)
 		},
 	}
 	for _, o := range opts {
 		o(&client)
 	}
-	var rts []transport.RoundTripper
+	var rts []ttrpc.RoundTripper
 	for range client.idle {
 		d := net.Dialer{}
 		cc, err := d.DialContext(ctx, "tcp", target)
 		if err != nil {
 			return nil, err
 		}
-		rts = append(rts, transport.NewRoundTripper(cc, client.opts...))
+		rts = append(rts, ttrpc.NewRoundTripper(cc, client.opts...))
 	}
 	client.Picker = balancer.NewRoundRobinPicker(rts...)
 	return &client, nil
@@ -52,7 +52,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 
 func WithMaxStreams(n uint32) Option {
 	return func(c *Client) {
-		c.opts = append(c.opts, transport.MaxStreams(n))
+		c.opts = append(c.opts, ttrpc.MaxStreams(n))
 	}
 }
 

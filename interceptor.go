@@ -3,10 +3,10 @@ package grpcx
 import (
 	"context"
 	"grpcx/generated/api"
-	"grpcx/transport"
+	"grpcx/ttrpc"
 )
 
-type UnaryClientInterceptor func(context.Context, *api.Request, transport.RoundTripper) (*api.Response, error)
+type UnaryClientInterceptor func(context.Context, *api.Request, ttrpc.RoundTripper) (*api.Response, error)
 
 func WithUnaryInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *Client) {

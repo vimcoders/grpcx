@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package transport
+package ttrpc
 
 import (
 	"context"

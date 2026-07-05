@@ -2,7 +2,7 @@ package grpcx
 
 import (
 	"context"
-	"grpcx/transport"
+	"grpcx/ttrpc"
 	"log/slog"
 	"net"
 	"sync"
@@ -11,14 +11,14 @@ import (
 )
 
 type Server struct {
-	transport.ServerOptions
+	ttrpc.ServerOptions
 	wg       sync.WaitGroup
 	listener net.Listener
 	closed   context.CancelFunc
 }
 
-func NewServer(opt ...transport.ServerOption) *Server {
-	opts := transport.DefaultServerOptions
+func NewServer(opt ...ttrpc.ServerOption) *Server {
+	opts := ttrpc.DefaultServerOptions
 	for i := range opt {
 		opt[i](&opts)
 	}
@@ -45,7 +45,7 @@ func (x *Server) Close() error {
 	return nil
 }
 
-func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...transport.ServerOption) (err error) {
+func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.ServerOption) (err error) {
 	for i := range opt {
 		opt[i](&x.ServerOptions)
 	}

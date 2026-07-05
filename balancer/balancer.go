@@ -2,11 +2,11 @@ package balancer
 
 import (
 	"context"
-	"grpcx/transport"
+	"grpcx/ttrpc"
 )
 
 type Picker interface {
-	Pick(context.Context, PickInfo) (transport.RoundTripper, error)
+	Pick(context.Context, PickInfo) (ttrpc.RoundTripper, error)
 }
 
 type PickInfo struct {

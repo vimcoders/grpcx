@@ -5,7 +5,7 @@ import (
 	"grpcx"
 	"grpcx/encoding"
 	"grpcx/generated/api"
-	"grpcx/transport"
+	"grpcx/ttrpc"
 	"path"
 	"sync"
 	"testing"
@@ -72,8 +72,8 @@ func startTTServer() {
 		h := &TTHandler{
 			Codec: encoding.GetCodec(encoding.Name),
 		}
-		opts := []transport.ServerOption{
-			transport.UnaryServerInterceptor(h),
+		opts := []ttrpc.ServerOption{
+			ttrpc.UnaryServerInterceptor(h),
 		}
 		ttServer = grpcx.NewServer(opts...)
 		go func() {

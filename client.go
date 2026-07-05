@@ -65,21 +65,19 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
+	info := balancer.PickInfo{
+		FullMethodName: method,
+	}
+	request := &api.Request{
+		Method:  method,
+		Payload: payload,
+	}
 	for range c.retries {
-		rt, err := c.Pick(ctx, balancer.PickInfo{})
+		rt, err := c.Pick(ctx, info)
 		if err != nil {
 			return err
 		}
-		response, err := c.interceptor(ctx, &api.Request{
-			Metadata: []*api.KeyValue{
-				{
-					Key:   grpc_authority,
-					Value: GetAuthority(ctx),
-				},
-			},
-			Method:  method,
-			Payload: payload,
-		}, rt)
+		response, err := c.interceptor(ctx, request, rt)
 		if err != nil {
 			return err
 		}

@@ -27,7 +27,7 @@ type Request struct {
 	Method        string                 `protobuf:"bytes,2,opt,name=Method,proto3" json:"Method,omitempty"`
 	Payload       []byte                 `protobuf:"bytes,3,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	Timeout       int64                  `protobuf:"varint,4,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
-	Metadata      []*KeyValue            `protobuf:"bytes,5,rep,name=Metadata,proto3" json:"Metadata,omitempty"`
+	Metadatas     []string               `protobuf:"bytes,5,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -90,9 +90,9 @@ func (x *Request) GetTimeout() int64 {
 	return 0
 }
 
-func (x *Request) GetMetadata() []*KeyValue {
+func (x *Request) GetMetadatas() []string {
 	if x != nil {
-		return x.Metadata
+		return x.Metadatas
 	}
 	return nil
 }
@@ -157,76 +157,21 @@ func (x *Response) GetPayload() []byte {
 	return nil
 }
 
-type KeyValue struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=Key,proto3" json:"Key,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=Value,proto3" json:"Value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *KeyValue) Reset() {
-	*x = KeyValue{}
-	mi := &file_proto_api_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *KeyValue) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*KeyValue) ProtoMessage() {}
-
-func (x *KeyValue) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_api_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use KeyValue.ProtoReflect.Descriptor instead.
-func (*KeyValue) Descriptor() ([]byte, []int) {
-	return file_proto_api_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *KeyValue) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-func (x *KeyValue) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
 var File_proto_api_proto protoreflect.FileDescriptor
 
 const file_proto_api_proto_rawDesc = "" +
 	"\n" +
-	"\x0fproto/api.proto\x12\x03api\"\x9a\x01\n" +
+	"\x0fproto/api.proto\x12\x03api\"\x8d\x01\n" +
 	"\aRequest\x12\x18\n" +
 	"\aService\x18\x01 \x01(\tR\aService\x12\x16\n" +
 	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
 	"\aPayload\x18\x03 \x01(\fR\aPayload\x12\x18\n" +
-	"\aTimeout\x18\x04 \x01(\x03R\aTimeout\x12)\n" +
-	"\bMetadata\x18\x05 \x03(\v2\r.api.KeyValueR\bMetadata\"R\n" +
+	"\aTimeout\x18\x04 \x01(\x03R\aTimeout\x12\x1c\n" +
+	"\tMetadatas\x18\x05 \x03(\tR\tMetadatas\"R\n" +
 	"\bResponse\x12\x12\n" +
 	"\x04Code\x18\x01 \x01(\x05R\x04Code\x12\x18\n" +
 	"\aMessage\x18\x02 \x01(\tR\aMessage\x12\x18\n" +
-	"\aPayload\x18\x03 \x01(\fR\aPayload\"2\n" +
-	"\bKeyValue\x12\x10\n" +
-	"\x03Key\x18\x01 \x01(\tR\x03Key\x12\x14\n" +
-	"\x05Value\x18\x02 \x01(\tR\x05ValueB\bZ\x06./;apib\x06proto3"
+	"\aPayload\x18\x03 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_proto_api_proto_rawDescOnce sync.Once
@@ -240,19 +185,17 @@ func file_proto_api_proto_rawDescGZIP() []byte {
 	return file_proto_api_proto_rawDescData
 }
 
-var file_proto_api_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_proto_api_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_proto_api_proto_goTypes = []any{
 	(*Request)(nil),  // 0: api.Request
 	(*Response)(nil), // 1: api.Response
-	(*KeyValue)(nil), // 2: api.KeyValue
 }
 var file_proto_api_proto_depIdxs = []int32{
-	2, // 0: api.Request.Metadata:type_name -> api.KeyValue
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0, // [0:0] is the sub-list for method output_type
+	0, // [0:0] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_proto_api_proto_init() }
@@ -266,7 +209,7 @@ func file_proto_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_api_proto_rawDesc), len(file_proto_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

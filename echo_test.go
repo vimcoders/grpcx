@@ -3,18 +3,62 @@ package grpcx_test
 import (
 	"context"
 	"grpcx"
+	"grpcx/encoding"
 	"grpcx/generated/api"
 	"grpcx/transport"
+	"path"
 	"sync"
 	"testing"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 type TTHandler struct {
 	api.UnimplementedEchoServiceServer
+	encoding.Codec
 }
 
 func (h *TTHandler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
 	return &api.EchoResponse{Message: req.Message}, nil
+}
+
+func (h *TTHandler) Interceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return handler(ctx, req)
+}
+
+func (h *TTHandler) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	for _, v := range api.EchoService_ServiceDesc.Methods {
+		path := path.Join("/", api.EchoService_ServiceDesc.ServiceName, v.MethodName)
+		if path != req.Method {
+			continue
+		}
+		reply, err := v.Handler(h, ctx, func(in any) error {
+			return h.Unmarshal(req.Payload, in)
+		}, h.Interceptor)
+		if err != nil {
+			return &api.Response{
+				Code:    int32(codes.Unavailable),
+				Message: err.Error(),
+			}, nil
+		}
+		response, err := h.Marshal(reply)
+		if err != nil {
+			return &api.Response{
+				Code:    int32(codes.Unavailable),
+				Message: err.Error(),
+			}, nil
+		}
+		return &api.Response{
+			Code:    int32(codes.OK),
+			Message: codes.OK.String(),
+			Payload: response,
+		}, nil
+	}
+	return &api.Response{
+		Code:    int32(codes.Unimplemented),
+		Message: codes.Unimplemented.String(),
+	}, nil
 }
 
 var (
@@ -25,8 +69,11 @@ var (
 
 func startTTServer() {
 	setupTT.Do(func() {
+		h := &TTHandler{
+			Codec: encoding.GetCodec(encoding.Name),
+		}
 		opts := []transport.ServerOption{
-			transport.WithServiceDesc(&api.EchoService_ServiceDesc, &TTHandler{}),
+			transport.UnaryServerInterceptor(h),
 		}
 		ttServer = grpcx.NewServer(opts...)
 		go func() {

@@ -7,16 +7,11 @@ message Request {
   string Method = 2;
   bytes Payload = 3;
   int64 Timeout = 4;
-  repeated KeyValue Metadata = 5;
+  repeated string Metadatas = 5;
 }
 
 message Response {
   int32 Code = 1;
   string Message = 2;
   bytes Payload = 3;
-}
-
-message KeyValue {
-  string Key = 1;
-  string Value = 2;
 }

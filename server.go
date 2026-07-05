@@ -32,16 +32,6 @@ func NewServer(opt ...transport.ServerOption) *Server {
 // invoking Serve. If ss is non-nil (for legacy code), its type is checked to
 // ensure it implements sd.HandlerType.
 func (x *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
-	x.register(sd, ss)
-}
-
-func (x *Server) register(sd *grpc.ServiceDesc, ss any) {
-	opts := []transport.ServerOption{
-		transport.WithServiceDesc(sd, ss),
-	}
-	for i := range opts {
-		opts[i](&x.ServerOptions)
-	}
 }
 
 func (x *Server) Close() error {

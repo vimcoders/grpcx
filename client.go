@@ -5,7 +5,6 @@ import (
 	"grpcx/balancer"
 	"grpcx/generated/api"
 	"grpcx/ttrpc"
-	"net"
 
 	"grpcx/encoding"
 
@@ -35,12 +34,11 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 	}
 	var rts []ttrpc.RoundTripper
 	for range client.idle {
-		d := net.Dialer{}
-		cc, err := d.DialContext(ctx, "tcp", target)
+		rt, err := ttrpc.DialContext(ctx, target, client.opts...)
 		if err != nil {
 			return nil, err
 		}
-		rts = append(rts, ttrpc.NewRoundTripper(cc, client.opts...))
+		rts = append(rts, rt)
 	}
 	client.Picker = balancer.NewRoundRobinPicker(rts...)
 	return &client, nil

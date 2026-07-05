@@ -45,13 +45,23 @@ type Transport struct {
 	ctx        context.Context
 	closed     func()
 	retries    int32
+	target     string
 }
 
-func NewRoundTripper(c net.Conn, opts ...Option) RoundTripper {
+func Dial(target string, opts ...Option) (RoundTripper, error) {
+	return DialContext(context.Background(), target, opts...)
+}
+
+func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripper, error) {
+	d := net.Dialer{}
+	cc, err := d.DialContext(ctx, "tcp", target)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := &Transport{
-		channel:    newChannel(c),
-		c:          c,
+		channel:    newChannel(cc),
+		c:          cc,
 		streamID:   1,
 		maxStreams: 64, // 默认最大64个并发流
 		retries:    3,
@@ -59,12 +69,13 @@ func NewRoundTripper(c net.Conn, opts ...Option) RoundTripper {
 		closed:     cancel,
 		streams:    make(map[uint32]*stream),
 		Codec:      encoding.GetCodec(encoding.Name),
+		target:     target,
 	}
 	for _, o := range opts {
 		o(rt)
 	}
 	go rt.run(ctx)
-	return rt
+	return rt, nil
 }
 
 func (c *Transport) run(ctx context.Context) {
@@ -73,8 +84,7 @@ func (c *Transport) run(ctx context.Context) {
 	}
 	for range c.retries {
 		d := net.Dialer{}
-		network, address := c.c.RemoteAddr().Network(), c.c.RemoteAddr().String()
-		cc, err := d.DialContext(ctx, network, address)
+		cc, err := d.DialContext(ctx, "tcp", c.target)
 		if err != nil {
 			continue
 		}

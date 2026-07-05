@@ -71,10 +71,6 @@ func (c *Transport) run(ctx context.Context) {
 	if err := c.receiveLoop(ctx); err != nil {
 		slog.Error("run", "receiveLoop", err)
 	}
-	c.cleanupStreams()
-	if err := c.Close(); err != nil {
-		slog.Error("run", "close", err)
-	}
 	for range c.retries {
 		d := net.Dialer{}
 		network, address := c.c.RemoteAddr().Network(), c.c.RemoteAddr().String()
@@ -92,6 +88,7 @@ func (c *Transport) run(ctx context.Context) {
 }
 
 func (c *Transport) receiveLoop(ctx context.Context) error {
+	defer c.Close()
 	for {
 		select {
 		case <-ctx.Done():
@@ -198,5 +195,6 @@ func (c *Transport) Close() error {
 	if c.closed != nil {
 		c.closed()
 	}
+	c.cleanupStreams()
 	return c.c.Close()
 }

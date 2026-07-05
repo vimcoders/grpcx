@@ -10,8 +10,6 @@ import (
 	"grpcx/encoding"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type Option func(c *Client)
@@ -20,16 +18,14 @@ type Client struct {
 	balancer.Picker
 	encoding.Codec
 	idle        int32
-	retries     int32
 	interceptor UnaryClientInterceptor
 	opts        []ttrpc.Option
 }
 
 func DialContext(ctx context.Context, target string, opts ...Option) (grpc.ClientConnInterface, error) {
 	client := Client{
-		idle:    1,
-		retries: 3,
-		Codec:   encoding.GetCodec(encoding.Name),
+		idle:  1,
+		Codec: encoding.GetCodec(encoding.Name),
 		interceptor: func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
 			return rt.RoundTrip(ctx, r)
 		},
@@ -72,28 +68,18 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 		Method:  method,
 		Payload: payload,
 	}
-	for range c.retries {
-		rt, err := c.Pick(ctx, info)
-		if err != nil {
-			return err
-		}
-		response, err := c.interceptor(ctx, request, rt)
-		if err != nil {
-			return err
-		}
-		switch codes.Code(response.Code) {
-		case codes.OK:
-			if err = c.Unmarshal(response.Payload, reply); err != nil {
-				return err
-			}
-			return nil
-		case codes.Unavailable:
-			continue
-		default:
-			return status.New(codes.Code(response.Code), response.Message).Err()
-		}
+	rt, err := c.Pick(ctx, info)
+	if err != nil {
+		return err
 	}
-	return status.New(codes.Unavailable, codes.Unavailable.String()).Err()
+	response, err := c.interceptor(ctx, request, rt)
+	if err != nil {
+		return err
+	}
+	if err = c.Unmarshal(response.Payload, reply); err != nil {
+		return err
+	}
+	return nil
 }
 
 // NewStream creates a new stream with the given stream descriptor to the

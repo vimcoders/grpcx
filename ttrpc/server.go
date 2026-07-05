@@ -27,6 +27,7 @@ func UnaryServerInterceptor(rt RoundTripper) ServerOption {
 }
 
 func (x *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
+	defer c.Close()
 	channel := newChannel(c)
 	for {
 		select {

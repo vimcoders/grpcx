@@ -4,23 +4,31 @@ import (
 	"context"
 	"errors"
 	"grpcx/ttrpc"
+	"math/rand"
 	"sync/atomic"
+	"time"
 )
 
 type RoundRobin struct {
-	rts []ttrpc.RoundTripper
-	idx atomic.Uint32
+	rts   []ttrpc.RoundTripper
+	next  atomic.Uint32
+	delta uint32
 }
 
 func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
 	if len(x.rts) == 0 {
 		return nil, errors.New("no available RoundTripper")
 	}
-	return x.rts[x.idx.Add(1)%uint32(len(x.rts))], nil
+	idx := x.next.Add(x.delta) % uint32(len(x.rts))
+	return x.rts[idx], nil
 }
 
 func NewRoundRobinPicker(rts ...ttrpc.RoundTripper) Picker {
 	var x RoundRobin
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	next := uint32(rng.Intn(len(rts)))
 	x.rts = append(x.rts, rts...)
+	x.next.Store(next)
+	x.delta = 1
 	return &x
 }

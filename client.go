@@ -5,8 +5,11 @@ import (
 	"grpcx/balancer"
 	"grpcx/generated/api"
 	"grpcx/ttrpc"
+	"net/url"
 
 	"grpcx/encoding"
+
+	"grpcx/resolver"
 
 	"google.golang.org/grpc"
 )
@@ -16,14 +19,12 @@ type Option func(c *Client)
 type Client struct {
 	balancer.Picker
 	encoding.Codec
-	idle        int32
 	interceptor UnaryClientInterceptor
 	opts        []ttrpc.Option
 }
 
 func DialContext(ctx context.Context, target string, opts ...Option) (grpc.ClientConnInterface, error) {
 	client := Client{
-		idle:  1,
 		Codec: encoding.GetCodec(encoding.Name),
 		interceptor: func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
 			return rt.RoundTrip(ctx, r)
@@ -32,8 +33,13 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 	for _, o := range opts {
 		o(&client)
 	}
+	resolver := resolver.GetResolver("dns")
+	adderss, err := resolver.Resolve(url.URL{Scheme: "dns", Host: target})
+	if err != nil {
+		return nil, err
+	}
 	var rts []ttrpc.RoundTripper
-	for range client.idle {
+	for range adderss {
 		rt, err := ttrpc.DialContext(ctx, target, client.opts...)
 		if err != nil {
 			return nil, err

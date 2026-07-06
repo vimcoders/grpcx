@@ -30,7 +30,7 @@ func (d *dnsResolver) Resolve(u url.URL) ([]Address, error) {
 	if hostName == "" {
 		return nil, errors.New("resolver: empty host")
 	}
-	ips, err := net.DefaultResolver.LookupHost(context.Background(), hostName)
+	ips, err := net.LookupHost(hostName)
 	if err != nil {
 		return nil, err
 	}

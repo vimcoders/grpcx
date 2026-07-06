@@ -10,16 +10,16 @@ import (
 )
 
 type RoundRobin struct {
-	rts   []ttrpc.RoundTripper
-	next  atomic.Uint32
-	delta uint32
+	rts  []ttrpc.RoundTripper
+	next atomic.Uint32
+	step uint32
 }
 
 func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
 	if len(x.rts) == 0 {
 		return nil, errors.New("no available RoundTripper")
 	}
-	idx := x.next.Add(x.delta) % uint32(len(x.rts))
+	idx := x.next.Add(x.step) % uint32(len(x.rts))
 	return x.rts[idx], nil
 }
 
@@ -29,6 +29,6 @@ func NewRoundRobinPicker(rts ...ttrpc.RoundTripper) Picker {
 	next := uint32(rng.Intn(len(rts)))
 	x.rts = append(x.rts, rts...)
 	x.next.Store(next)
-	x.delta = 1
+	x.step = 1
 	return &x
 }

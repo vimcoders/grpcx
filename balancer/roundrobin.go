@@ -70,12 +70,12 @@ func (x *RoundRobin) wait(ctx context.Context) error {
 		default:
 			address, err := x.resolveContext(ctx)
 			if err != nil {
-				return err
+				continue
 			}
 			for i := len(x.rts); i <= len(address); i++ {
 				rt, err := x.dialContext(ctx)
 				if err != nil {
-					return err
+					continue
 				}
 				x.rts = append(x.rts, rt)
 			}

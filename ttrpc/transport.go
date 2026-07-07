@@ -19,7 +19,6 @@ import (
 	"context"
 	"grpcx/generated/api"
 	"grpcx/status"
-	"log/slog"
 	"net"
 	"sync"
 
@@ -80,7 +79,9 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 
 func (c *Transport) run(ctx context.Context) {
 	if err := c.receiveLoop(ctx); err != nil {
-		slog.Error("run", "receiveLoop", err)
+		if status.Code(err) == status.Canceled.Code() {
+			return
+		}
 	}
 	for range c.retries {
 		d := net.Dialer{}
@@ -105,15 +106,16 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			var response api.Response
-			if err := c.Unmarshal(payload, &response); err != nil {
-				return err
-			}
-			c.channel.putmbuf(payload)
 			s := c.getStream(streamID)
 			if s == nil {
 				continue
 			}
+			var response api.Response
+			if err := c.Unmarshal(payload, &response); err != nil {
+				s.close()
+				continue
+			}
+			c.channel.putmbuf(payload)
 			if err := s.receive(ctx, &response); err != nil {
 				continue
 			}

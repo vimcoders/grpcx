@@ -22,3 +22,15 @@ var Internal = status.New(codes.Internal, codes.Internal.String())              
 var Unavailable = status.New(codes.Unavailable, codes.Unavailable.String())                      // 框架默认，可重试
 var DataLoss = status.New(codes.DataLoss, codes.DataLoss.String())                               // 数据丢失
 var Unauthenticated = status.New(codes.Unauthenticated, codes.Unauthenticated.String())          // 需要重新登录 / 换 Token
+
+func FromError(err error) (s *status.Status, ok bool) {
+	return status.FromError(err)
+}
+
+func Convert(err error) *status.Status {
+	return status.Convert(err)
+}
+
+func Code(err error) codes.Code {
+	return status.Code(err)
+}

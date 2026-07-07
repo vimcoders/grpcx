@@ -11,6 +11,11 @@ import (
 	"google.golang.org/grpc"
 )
 
+type ClientConnInterface interface {
+	grpc.ClientConnInterface
+	balancer.Picker
+}
+
 type Option func(c *Client)
 
 type Client struct {
@@ -20,7 +25,7 @@ type Client struct {
 	opts        []ttrpc.Option
 }
 
-func DialContext(ctx context.Context, target string, opts ...Option) (grpc.ClientConnInterface, error) {
+func DialContext(ctx context.Context, target string, opts ...Option) (ClientConnInterface, error) {
 	client := Client{
 		Codec: encoding.GetCodec(encoding.Name),
 		interceptor: func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
@@ -44,7 +49,7 @@ func WithMaxStreams(n uint32) Option {
 	}
 }
 
-func Dial(target string, opts ...Option) (grpc.ClientConnInterface, error) {
+func Dial(target string, opts ...Option) (ClientConnInterface, error) {
 	return DialContext(context.Background(), target, opts...)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"grpcx/resolver"
+	"grpcx/status"
 	"grpcx/ttrpc"
 	"math/rand"
 	"net/url"
@@ -12,9 +13,11 @@ import (
 )
 
 type RoundRobin struct {
-	rts  []ttrpc.RoundTripper
-	next atomic.Uint32
-	step uint32
+	rts            []ttrpc.RoundTripper
+	next           atomic.Uint32
+	step           uint32
+	dialContext    func(ctx context.Context) (ttrpc.RoundTripper, error)
+	resolveContext func(ctx context.Context) ([]resolver.Address, error)
 }
 
 func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
@@ -26,16 +29,26 @@ func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, er
 }
 
 func DialContext(ctx context.Context, target string, opts ...ttrpc.Option) (Picker, error) {
-	resolver := resolver.GetResolver("dns")
-	adderss, err := resolver.Resolve(url.URL{Scheme: "dns", Host: target})
+	var x RoundRobin = RoundRobin{
+		step: 1,
+		dialContext: func(ctx context.Context) (ttrpc.RoundTripper, error) {
+			return ttrpc.DialContext(ctx, target, opts...)
+		},
+		resolveContext: func(ctx context.Context) ([]resolver.Address, error) {
+			resolver := resolver.GetResolver("dns")
+			adderss, err := resolver.Resolve(url.URL{Scheme: "dns", Host: target})
+			if err != nil {
+				return nil, err
+			}
+			return adderss, nil
+		},
+	}
+	address, err := x.resolveContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var x RoundRobin = RoundRobin{
-		step: 1,
-	}
-	for range adderss {
-		rt, err := ttrpc.DialContext(ctx, target, opts...)
+	for range address {
+		rt, err := x.dialContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -45,4 +58,27 @@ func DialContext(ctx context.Context, target string, opts ...ttrpc.Option) (Pick
 	next := uint32(rng.Intn(len(x.rts)))
 	x.next.Store(next)
 	return &x, nil
+}
+
+func (x *RoundRobin) wait(ctx context.Context) error {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Canceled.Err()
+		default:
+			address, err := x.resolveContext(ctx)
+			if err != nil {
+				return err
+			}
+			for i := len(x.rts); i <= len(address); i++ {
+				rt, err := x.dialContext(ctx)
+				if err != nil {
+					return err
+				}
+				x.rts = append(x.rts, rt)
+			}
+		}
+	}
 }

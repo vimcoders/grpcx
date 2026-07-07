@@ -5,11 +5,8 @@ import (
 	"grpcx/balancer"
 	"grpcx/generated/api"
 	"grpcx/ttrpc"
-	"net/url"
 
 	"grpcx/encoding"
-
-	"grpcx/resolver"
 
 	"google.golang.org/grpc"
 )
@@ -33,20 +30,11 @@ func DialContext(ctx context.Context, target string, opts ...Option) (grpc.Clien
 	for _, o := range opts {
 		o(&client)
 	}
-	resolver := resolver.GetResolver("dns")
-	adderss, err := resolver.Resolve(url.URL{Scheme: "dns", Host: target})
+	picker, err := balancer.DialContext(ctx, target, client.opts...)
 	if err != nil {
 		return nil, err
 	}
-	var rts []ttrpc.RoundTripper
-	for range adderss {
-		rt, err := ttrpc.DialContext(ctx, target, client.opts...)
-		if err != nil {
-			return nil, err
-		}
-		rts = append(rts, rt)
-	}
-	client.Picker = balancer.NewRoundRobinPicker(rts...)
+	client.Picker = picker
 	return &client, nil
 }
 

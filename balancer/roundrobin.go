@@ -3,8 +3,10 @@ package balancer
 import (
 	"context"
 	"errors"
+	"grpcx/resolver"
 	"grpcx/ttrpc"
 	"math/rand"
+	"net/url"
 	"sync/atomic"
 	"time"
 )
@@ -23,12 +25,24 @@ func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, er
 	return x.rts[idx], nil
 }
 
-func NewRoundRobinPicker(rts ...ttrpc.RoundTripper) Picker {
-	var x RoundRobin
+func DialContext(ctx context.Context, target string, opts ...ttrpc.Option) (Picker, error) {
+	resolver := resolver.GetResolver("dns")
+	adderss, err := resolver.Resolve(url.URL{Scheme: "dns", Host: target})
+	if err != nil {
+		return nil, err
+	}
+	var x RoundRobin = RoundRobin{
+		step: 1,
+	}
+	for range adderss {
+		rt, err := ttrpc.DialContext(ctx, target, opts...)
+		if err != nil {
+			return nil, err
+		}
+		x.rts = append(x.rts, rt)
+	}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	next := uint32(rng.Intn(len(rts)))
-	x.rts = append(x.rts, rts...)
+	next := uint32(rng.Intn(len(x.rts)))
 	x.next.Store(next)
-	x.step = 1
-	return &x
+	return &x, nil
 }

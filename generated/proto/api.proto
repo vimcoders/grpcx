@@ -1,0 +1,17 @@
+syntax = "proto3";
+package api;
+option go_package = "./;api";
+
+message Request {
+  string Service = 1;
+  string Method = 2;
+  bytes Payload = 3;
+  int64 Timeout = 4;
+  repeated string Metadatas = 5;
+}
+
+message Response {
+  int32 Code = 1;
+  string Message = 2;
+  bytes Payload = 3;
+}

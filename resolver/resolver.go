@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/url"
-	"sort"
 
 	"google.golang.org/grpc/resolver"
 )
@@ -66,22 +65,22 @@ func GetResolver(scheme string) Resolver {
 	return newDNSResolver()
 }
 
-func addressesEqual(a, b []Address) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	as := make([]string, len(a))
-	bs := make([]string, len(b))
-	for i := range a {
-		as[i] = a[i].Addr
-		bs[i] = b[i].Addr
-	}
-	sort.Strings(as)
-	sort.Strings(bs)
-	for i := range as {
-		if as[i] != bs[i] {
-			return false
-		}
-	}
-	return true
-}
+// func addressesEqual(a, b []Address) bool {
+// 	if len(a) != len(b) {
+// 		return false
+// 	}
+// 	as := make([]string, len(a))
+// 	bs := make([]string, len(b))
+// 	for i := range a {
+// 		as[i] = a[i].Addr
+// 		bs[i] = b[i].Addr
+// 	}
+// 	sort.Strings(as)
+// 	sort.Strings(bs)
+// 	for i := range as {
+// 		if as[i] != bs[i] {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }

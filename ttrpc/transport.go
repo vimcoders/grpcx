@@ -97,9 +97,9 @@ func (c *Transport) run(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		childCtx, cancel := context.WithCancel(context.Background())
 		c.channel, c.c, c.ctx, c.closed = newChannel(cc), cc, ctx, cancel
-		c.run(ctx)
+		c.run(childCtx)
 	}
 }
 

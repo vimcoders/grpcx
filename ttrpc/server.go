@@ -49,25 +49,25 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	}
 }
 
-func (h *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	if h.rt != nil {
-		return h.rt(ctx, req)
+func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	if so.rt != nil {
+		return so.rt(ctx, req)
 	}
 	for _, v := range api.EchoService_ServiceDesc.Methods {
 		path := path.Join("/", api.EchoService_ServiceDesc.ServiceName, v.MethodName)
 		if path != req.Method {
 			continue
 		}
-		reply, err := v.Handler(h.imp, ctx, func(in any) error {
-			return h.Unmarshal(req.Payload, in)
-		}, h.interceptor)
+		reply, err := v.Handler(so.imp, ctx, func(in any) error {
+			return so.Unmarshal(req.Payload, in)
+		}, so.interceptor)
 		if err != nil {
 			return &api.Response{
 				Code:    int32(codes.Unavailable),
 				Message: err.Error(),
 			}, nil
 		}
-		response, err := h.Marshal(reply)
+		response, err := so.Marshal(reply)
 		if err != nil {
 			return &api.Response{
 				Code:    int32(codes.Unavailable),
@@ -86,7 +86,7 @@ func (h *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.R
 	}, nil
 }
 
-func (x *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
+func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 	defer c.Close()
 	channel := newChannel(c)
 	for {
@@ -99,15 +99,15 @@ func (x *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 				return err
 			}
 			var request api.Request
-			if err := x.Unmarshal(payload, &request); err != nil {
+			if err := so.Unmarshal(payload, &request); err != nil {
 				return err
 			}
 			channel.putmbuf(payload)
-			response, err := x.RoundTrip(ctx, &request)
+			response, err := so.RoundTrip(ctx, &request)
 			if err != nil {
 				return err
 			}
-			b, err := x.Marshal(response)
+			b, err := so.Marshal(response)
 			if err != nil {
 				return err
 			}

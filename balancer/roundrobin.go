@@ -15,18 +15,18 @@ import (
 type rrBuilder struct{}
 
 func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...ttrpc.Option) (Picker, error) {
-	var x RoundRobin = RoundRobin{
+	var x = RoundRobin{
 		step: 1,
 		dialContext: func(ctx context.Context) (ttrpc.RoundTripper, error) {
 			return ttrpc.DialContext(ctx, endpoint, opts...)
 		},
 		resolveContext: func(ctx context.Context) ([]resolver.Address, error) {
 			resolver := resolver.GetResolver("dns")
-			adderss, err := resolver.Resolve(url.URL{Scheme: "dns", Host: endpoint})
+			address, err := resolver.Resolve(url.URL{Scheme: "dns", Host: endpoint})
 			if err != nil {
 				return nil, err
 			}
-			return adderss, nil
+			return address, nil
 		},
 	}
 	address, err := x.resolveContext(ctx)
@@ -43,7 +43,11 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...ttrpc.Op
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	next := uint32(rng.Intn(len(x.rts)))
 	x.next.Store(next)
-	go x.watch(ctx, time.Minute)
+	go func() {
+		if err := x.watch(ctx, time.Minute); err != nil {
+			return
+		}
+	}()
 	return &x, nil
 }
 

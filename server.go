@@ -32,6 +32,7 @@ func NewServer(opt ...ttrpc.ServerOption) *Server {
 // invoking Serve. If ss is non-nil (for legacy code), its type is checked to
 // ensure it implements sd.HandlerType.
 func (x *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
+	ttrpc.RegisterService(sd, ss)(&x.ServerOptions)
 }
 
 func (x *Server) Close() error {

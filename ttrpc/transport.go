@@ -82,7 +82,9 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	for _, o := range opts {
 		o(rt)
 	}
-	go rt.run(ctx)
+	go func() {
+		rt.run(ctx)
+	}()
 	return rt, nil
 }
 
@@ -97,9 +99,9 @@ func (c *Transport) run(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		childCtx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(context.Background())
 		c.channel, c.c, c.ctx, c.closed = newChannel(cc), cc, ctx, cancel
-		c.run(childCtx)
+		c.run(ctx)
 	}
 }
 

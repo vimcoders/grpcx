@@ -9,6 +9,8 @@ import (
 
 	"grpcx/encoding"
 
+	"grpcx/metadata"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
@@ -20,7 +22,6 @@ type ServerOptions struct {
 	desc        *grpc.ServiceDesc
 	imp         any
 	interceptor grpc.UnaryServerInterceptor
-	rt          func(context.Context, *api.Request) (*api.Response, error)
 }
 
 var DefaultServerOptions = ServerOptions{
@@ -28,12 +29,6 @@ var DefaultServerOptions = ServerOptions{
 	interceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
 		return handler(ctx, req)
 	},
-}
-
-func UnaryServerRoundTrip(rt func(context.Context, *api.Request) (*api.Response, error)) ServerOption {
-	return func(so *ServerOptions) {
-		so.rt = rt
-	}
 }
 
 func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
@@ -50,15 +45,13 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 }
 
 func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	if so.rt != nil {
-		return so.rt(ctx, req)
-	}
+	var md metadata.MD = req.Metadatas
 	for _, v := range api.EchoService_ServiceDesc.Methods {
 		path := path.Join("/", api.EchoService_ServiceDesc.ServiceName, v.MethodName)
 		if path != req.Method {
 			continue
 		}
-		reply, err := v.Handler(so.imp, ctx, func(in any) error {
+		reply, err := v.Handler(so.imp, metadata.WithMetadata(ctx, md), func(in any) error {
 			return so.Unmarshal(req.Payload, in)
 		}, so.interceptor)
 		if err != nil {

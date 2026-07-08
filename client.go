@@ -4,6 +4,7 @@ import (
 	"context"
 	"grpcx/balancer"
 	"grpcx/generated/api"
+	"grpcx/metadata"
 	"grpcx/ttrpc"
 
 	"grpcx/encoding"
@@ -64,6 +65,9 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	request := &api.Request{
 		Method:  method,
 		Payload: payload,
+	}
+	if medatas, ok := metadata.GetMetadata(ctx); ok {
+		request.Metadatas = medatas
 	}
 	rt, err := c.Pick(ctx, info)
 	if err != nil {

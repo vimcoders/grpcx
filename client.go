@@ -63,7 +63,7 @@ func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
 		for range retries {
 			reply, err = rt.RoundTrip(ctx, r)
 			if err != nil {
-				continue
+				return reply, err
 			}
 			switch reply.Code {
 			case int32(codes.OK):

@@ -99,7 +99,7 @@ func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
 	}
 }
 
-func OtelUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
+func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
 	tracer := otel.Tracer("grpc-client-retries")
 	var propagator = otel.GetTextMapPropagator()
 	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
@@ -116,6 +116,6 @@ func OtelUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
 		for k, v := range carrier {
 			md = append(md, k, v)
 		}
-		return rt.RoundTrip(metadata.AppendToContext(ctx, md...), r)
+		return rt.RoundTrip(metadata.AppendToContext(otelCtx, md...), r)
 	}
 }

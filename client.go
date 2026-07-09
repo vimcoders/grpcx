@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type ClientConnInterface interface {
@@ -64,9 +65,17 @@ func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
 			if err != nil {
 				continue
 			}
-			switch {
-			case int32(codes.OK) == reply.Code:
+			switch reply.Code {
+			case int32(codes.OK):
 				return reply, nil
+			case int32(codes.Unavailable):
+				fallthrough
+			case int32(codes.DeadlineExceeded):
+				fallthrough
+			case int32(codes.Internal):
+				continue
+			default:
+				return reply, status.Error(codes.Code(reply.Code), reply.Message)
 			}
 		}
 		return reply, err

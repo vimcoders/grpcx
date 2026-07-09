@@ -15,7 +15,7 @@ import (
 
 type ClientConnInterface interface {
 	grpc.ClientConnInterface
-	balancer.Picker
+	ttrpc.RoundTripper
 }
 
 type Option func(c *Client)
@@ -67,8 +67,6 @@ func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
 			switch {
 			case int32(codes.OK) == reply.Code:
 				return reply, nil
-			default:
-				continue
 			}
 		}
 		return reply, err
@@ -106,6 +104,17 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 		return err
 	}
 	return nil
+}
+
+func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	info := balancer.PickInfo{
+		FullMethodName: req.Method,
+	}
+	rt, err := c.Pick(ctx, info)
+	if err != nil {
+		return nil, err
+	}
+	return rt.RoundTrip(ctx, req)
 }
 
 // NewStream creates a new stream with the given stream descriptor to the

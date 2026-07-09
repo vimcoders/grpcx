@@ -18,6 +18,7 @@ package ttrpc
 import (
 	"context"
 	"grpcx/generated/api"
+	"grpcx/metadata"
 	"grpcx/status"
 	"net"
 	"sync"
@@ -206,6 +207,11 @@ func (c *Transport) cleanupStreams() {
 }
 
 func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	if medatas, ok := metadata.GetMetadata(ctx); ok {
+		for k, v := range medatas {
+			req.Metadatas = append(req.Metadatas, k, v)
+		}
+	}
 	b, err := c.Marshal(req)
 	if err != nil {
 		return nil, err

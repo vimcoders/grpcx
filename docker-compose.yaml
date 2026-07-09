@@ -1,0 +1,13 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml
+    ports:
+      - 1888:1888 # pprof 扩展
+      - 8888:8888 # Collector 暴露的 Prometheus 指标
+      - 8889:8889 # Prometheus exporter 指标
+      - 13133:13133 # health_check 扩展
+      - 4317:4317 # OTLP gRPC 接收器
+      - 4318:4318 # OTLP HTTP 接收器
+      - 55679:55679 # zpages 扩展

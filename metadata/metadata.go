@@ -19,11 +19,12 @@ package metadata
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 )
 
 // MD is the user type for ttrpc metadata
-type MD []string
+type MD map[string]string
 
 // Pairs returns an MD formed by the mapping of key, value ...
 // Pairs panics if len(kv) is odd.
@@ -42,8 +43,10 @@ func Pairs(kv ...string) MD {
 	if len(kv)%2 == 1 {
 		panic(fmt.Sprintf("metadata: Pairs got the odd number of input pairs for metadata: %d", len(kv)))
 	}
-	var md MD
-	md = append(md, kv...)
+	var md = make(MD)
+	for i := 0; i < len(kv); i += 2 {
+		md[kv[i]] = kv[i+1]
+	}
 	return md
 }
 
@@ -51,10 +54,8 @@ func Pairs(kv ...string) MD {
 // If there is no metadata, a nil slice and false are returned.
 func (m MD) Get(key string) (string, bool) {
 	key = strings.ToLower(key)
-	for i := 0; i < len(m); i += 2 {
-		if m[i] == key {
-			return m[i+1], true
-		}
+	if v, ok := m[key]; ok {
+		return v, true
 	}
 	return "", false
 }
@@ -68,7 +69,7 @@ func (m MD) Clone() MD {
 	}
 
 	clone := make(MD, len(m))
-	copy(clone, m)
+	maps.Copy(clone, m)
 	return clone
 }
 
@@ -86,14 +87,7 @@ func GetMetadataValue(ctx context.Context, name string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-
-	for i := 0; i < len(metadata); i += 2 {
-		if metadata[i] == name {
-			return metadata[i+1], true
-		}
-	}
-
-	return "", false
+	return metadata.Get(name)
 }
 
 // WithMetadata attaches metadata map to a context.Context
@@ -108,7 +102,12 @@ func AppendToContext(ctx context.Context, kv ...string) context.Context {
 	if len(kv)%2 == 1 {
 		panic(fmt.Sprintf("metadata: AppendToContext got an odd number of input pairs for metadata: %d", len(kv)))
 	}
-	md, _ := GetMetadata(ctx)
-	md = append(md, kv...)
+	md, ok := GetMetadata(ctx)
+	if !ok {
+		return WithMetadata(ctx, Pairs(kv...))
+	}
+	for i := 0; i < len(kv); i += 2 {
+		md[kv[i]] = kv[i+1]
+	}
 	return WithMetadata(ctx, md)
 }

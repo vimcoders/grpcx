@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -126,10 +127,9 @@ func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
 	}
 }
 
-var tracer = otel.Tracer("grpc-client-retries")
-var propagator = otel.GetTextMapPropagator()
-
 func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
+	var tracer = otel.Tracer("grpc-client-retries")
+	var propagator = otel.GetTextMapPropagator()
 	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
 		otelCtx, span := tracer.Start(ctx, "ttrpc.client.call",
 			trace.WithAttributes(
@@ -144,11 +144,18 @@ func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
 		for k, v := range carrier {
 			md = append(md, k, v)
 		}
-		return rt.RoundTrip(metadata.AppendToContext(otelCtx, md...), r)
+		resp, err := rt.RoundTrip(metadata.AppendToContext(otelCtx, md...), r)
+		if err != nil {
+			span.SetStatus(otelcodes.Error, err.Error())
+			span.RecordError(err)
+		}
+		return resp, err
 	}
 }
 
 func OtelUnaryServerInterceptor() grpc.UnaryServerInterceptor {
+	var tracer = otel.Tracer("grpc-client-retries")
+	var propagator = otel.GetTextMapPropagator()
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
 		if md, ok := metadata.GetMetadata(ctx); ok {
 			carrier := propagation.MapCarrier(md)
@@ -159,7 +166,12 @@ func OtelUnaryServerInterceptor() grpc.UnaryServerInterceptor {
 				),
 			)
 			defer span.End()
-			return handler(childCtx, req)
+			resp, err := handler(childCtx, req)
+			if err != nil {
+				span.SetStatus(otelcodes.Error, err.Error())
+				span.RecordError(err)
+			}
+			return resp, err
 		}
 		return handler(ctx, req)
 	}

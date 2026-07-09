@@ -152,13 +152,14 @@ func OtelUnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
 		if md, ok := metadata.GetMetadata(ctx); ok {
 			carrier := propagation.MapCarrier(md)
-			_, span := tracer.Start(propagator.Extract(ctx, carrier), "ttrpc.server.handle",
+			childCtx, span := tracer.Start(propagator.Extract(ctx, carrier), "ttrpc.server.handle",
 				trace.WithAttributes(
 					semconv.RPCSystemKey.String("ttrpc"),
 					semconv.RPCMethodKey.String(info.FullMethod),
 				),
 			)
 			defer span.End()
+			return handler(childCtx, req)
 		}
 		return handler(ctx, req)
 	}

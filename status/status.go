@@ -34,3 +34,7 @@ func Convert(err error) *status.Status {
 func Code(err error) codes.Code {
 	return status.Code(err)
 }
+
+func Error(c codes.Code, msg string) error {
+	return status.Error(c, msg)
+}

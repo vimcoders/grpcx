@@ -5,18 +5,22 @@ import (
 	"grpcx/generated/api"
 	"grpcx/ttrpc"
 
+	"grpcx/status"
+
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type UnaryClientInterceptor func(context.Context, *api.Request, ttrpc.RoundTripper) (*api.Response, error)
 
 func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
-	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (reply *api.Response, err error) {
-		for range retries {
-			reply, err = rt.RoundTrip(ctx, r)
+	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
+		for i := retries; i >= 0; i-- {
+			reply, err := rt.RoundTrip(ctx, r)
 			if err != nil {
 				return reply, err
+			}
+			if i == 0 {
+				return reply, nil
 			}
 			code := codes.Code(reply.Code)
 			switch code {
@@ -32,6 +36,6 @@ func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
 				return reply, status.Error(code, reply.Message)
 			}
 		}
-		return reply, err
+		return nil, status.OutOfRange.Err()
 	}
 }

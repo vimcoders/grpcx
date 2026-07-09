@@ -6,6 +6,7 @@ import (
 	"grpcx/status"
 	"net"
 	"path"
+	"time"
 
 	"grpcx/encoding"
 
@@ -45,13 +46,15 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 }
 
 func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	var md metadata.MD = req.Metadatas
-	for _, v := range api.EchoService_ServiceDesc.Methods {
+	md := metadata.Pairs(req.Metadatas...)
+	for _, v := range so.desc.Methods {
 		path := path.Join("/", api.EchoService_ServiceDesc.ServiceName, v.MethodName)
 		if path != req.Method {
 			continue
 		}
-		reply, err := v.Handler(so.imp, metadata.WithMetadata(ctx, md), func(in any) error {
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout))
+		defer cancel()
+		reply, err := v.Handler(so.imp, metadata.WithMetadata(timeoutCtx, md), func(in any) error {
 			return so.Unmarshal(req.Payload, in)
 		}, so.interceptor)
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 	"grpcx/encoding"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 type ClientConnInterface interface {
@@ -27,26 +28,50 @@ type Client struct {
 }
 
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
-	client := Client{
+	c := Client{
 		Codec: encoding.GetCodec(encoding.Name),
 		interceptor: func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
 			return rt.RoundTrip(ctx, r)
 		},
 	}
 	for _, o := range opts {
-		o(&client)
+		o(&c)
 	}
-	picker, err := balancer.DialContext(ctx, endpoint, client.opts...)
+	picker, err := balancer.DialContext(ctx, endpoint, c.opts...)
 	if err != nil {
 		return nil, err
 	}
-	client.Picker = picker
-	return &client, nil
+	c.Picker = picker
+	return &c, nil
 }
 
 func WithRateLimiter(n uint32) Option {
 	return func(c *Client) {
 		c.opts = append(c.opts, ttrpc.MaxStreams(n))
+	}
+}
+
+func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
+	return func(c *Client) {
+		c.interceptor = i
+	}
+}
+
+func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
+	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (reply *api.Response, err error) {
+		for range retries {
+			reply, err = rt.RoundTrip(ctx, r)
+			if err != nil {
+				continue
+			}
+			switch {
+			case int32(codes.OK) == reply.Code:
+				return reply, nil
+			default:
+				continue
+			}
+		}
+		return reply, err
 	}
 }
 

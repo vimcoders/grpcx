@@ -18,11 +18,34 @@ package metadata
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
 // MD is the user type for ttrpc metadata
 type MD []string
+
+// Pairs returns an MD formed by the mapping of key, value ...
+// Pairs panics if len(kv) is odd.
+//
+// Only the following ASCII characters are allowed in keys:
+//   - digits: 0-9
+//   - uppercase letters: A-Z (normalized to lower)
+//   - lowercase letters: a-z
+//   - special characters: -_.
+//
+// Uppercase letters are automatically converted to lowercase.
+//
+// Keys beginning with "grpc-" are reserved for grpc-internal use only and may
+// result in errors if set in metadata.
+func Pairs(kv ...string) MD {
+	if len(kv)%2 == 1 {
+		panic(fmt.Sprintf("metadata: Pairs got the odd number of input pairs for metadata: %d", len(kv)))
+	}
+	var md MD
+	md = append(md, kv...)
+	return md
+}
 
 // Get returns the metadata for a given key when they exist.
 // If there is no metadata, a nil slice and false are returned.
@@ -76,4 +99,16 @@ func GetMetadataValue(ctx context.Context, name string) (string, bool) {
 // WithMetadata attaches metadata map to a context.Context
 func WithMetadata(ctx context.Context, md MD) context.Context {
 	return context.WithValue(ctx, metadataKey{}, md)
+}
+
+// AppendToContext returns a new context with the provided kv merged
+// with any existing metadata in the context. Please refer to the documentation
+// of Pairs for a description of kv.
+func AppendToContext(ctx context.Context, kv ...string) context.Context {
+	if len(kv)%2 == 1 {
+		panic(fmt.Sprintf("metadata: AppendToContext got an odd number of input pairs for metadata: %d", len(kv)))
+	}
+	md, _ := GetMetadata(ctx)
+	md = append(md, kv...)
+	return WithMetadata(ctx, md)
 }

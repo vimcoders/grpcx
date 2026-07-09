@@ -65,17 +65,18 @@ func RetriesUnaryClientInterceptor(retries int32) UnaryClientInterceptor {
 			if err != nil {
 				return reply, err
 			}
-			switch reply.Code {
-			case int32(codes.OK):
+			code := codes.Code(reply.Code)
+			switch code {
+			case codes.OK:
 				return reply, nil
-			case int32(codes.Unavailable):
+			case codes.Unavailable:
 				fallthrough
-			case int32(codes.DeadlineExceeded):
+			case codes.DeadlineExceeded:
 				fallthrough
-			case int32(codes.Internal):
+			case codes.Internal:
 				continue
 			default:
-				return reply, status.Error(codes.Code(reply.Code), reply.Message)
+				return reply, status.Error(code, reply.Message)
 			}
 		}
 		return reply, err

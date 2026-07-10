@@ -8,8 +8,24 @@ gRPC 的高性能替代方案，基于 ttrpc 传输，兼容 gRPC API。
 - 内置 OpenTelemetry 链路追踪
 - 面向 K8s 微服务设计
 
+## 安装
+
+```bash
+go get github.com/vimcoders/grpcx
+```
+
 ## 快速开始
-[一个 Echo 的完整例子]
+```go
+// 服务端
+server := grpcx.NewServer()
+server.RegisterService(&api.EchoService_ServiceDesc, &EchoHandler{})
+server.ListenAndServe(context.Background(), ":50051")
+
+// 客户端
+conn, _ := grpcx.Dial("localhost:50051")
+client := api.NewEchoServiceClient(conn)
+resp, _ := client.Echo(context.Background(), &api.EchoRequest{Message: "hello"})
+```
 
 ## 与标准 gRPC 的区别
 [依赖 K8s Service 做负载均衡]

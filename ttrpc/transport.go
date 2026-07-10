@@ -92,21 +92,8 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	return rt, nil
 }
 
-func (c *Transport) run(ctx context.Context) {
-	if err := c.receiveLoop(ctx); err != nil {
-		if status.Code(err) == status.Canceled.Code() {
-			return
-		}
-	}
-	for range c.retries {
-		cc, err := c.dialContext(ctx)
-		if err != nil {
-			continue
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		c.channel, c.c, c.ctx, c.closed = newChannel(cc), cc, ctx, cancel
-		c.run(ctx)
-	}
+func (c *Transport) run(ctx context.Context) error {
+	return c.receiveLoop(ctx)
 }
 
 func (c *Transport) receiveLoop(ctx context.Context) error {

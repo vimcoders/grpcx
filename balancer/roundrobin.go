@@ -3,6 +3,7 @@ package balancer
 import (
 	"context"
 	"errors"
+	"grpcx/generated/api"
 	"grpcx/resolver"
 	"grpcx/status"
 	"grpcx/ttrpc"
@@ -47,7 +48,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...ttrpc.Op
 	next := uint32(rng.Intn(len(x.rts)))
 	x.next.Store(next)
 	go func() {
-		if err := x.watch(childCtx, time.Minute); err != nil {
+		if err := x.Keepalive(childCtx, time.Minute); err != nil {
 			return
 		}
 	}()
@@ -80,7 +81,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...ttrpc.Option) (Pi
 	return b.Build(ctx, endpoint, opts...)
 }
 
-func (x *RoundRobin) watch(ctx context.Context, d time.Duration) error {
+func (x *RoundRobin) Keepalive(ctx context.Context, d time.Duration) error {
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	for {
@@ -88,31 +89,40 @@ func (x *RoundRobin) watch(ctx context.Context, d time.Duration) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			x.resolve(ctx)
+			_ = x.keepalive(ctx)
 		}
 	}
 }
 
-func (x *RoundRobin) resolve(ctx context.Context) error {
+func (x *RoundRobin) keepalive(ctx context.Context) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+
 	x.Lock()
 	defer x.Unlock()
-	ips, err := x.resolveContext(ctx)
+	ips, err := x.resolveContext(timeoutCtx)
 	if err != nil {
 		return err
 	}
-	rts := x.rts
-	for i := len(ips); i < len(rts); i++ {
-		rts[i].Close()
-	}
-	for i := len(rts); i < len(ips); i++ {
-		rt, err := x.dialContext(ctx)
-		if err != nil {
+	req := &api.Request{}
+	var rts []ttrpc.RoundTripper
+	for _, rt := range x.rts {
+		if _, err := rt.RoundTrip(timeoutCtx, req); err != nil {
+			_ = rt.Close()
+			continue
+		}
+		if len(rts) >= len(ips) {
+			_ = rt.Close()
 			continue
 		}
 		rts = append(rts, rt)
 	}
-	if len(ips) < len(rts) {
-		rts = rts[:len(ips)]
+	for i := len(rts); i < len(ips); i++ {
+		rt, err := x.dialContext(timeoutCtx)
+		if err != nil {
+			continue
+		}
+		rts = append(rts, rt)
 	}
 	x.rts = rts
 	return nil
@@ -126,7 +136,7 @@ func (x *RoundRobin) Close() error {
 	}
 	rts := x.rts
 	for i := range rts {
-		rts[i].Close()
+		_ = rts[i].Close()
 	}
 	return nil
 }

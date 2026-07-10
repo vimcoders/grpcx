@@ -48,7 +48,7 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	md := metadata.Pairs(req.Metadatas...)
 	for _, v := range so.desc.Methods {
-		path := path.Join("/", api.EchoService_ServiceDesc.ServiceName, v.MethodName)
+		path := path.Join("/", so.desc.ServiceName, v.MethodName)
 		if path != req.Method {
 			continue
 		}

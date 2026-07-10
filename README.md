@@ -6,7 +6,7 @@ gRPC 的高性能替代方案，基于 ttrpc 传输，兼容 gRPC API。
 - 比标准 gRPC 快 2.5-3 倍
 - 兼容 `grpc.ClientConnInterface` 和 `grpc.ServiceDesc`
 - 内置 OpenTelemetry 链路追踪
-- 面向 K8s 微服务设计（单连接模型）
+- 面向 K8s 微服务设计
 
 ## 快速开始
 [一个 Echo 的完整例子]

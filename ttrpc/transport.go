@@ -23,6 +23,7 @@ import (
 	"math"
 	"net"
 	"sync"
+	"time"
 
 	"grpcx/encoding"
 
@@ -59,7 +60,9 @@ func Dial(target string, opts ...Option) (RoundTripper, error) {
 
 func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripper, error) {
 	dialContext := func(ctx context.Context) (net.Conn, error) {
-		d := net.Dialer{}
+		d := net.Dialer{
+			KeepAlive: time.Minute,
+		}
 		cc, err := d.DialContext(ctx, "tcp", target)
 		if err != nil {
 			return nil, err

@@ -47,6 +47,12 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 }
 
 func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	if req.Method == "" {
+		return &api.Response{
+			Code:    int32(codes.OK),
+			Message: codes.OK.String(),
+		}, nil
+	}
 	idx := slices.IndexFunc(so.desc.Methods, func(v grpc.MethodDesc) bool {
 		return path.Join("/", so.desc.ServiceName, v.MethodName) == req.Method
 	})

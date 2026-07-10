@@ -6,6 +6,7 @@ import (
 	"grpcx/status"
 	"net"
 	"path"
+	"slices"
 	"time"
 
 	"grpcx/encoding"
@@ -46,39 +47,42 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 }
 
 func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	md := metadata.Pairs(req.Metadatas...)
-	for _, v := range so.desc.Methods {
-		path := path.Join("/", so.desc.ServiceName, v.MethodName)
-		if path != req.Method {
-			continue
-		}
-		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout))
-		defer cancel()
-		reply, err := v.Handler(so.imp, metadata.WithMetadata(timeoutCtx, md), func(in any) error {
-			return so.Unmarshal(req.Payload, in)
-		}, so.interceptor)
-		if err != nil {
-			return &api.Response{
-				Code:    int32(codes.Unavailable),
-				Message: err.Error(),
-			}, nil
-		}
-		response, err := so.Marshal(reply)
-		if err != nil {
-			return &api.Response{
-				Code:    int32(codes.Unavailable),
-				Message: err.Error(),
-			}, nil
-		}
+	method := path.Join("/", so.desc.ServiceName, req.Method)
+	idx := slices.IndexFunc(so.desc.Methods, func(v grpc.MethodDesc) bool {
+		return method == req.Method
+	})
+	if idx == -1 {
 		return &api.Response{
-			Code:    int32(codes.OK),
-			Message: codes.OK.String(),
-			Payload: response,
+			Code:    int32(codes.Unimplemented),
+			Message: codes.Unimplemented.String(),
+		}, nil
+	}
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout))
+	defer cancel()
+	reply, err := so.desc.Methods[idx].Handler(
+		so.imp,
+		metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
+		func(in any) error {
+			return so.Unmarshal(req.Payload, in)
+		},
+		so.interceptor)
+	if err != nil {
+		return &api.Response{
+			Code:    int32(codes.Unavailable),
+			Message: err.Error(),
+		}, nil
+	}
+	response, err := so.Marshal(reply)
+	if err != nil {
+		return &api.Response{
+			Code:    int32(codes.Unavailable),
+			Message: err.Error(),
 		}, nil
 	}
 	return &api.Response{
-		Code:    int32(codes.Unimplemented),
-		Message: codes.Unimplemented.String(),
+		Code:    int32(codes.OK),
+		Message: codes.OK.String(),
+		Payload: response,
 	}, nil
 }
 

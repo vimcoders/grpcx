@@ -228,10 +228,10 @@ func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	if err != nil {
 		return nil, err
 	}
+	defer c.deleteStream(s)
 	if err := s.send(ctx, b); err != nil {
 		return nil, err
 	}
-	defer c.deleteStream(s)
 	select {
 	case <-ctx.Done():
 		return nil, status.Canceled.Err()

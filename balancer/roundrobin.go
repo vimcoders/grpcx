@@ -15,6 +15,7 @@ import (
 type rrBuilder struct{}
 
 func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...ttrpc.Option) (Picker, error) {
+	childCtx, cancel := context.WithCancel(ctx)
 	var x = RoundRobin{
 		step: 1,
 		dialContext: func(ctx context.Context) (ttrpc.RoundTripper, error) {
@@ -28,6 +29,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...ttrpc.Op
 			}
 			return address, nil
 		},
+		cancelFunc: cancel,
 	}
 	address, err := x.resolveContext(ctx)
 	if err != nil {
@@ -44,7 +46,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...ttrpc.Op
 	next := uint32(rng.Intn(len(x.rts)))
 	x.next.Store(next)
 	go func() {
-		if err := x.watch(ctx, time.Minute); err != nil {
+		if err := x.watch(childCtx, time.Minute); err != nil {
 			return
 		}
 	}()
@@ -57,6 +59,7 @@ type RoundRobin struct {
 	step           uint32
 	dialContext    func(ctx context.Context) (ttrpc.RoundTripper, error)
 	resolveContext func(ctx context.Context) ([]resolver.Address, error)
+	cancelFunc     context.CancelFunc
 }
 
 func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
@@ -102,4 +105,15 @@ func (x *RoundRobin) watch(ctx context.Context, d time.Duration) error {
 			x.rts = rts
 		}
 	}
+}
+
+func (x *RoundRobin) Close() error {
+	rts := x.rts
+	for i := range rts {
+		rts[i].Close()
+	}
+	if x.cancelFunc != nil {
+		x.cancelFunc()
+	}
+	return nil
 }

@@ -95,5 +95,5 @@ func (c *Client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 }
 
 func (c *Client) Close() error {
-	return nil
+	return c.Picker.Close()
 }

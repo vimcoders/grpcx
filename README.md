@@ -32,7 +32,7 @@ resp, _ := client.Echo(context.Background(), &api.EchoRequest{Message: "hello"})
 | 特性 | grpcx | 标准 gRPC |
 |------|-------|-----------|
 | 传输层 | ttrpc | HTTP/2 |
-| 连接模型 | 连接池 | 连接池 |
+| 连接模型 | 多连接（DNS 轮询） | 连接池 |
 | 负载均衡 | K8s Service | 客户端 LB |
 | 性能 | 快 2.5-3 倍 | 基准 |
 

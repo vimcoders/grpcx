@@ -20,6 +20,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 type TTHandler struct {
@@ -100,11 +101,24 @@ func BenchmarkEcho(b *testing.B) {
 
 func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req any, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error {
-		// for i := retries; i >= 0; i-- {
-		// 	if err := rt.Invoke(ctx, method, req, reply, opts...); err != nil {
-		// 		continue
-		// 	}
-		// }
+		for i := retries; i >= 0; i-- {
+			if err := rt.Invoke(ctx, method, req, reply, opts...); err != nil {
+				if s, ok := status.FromError(err); ok {
+					switch s.Code() {
+					case codes.Unavailable:
+						fallthrough
+					case codes.Internal:
+						fallthrough
+					case codes.DeadlineExceeded:
+						continue
+					default:
+						return err
+					}
+				}
+				return err
+			}
+			return nil
+		}
 		return status.OutOfRange.Err()
 	}
 }

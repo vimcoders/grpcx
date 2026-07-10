@@ -39,7 +39,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ttrpc.Ro
 	return &c, nil
 }
 
-func WithRateLimiter(n uint32) Option {
+func WithRateLimiter(n int) Option {
 	return func(c *Client) {
 		c.opts = append(c.opts, ttrpc.MaxStreams(n))
 	}

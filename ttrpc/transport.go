@@ -20,6 +20,7 @@ import (
 	"grpcx/generated/api"
 	"grpcx/metadata"
 	"grpcx/status"
+	"math"
 	"net"
 	"sync"
 
@@ -31,7 +32,7 @@ import (
 
 type Option func(*Transport)
 
-func MaxStreams(n uint32) Option {
+func MaxStreams(n int) Option {
 	return func(t *Transport) {
 		t.maxStreams = n
 	}
@@ -45,7 +46,7 @@ type Transport struct {
 	channel     *channel
 	streams     map[uint32]*stream
 	streamID    uint32
-	maxStreams  uint32
+	maxStreams  int
 	ctx         context.Context
 	closed      func()
 	retries     int32
@@ -137,7 +138,7 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 	}
 }
 
-func (c *Transport) createStream(ctx context.Context, b []byte) (*stream, error) {
+func (c *Transport) createStream(ctx context.Context) (*stream, error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -145,22 +146,21 @@ func (c *Transport) createStream(ctx context.Context, b []byte) (*stream, error)
 	case <-ctx.Done():
 		return nil, status.Canceled.Err()
 	default:
-		if c.maxStreams > 0 && uint32(len(c.streams)) >= c.maxStreams {
+		if c.maxStreams > 0 && len(c.streams) >= c.maxStreams {
 			return nil, status.ResourceExhausted.Err()
 		}
-		streamID := c.streamID + 1
-		if streamID%2 != 0 {
-			streamID++
+		for i := uint32(1); i < math.MaxInt8; i++ {
+			streamID := c.streamID + i
+			if _, ok := c.streams[streamID]; ok {
+				continue
+			}
+			s := newStream(c.streamID, c.channel)
+			c.streams[s.id] = s
+			c.streamID = streamID
+			return s, nil
 		}
-		c.streamID = c.streamID + 2
-		s := newStream(c.streamID, c.channel)
-		c.streams[s.id] = s
-		c.streamID = streamID
-		if err := s.send(ctx, b); err != nil {
-			return nil, err
-		}
-		return s, nil
 	}
+	return nil, status.ResourceExhausted.Err()
 }
 
 func (c *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
@@ -171,19 +171,21 @@ func (c *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method
 	case <-ctx.Done():
 		return nil, status.Canceled.Err()
 	default:
-		if c.maxStreams > 0 && uint32(len(c.streams)) >= c.maxStreams {
+		if c.maxStreams > 0 && len(c.streams) >= c.maxStreams {
 			return nil, status.ResourceExhausted.Err()
 		}
-		streamID := c.streamID + 1
-		if streamID%2 == 0 {
-			streamID++
+		for i := uint32(1); i < math.MaxInt8; i++ {
+			streamID := c.streamID + i
+			if _, ok := c.streams[streamID]; ok {
+				continue
+			}
+			s := newStream(c.streamID, c.channel)
+			c.streams[s.id] = s
+			c.streamID = streamID
+			return s, nil
 		}
-		c.streamID = c.streamID + 1
-		s := newStream(c.streamID, c.channel)
-		c.streams[s.id] = s
-		c.streamID = streamID
-		return s, nil
 	}
+	return nil, status.ResourceExhausted.Err()
 }
 
 func (c *Transport) deleteStream(s *stream) {
@@ -242,8 +244,11 @@ func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	if err != nil {
 		return nil, err
 	}
-	s, err := c.createStream(ctx, b)
+	s, err := c.createStream(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.send(ctx, b); err != nil {
 		return nil, err
 	}
 	defer c.deleteStream(s)

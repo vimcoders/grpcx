@@ -5,6 +5,7 @@ import (
 	"grpcx/balancer"
 	"grpcx/generated/api"
 	"grpcx/ttrpc"
+	"time"
 
 	"grpcx/encoding"
 
@@ -39,7 +40,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ttrpc.Ro
 	return &c, nil
 }
 
-func WithRateLimiter(n int) Option {
+func WithMaxStreams(n int) Option {
 	return func(c *Client) {
 		c.opts = append(c.opts, ttrpc.WithMaxStreams(n))
 	}
@@ -48,6 +49,12 @@ func WithRateLimiter(n int) Option {
 func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *Client) {
 		c.interceptor = i
+	}
+}
+
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		c.opts = append(c.opts, ttrpc.WithTimeout(d))
 	}
 }
 

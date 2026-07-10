@@ -56,7 +56,6 @@ type Transport struct {
 	maxStreams  int
 	ctx         context.Context
 	closed      func()
-	retries     int32
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
 }
@@ -64,6 +63,13 @@ type Transport struct {
 func Dial(target string, opts ...Option) (RoundTripper, error) {
 	return DialContext(context.Background(), target, opts...)
 }
+
+const (
+	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
+	defaultMaxStreams = 64
+	// DefaultTimeout is the default timeout for each request.
+	defaultTimeout = 3 * time.Second
+)
 
 func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripper, error) {
 	dialContext := func(ctx context.Context) (net.Conn, error) {
@@ -84,15 +90,13 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	rt := &Transport{
 		channel:     newChannel(cc),
 		c:           cc,
-		streamID:    1,
-		maxStreams:  64, // 默认最大64个并发流
-		retries:     3,
+		maxStreams:  defaultMaxStreams,
 		ctx:         ctx,
 		closed:      cancel,
 		streams:     make(map[uint32]*stream),
 		Codec:       encoding.GetCodec(encoding.Name),
 		dialContext: dialContext,
-		timeout:     3 * time.Second,
+		timeout:     defaultTimeout,
 	}
 	for _, o := range opts {
 		o(rt)

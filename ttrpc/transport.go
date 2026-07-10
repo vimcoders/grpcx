@@ -33,9 +33,15 @@ import (
 
 type Option func(*Transport)
 
-func MaxStreams(n int) Option {
+func WithMaxStreams(n int) Option {
 	return func(t *Transport) {
 		t.maxStreams = n
+	}
+}
+
+func WithTimeout(d time.Duration) Option {
+	return func(t *Transport) {
+		t.timeout = d
 	}
 }
 
@@ -52,6 +58,7 @@ type Transport struct {
 	closed      func()
 	retries     int32
 	dialContext func(ctx context.Context) (net.Conn, error)
+	timeout     time.Duration
 }
 
 func Dial(target string, opts ...Option) (RoundTripper, error) {
@@ -85,6 +92,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 		streams:     make(map[uint32]*stream),
 		Codec:       encoding.GetCodec(encoding.Name),
 		dialContext: dialContext,
+		timeout:     3 * time.Second,
 	}
 	for _, o := range opts {
 		o(rt)
@@ -189,6 +197,7 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 	request := &api.Request{
 		Method:  method,
 		Payload: payload,
+		Timeout: c.timeout.Milliseconds(),
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		for k, v := range medatas {
@@ -210,20 +219,22 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 }
 
 func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	b, err := c.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	s, err := c.createStream(ctx)
+	s, err := c.createStream(timeoutCtx)
 	if err != nil {
 		return nil, err
 	}
 	defer c.deleteStream(s)
-	if err := s.send(ctx, b); err != nil {
+	if err := s.send(timeoutCtx, b); err != nil {
 		return nil, err
 	}
 	select {
-	case <-ctx.Done():
+	case <-timeoutCtx.Done():
 		return nil, status.Canceled.Err()
 	case <-c.ctx.Done():
 		return nil, status.Canceled.Err()

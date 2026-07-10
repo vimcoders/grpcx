@@ -62,7 +62,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.
 			Message: codes.Unimplemented.String(),
 		}, nil
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout))
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Millisecond)
 	defer cancel()
 	reply, err := so.desc.Methods[idx].Handler(
 		so.imp,

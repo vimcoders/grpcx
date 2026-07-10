@@ -164,28 +164,7 @@ func (c *Transport) createStream(ctx context.Context) (*stream, error) {
 }
 
 func (c *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	c.Lock()
-	defer c.Unlock()
-
-	select {
-	case <-ctx.Done():
-		return nil, status.Canceled.Err()
-	default:
-		if c.maxStreams > 0 && len(c.streams) >= c.maxStreams {
-			return nil, status.ResourceExhausted.Err()
-		}
-		for i := uint32(1); i < math.MaxInt8; i++ {
-			streamID := c.streamID + i
-			if _, ok := c.streams[streamID]; ok {
-				continue
-			}
-			s := newStream(c.streamID, c.channel)
-			c.streams[s.id] = s
-			c.streamID = streamID
-			return s, nil
-		}
-	}
-	return nil, status.ResourceExhausted.Err()
+	return c.createStream(ctx)
 }
 
 func (c *Transport) deleteStream(s *stream) {

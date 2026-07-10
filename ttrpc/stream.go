@@ -20,7 +20,6 @@ import (
 	"context"
 	"grpcx/encoding"
 	"grpcx/generated/api"
-	"grpcx/status"
 	"sync"
 
 	"google.golang.org/grpc"
@@ -43,29 +42,6 @@ func newStream(id uint32, send Sender) *stream {
 		recv:   make(chan *api.Response, 1),
 		Codec:  encoding.GetCodec(encoding.Name),
 	}
-}
-
-func (s *stream) SendMsg(m any) error {
-	payload, err := s.Marshal(m)
-	if err != nil {
-		return err
-	}
-	request := &api.Request{
-		Payload: payload,
-	}
-	b, err := s.Marshal(request)
-	if err != nil {
-		return err
-	}
-	return s.sender.Send(s.id, b)
-}
-
-func (s *stream) RecvMsg(m any) error {
-	msg, ok := <-s.recv
-	if !ok {
-		return status.Unavailable.Err()
-	}
-	return s.Unmarshal(msg.Payload, m)
 }
 
 func (s *stream) close() error {

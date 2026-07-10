@@ -111,11 +111,9 @@ func (ch *channel) getmbuf(size int) []byte {
 		// TODO(stevvooe): It may be better to allocate these in fixed length
 		// buckets to reduce fragmentation but its not clear that would help
 		// with performance. An ilogb approach or similar would work well.
-		bb := make([]byte, size)
-		b = &bb
-	} else {
-		*b = (*b)[:size]
+		return make([]byte, size)
 	}
+	*b = (*b)[:size]
 	return *b
 }
 

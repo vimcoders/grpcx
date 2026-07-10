@@ -154,7 +154,7 @@ func (c *Transport) createStream(ctx context.Context) (*stream, error) {
 			if _, ok := c.streams[streamID]; ok {
 				continue
 			}
-			s := newStream(c.streamID, c.channel)
+			s := newStream(streamID, c.channel)
 			c.streams[s.id] = s
 			c.streamID = streamID
 			return s, nil

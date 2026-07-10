@@ -217,6 +217,11 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 		Method:  method,
 		Payload: payload,
 	}
+	if medatas, ok := metadata.GetMetadata(ctx); ok {
+		for k, v := range medatas {
+			request.Metadatas = append(request.Metadatas, k, v)
+		}
+	}
 	response, err := c.RoundTrip(ctx, request)
 	if err != nil {
 		return err
@@ -232,11 +237,6 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 }
 
 func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	if medatas, ok := metadata.GetMetadata(ctx); ok {
-		for k, v := range medatas {
-			req.Metadatas = append(req.Metadatas, k, v)
-		}
-	}
 	b, err := c.Marshal(req)
 	if err != nil {
 		return nil, err

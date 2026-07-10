@@ -46,13 +46,13 @@ func (x *Server) Close() error {
 	return nil
 }
 
-func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.ServerOption) (err error) {
+func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.ServerOption) error {
 	for i := range opt {
 		opt[i](&x.ServerOptions)
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	x.listener = listener
 	cancelCtx, closed := context.WithCancel(ctx)

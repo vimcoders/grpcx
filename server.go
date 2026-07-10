@@ -65,7 +65,7 @@ func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.S
 		}
 		x.wg.Go(func() {
 			if err := x.Handle(cancelCtx, conn); err != nil {
-				slog.Error("grpcx disconnected")
+				slog.Error("grpcx disconnected", "Handle", err.Error())
 			}
 		})
 	}

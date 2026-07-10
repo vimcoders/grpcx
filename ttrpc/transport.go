@@ -122,6 +122,7 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 			}
 			s := c.getStream(streamID)
 			if s == nil {
+				c.channel.putmbuf(payload)
 				continue
 			}
 			var response api.Response

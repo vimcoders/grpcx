@@ -11,11 +11,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-type ClientConnInterface interface {
-	grpc.ClientConnInterface
-	ttrpc.RoundTripper
-}
-
 type Option func(c *Client)
 
 type Client struct {
@@ -26,7 +21,7 @@ type Client struct {
 	opts []ttrpc.Option
 }
 
-func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
+func DialContext(ctx context.Context, endpoint string, opts ...Option) (ttrpc.RoundTripper, error) {
 	c := Client{
 		Codec: encoding.GetCodec(encoding.Name),
 		interceptor: func(ctx context.Context, method string, req, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error {
@@ -56,7 +51,7 @@ func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	}
 }
 
-func Dial(endpoint string, opts ...Option) (ClientConnInterface, error) {
+func Dial(endpoint string, opts ...Option) (ttrpc.RoundTripper, error) {
 	return DialContext(context.Background(), endpoint, opts...)
 }
 
@@ -97,4 +92,8 @@ func (c *Client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 		return nil, err
 	}
 	return rt.NewStream(ctx, desc, method, opts...)
+}
+
+func (c *Client) Close() error {
+	return nil
 }

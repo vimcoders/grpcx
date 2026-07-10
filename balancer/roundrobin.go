@@ -60,11 +60,12 @@ type RoundRobin struct {
 }
 
 func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
-	if len(x.rts) == 0 {
+	rts := x.rts
+	if len(rts) == 0 {
 		return nil, errors.New("no available RoundTripper")
 	}
-	idx := x.next.Add(x.step) % uint32(len(x.rts))
-	return x.rts[idx], nil
+	idx := x.next.Add(x.step) % uint32(len(rts))
+	return rts[idx], nil
 }
 
 func DialContext(ctx context.Context, endpoint string, opts ...ttrpc.Option) (Picker, error) {
@@ -80,17 +81,25 @@ func (x *RoundRobin) watch(ctx context.Context, d time.Duration) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			address, err := x.resolveContext(ctx)
+			ips, err := x.resolveContext(ctx)
 			if err != nil {
 				continue
 			}
-			for i := len(x.rts); i <= len(address); i++ {
+			rts := x.rts
+			for i := len(ips); i < len(rts); i++ {
+				rts[i].Close()
+			}
+			for i := len(rts); i < len(ips); i++ {
 				rt, err := x.dialContext(ctx)
 				if err != nil {
 					continue
 				}
-				x.rts = append(x.rts, rt)
+				rts = append(rts, rt)
 			}
+			if len(ips) < len(rts) {
+				rts = rts[:len(ips)]
+			}
+			x.rts = rts
 		}
 	}
 }

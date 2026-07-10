@@ -3,6 +3,7 @@ package ttrpc
 import (
 	"context"
 	"grpcx/generated/api"
+	"io"
 
 	"google.golang.org/grpc"
 )
@@ -39,4 +40,5 @@ type RoundTripper interface {
 	// The Request's URL and Header fields must be initialized.
 	grpc.ClientConnInterface
 	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+	io.Closer
 }

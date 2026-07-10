@@ -126,6 +126,7 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 			var response api.Response
 			if err := c.Unmarshal(payload, &response); err != nil {
 				s.close()
+				c.channel.putmbuf(payload)
 				continue
 			}
 			c.channel.putmbuf(payload)

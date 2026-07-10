@@ -26,6 +26,7 @@ import (
 	"grpcx/encoding"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 type Option func(*Transport)
@@ -205,6 +206,29 @@ func (c *Transport) cleanupStreams() {
 		delete(c.streams, sid)
 		s.close()
 	}
+}
+
+func (c *Transport) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
+	payload, err := c.Marshal(req)
+	if err != nil {
+		return err
+	}
+	request := &api.Request{
+		Method:  method,
+		Payload: payload,
+	}
+	response, err := c.RoundTrip(ctx, request)
+	if err != nil {
+		return err
+	}
+	code := codes.Code(response.Code)
+	if code != codes.OK {
+		return status.Error(code, response.Message)
+	}
+	if err = c.Unmarshal(response.Payload, reply); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {

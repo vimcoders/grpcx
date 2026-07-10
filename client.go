@@ -22,14 +22,15 @@ type Client struct {
 	balancer.Picker
 	encoding.Codec
 	interceptor UnaryClientInterceptor
-	opts        []ttrpc.Option
+	grpc.UnaryClientInterceptor
+	opts []ttrpc.Option
 }
 
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
 	c := Client{
 		Codec: encoding.GetCodec(encoding.Name),
-		interceptor: func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
-			return rt.RoundTrip(ctx, r)
+		interceptor: func(ctx context.Context, method string, req, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error {
+			return rt.Invoke(ctx, method, req, reply, opts...)
 		},
 	}
 	for _, o := range opts {
@@ -60,26 +61,14 @@ func Dial(endpoint string, opts ...Option) (ClientConnInterface, error) {
 }
 
 func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	payload, err := c.Marshal(req)
-	if err != nil {
-		return err
-	}
 	info := balancer.PickInfo{
 		FullMethodName: method,
-	}
-	request := &api.Request{
-		Method:  method,
-		Payload: payload,
 	}
 	rt, err := c.Pick(ctx, info)
 	if err != nil {
 		return err
 	}
-	response, err := c.interceptor(ctx, request, rt)
-	if err != nil {
-		return err
-	}
-	if err = c.Unmarshal(response.Payload, reply); err != nil {
+	if err := c.interceptor(ctx, method, req, reply, rt, opts...); err != nil {
 		return err
 	}
 	return nil

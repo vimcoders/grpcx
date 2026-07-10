@@ -20,7 +20,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 )
 
 type TTHandler struct {
@@ -100,41 +99,24 @@ func BenchmarkEcho(b *testing.B) {
 }
 
 func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
-	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
-		for i := retries; i >= 0; i-- {
-			reply, err := rt.RoundTrip(ctx, r)
-			if err != nil {
-				return reply, err
-			}
-			if i == 0 {
-				return reply, nil
-			}
-			code := codes.Code(reply.Code)
-			switch code {
-			case codes.OK:
-				return reply, nil
-			case codes.Unavailable:
-				fallthrough
-			case codes.DeadlineExceeded:
-				fallthrough
-			case codes.Internal:
-				continue
-			default:
-				return reply, status.Error(code, reply.Message)
-			}
-		}
-		return nil, status.OutOfRange.Err()
+	return func(ctx context.Context, method string, req any, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error {
+		// for i := retries; i >= 0; i-- {
+		// 	if err := rt.Invoke(ctx, method, req, reply, opts...); err != nil {
+		// 		continue
+		// 	}
+		// }
+		return status.OutOfRange.Err()
 	}
 }
 
 func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
 	var tracer = otel.Tracer("grpc-client-retries")
 	var propagator = otel.GetTextMapPropagator()
-	return func(ctx context.Context, r *api.Request, rt ttrpc.RoundTripper) (*api.Response, error) {
+	return func(ctx context.Context, method string, req any, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error {
 		otelCtx, span := tracer.Start(ctx, "ttrpc.client.call",
 			trace.WithAttributes(
 				semconv.RPCSystemKey.String("ttrpc"),
-				semconv.RPCMethodKey.String(r.Method),
+				semconv.RPCMethodKey.String(method),
 			),
 		)
 		defer span.End()
@@ -144,12 +126,12 @@ func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
 		for k, v := range carrier {
 			md = append(md, k, v)
 		}
-		resp, err := rt.RoundTrip(metadata.AppendToContext(otelCtx, md...), r)
-		if err != nil {
+		if err := rt.Invoke(metadata.AppendToContext(otelCtx, md...), method, req, reply, opts...); err != nil {
 			span.SetStatus(otelcodes.Error, err.Error())
 			span.RecordError(err)
+			return err
 		}
-		return resp, err
+		return nil
 	}
 }
 

@@ -2,8 +2,9 @@ package grpcx
 
 import (
 	"context"
-	"grpcx/generated/api"
 	"grpcx/ttrpc"
+
+	"google.golang.org/grpc"
 )
 
-type UnaryClientInterceptor func(context.Context, *api.Request, ttrpc.RoundTripper) (*api.Response, error)
+type UnaryClientInterceptor func(ctx context.Context, method string, req any, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error

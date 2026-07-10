@@ -22,7 +22,6 @@ import (
 	"grpcx/generated/api"
 	"grpcx/status"
 	"sync"
-	"time"
 
 	"google.golang.org/grpc"
 )
@@ -62,17 +61,11 @@ func (s *stream) SendMsg(m any) error {
 }
 
 func (s *stream) RecvMsg(m any) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	select {
-	case <-ctx.Done():
-		return status.Canceled.Err()
-	case msg, ok := <-s.recv:
-		if !ok {
-			return status.Unavailable.Err()
-		}
-		return s.Unmarshal(msg.Payload, m)
+	msg, ok := <-s.recv
+	if !ok {
+		return status.Unavailable.Err()
 	}
+	return s.Unmarshal(msg.Payload, m)
 }
 
 func (s *stream) close() error {

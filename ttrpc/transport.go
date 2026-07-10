@@ -37,6 +37,7 @@ func MaxStreams(n uint32) Option {
 }
 
 type Transport struct {
+	RoundTripper
 	sync.RWMutex
 	encoding.Codec
 	c           net.Conn

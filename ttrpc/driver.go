@@ -37,6 +37,6 @@ type RoundTripper interface {
 	// must arrange to wait for the Close call before doing so.
 	//
 	// The Request's URL and Header fields must be initialized.
+	grpc.ClientConnInterface
 	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
-	NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error)
 }

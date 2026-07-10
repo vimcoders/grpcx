@@ -108,12 +108,12 @@ func (x *RoundRobin) watch(ctx context.Context, d time.Duration) error {
 }
 
 func (x *RoundRobin) Close() error {
+	if x.cancelFunc != nil {
+		x.cancelFunc()
+	}
 	rts := x.rts
 	for i := range rts {
 		rts[i].Close()
-	}
-	if x.cancelFunc != nil {
-		x.cancelFunc()
 	}
 	return nil
 }

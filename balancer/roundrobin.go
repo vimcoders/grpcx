@@ -8,6 +8,7 @@ import (
 	"grpcx/ttrpc"
 	"math/rand"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -60,9 +61,12 @@ type RoundRobin struct {
 	dialContext    func(ctx context.Context) (ttrpc.RoundTripper, error)
 	resolveContext func(ctx context.Context) ([]resolver.Address, error)
 	cancelFunc     context.CancelFunc
+	sync.RWMutex
 }
 
 func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
+	x.RLock()
+	defer x.RUnlock()
 	rts := x.rts
 	if len(rts) == 0 {
 		return nil, errors.New("no available RoundTripper")
@@ -84,30 +88,39 @@ func (x *RoundRobin) watch(ctx context.Context, d time.Duration) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			ips, err := x.resolveContext(ctx)
-			if err != nil {
-				continue
-			}
-			rts := x.rts
-			for i := len(ips); i < len(rts); i++ {
-				rts[i].Close()
-			}
-			for i := len(rts); i < len(ips); i++ {
-				rt, err := x.dialContext(ctx)
-				if err != nil {
-					continue
-				}
-				rts = append(rts, rt)
-			}
-			if len(ips) < len(rts) {
-				rts = rts[:len(ips)]
-			}
-			x.rts = rts
+			x.resolve(ctx)
 		}
 	}
 }
 
+func (x *RoundRobin) resolve(ctx context.Context) error {
+	x.Lock()
+	defer x.Unlock()
+	ips, err := x.resolveContext(ctx)
+	if err != nil {
+		return err
+	}
+	rts := x.rts
+	for i := len(ips); i < len(rts); i++ {
+		rts[i].Close()
+	}
+	for i := len(rts); i < len(ips); i++ {
+		rt, err := x.dialContext(ctx)
+		if err != nil {
+			continue
+		}
+		rts = append(rts, rt)
+	}
+	if len(ips) < len(rts) {
+		rts = rts[:len(ips)]
+	}
+	x.rts = rts
+	return nil
+}
+
 func (x *RoundRobin) Close() error {
+	x.Lock()
+	defer x.Unlock()
 	if x.cancelFunc != nil {
 		x.cancelFunc()
 	}

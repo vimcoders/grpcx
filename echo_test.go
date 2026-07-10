@@ -62,7 +62,7 @@ func startTTServer() {
 			propagation.Baggage{},
 		))
 		h := &TTHandler{}
-		ttServer = grpcx.NewServer(ttrpc.UnaryServerInterceptor(OtelUnaryServerInterceptor()))
+		ttServer = grpcx.NewServer()
 		ttServer.RegisterService(&api.EchoService_ServiceDesc, h)
 		go func() {
 			if err := ttServer.ListenAndServe(context.Background(), ttAddr); err != nil {
@@ -81,7 +81,7 @@ func startTTServer() {
 // BenchmarkEcho-20           42492             27629 ns/op
 func BenchmarkEcho(b *testing.B) {
 	startTTServer()
-	conn, err := grpcx.Dial(ttAddr, grpcx.WithUnaryClientInterceptor(OtelUnaryClientInterceptor()))
+	conn, err := grpcx.Dial(ttAddr)
 	if err != nil {
 		b.Fatalf("dial failed: %v", err)
 	}

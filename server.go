@@ -31,40 +31,40 @@ func NewServer(opt ...ttrpc.ServerOption) *Server {
 // server. It is called from the IDL generated code. This must be called before
 // invoking Serve. If ss is non-nil (for legacy code), its type is checked to
 // ensure it implements sd.HandlerType.
-func (x *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
-	ttrpc.RegisterService(sd, ss)(&x.ServerOptions)
+func (s *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
+	ttrpc.RegisterService(sd, ss)(&s.ServerOptions)
 }
 
-func (x *Server) Close() error {
-	if x.closed != nil {
-		x.closed()
+func (s *Server) Close() error {
+	if s.closed != nil {
+		s.closed()
 	}
-	if x.listener != nil {
-		x.listener.Close()
+	if s.listener != nil {
+		s.listener.Close()
 	}
-	x.wg.Wait()
+	s.wg.Wait()
 	return nil
 }
 
-func (x *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.ServerOption) error {
+func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.ServerOption) error {
 	for i := range opt {
-		opt[i](&x.ServerOptions)
+		opt[i](&s.ServerOptions)
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	x.listener = listener
+	s.listener = listener
 	cancelCtx, closed := context.WithCancel(ctx)
-	x.closed = closed
-	defer x.Close()
+	s.closed = closed
+	defer s.Close()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			return err
 		}
-		x.wg.Go(func() {
-			if err := x.Handle(cancelCtx, conn); err != nil {
+		s.wg.Go(func() {
+			if err := s.Handle(cancelCtx, conn); err != nil {
 				slog.Error("grpcx disconnected", "Handle", err.Error())
 			}
 		})

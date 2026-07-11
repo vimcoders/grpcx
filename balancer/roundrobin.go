@@ -65,14 +65,14 @@ type RoundRobin struct {
 	sync.RWMutex
 }
 
-func (x *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
-	x.RLock()
-	defer x.RUnlock()
-	rts := x.rts
+func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (ttrpc.RoundTripper, error) {
+	rr.RLock()
+	defer rr.RUnlock()
+	rts := rr.rts
 	if len(rts) == 0 {
 		return nil, errors.New("no available RoundTripper")
 	}
-	idx := x.next.Add(x.step) % uint32(len(rts))
+	idx := rr.next.Add(rr.step) % uint32(len(rts))
 	return rts[idx], nil
 }
 
@@ -81,7 +81,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...ttrpc.Option) (Pi
 	return b.Build(ctx, endpoint, opts...)
 }
 
-func (x *RoundRobin) Keepalive(ctx context.Context, d time.Duration) error {
+func (rr *RoundRobin) Keepalive(ctx context.Context, d time.Duration) error {
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	for {
@@ -89,24 +89,24 @@ func (x *RoundRobin) Keepalive(ctx context.Context, d time.Duration) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			_ = x.keepalive(ctx)
+			_ = rr.keepalive(ctx)
 		}
 	}
 }
 
-func (x *RoundRobin) keepalive(ctx context.Context) error {
+func (rr *RoundRobin) keepalive(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 
-	x.Lock()
-	defer x.Unlock()
-	ips, err := x.resolveContext(timeoutCtx)
+	rr.Lock()
+	defer rr.Unlock()
+	ips, err := rr.resolveContext(timeoutCtx)
 	if err != nil {
 		return err
 	}
 	req := &api.Request{}
 	var rts []ttrpc.RoundTripper
-	for _, rt := range x.rts {
+	for _, rt := range rr.rts {
 		if _, err := rt.RoundTrip(timeoutCtx, req); err != nil {
 			_ = rt.Close()
 			continue
@@ -118,23 +118,23 @@ func (x *RoundRobin) keepalive(ctx context.Context) error {
 		rts = append(rts, rt)
 	}
 	for i := len(rts); i < len(ips); i++ {
-		rt, err := x.dialContext(timeoutCtx)
+		rt, err := rr.dialContext(timeoutCtx)
 		if err != nil {
 			continue
 		}
 		rts = append(rts, rt)
 	}
-	x.rts = rts
+	rr.rts = rts
 	return nil
 }
 
-func (x *RoundRobin) Close() error {
-	x.Lock()
-	defer x.Unlock()
-	if x.cancelFunc != nil {
-		x.cancelFunc()
+func (rr *RoundRobin) Close() error {
+	rr.Lock()
+	defer rr.Unlock()
+	if rr.cancelFunc != nil {
+		rr.cancelFunc()
 	}
-	rts := x.rts
+	rts := rr.rts
 	for i := range rts {
 		_ = rts[i].Close()
 	}

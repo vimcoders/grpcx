@@ -107,33 +107,33 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	return rt, nil
 }
 
-func (c *Transport) run(ctx context.Context) error {
-	return c.receiveLoop(ctx)
+func (t *Transport) run(ctx context.Context) error {
+	return t.receiveLoop(ctx)
 }
 
-func (c *Transport) receiveLoop(ctx context.Context) error {
-	defer c.Close()
+func (t *Transport) receiveLoop(ctx context.Context) error {
+	defer t.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			streamID, payload, err := c.channel.Recv()
+			streamID, payload, err := t.channel.Recv()
 			if err != nil {
 				return err
 			}
-			s := c.getStream(streamID)
+			s := t.getStream(streamID)
 			if s == nil {
-				c.channel.putmbuf(payload)
+				t.channel.putmbuf(payload)
 				continue
 			}
 			var response api.Response
-			if err := c.Unmarshal(payload, &response); err != nil {
+			if err := t.Unmarshal(payload, &response); err != nil {
 				s.close()
-				c.channel.putmbuf(payload)
+				t.channel.putmbuf(payload)
 				continue
 			}
-			c.channel.putmbuf(payload)
+			t.channel.putmbuf(payload)
 			if err := s.receive(ctx, &response); err != nil {
 				continue
 			}
@@ -141,74 +141,74 @@ func (c *Transport) receiveLoop(ctx context.Context) error {
 	}
 }
 
-func (c *Transport) createStream(ctx context.Context) (*stream, error) {
-	c.Lock()
-	defer c.Unlock()
+func (t *Transport) createStream(ctx context.Context) (*stream, error) {
+	t.Lock()
+	defer t.Unlock()
 
 	select {
 	case <-ctx.Done():
 		return nil, status.Canceled.Err()
 	default:
-		if c.maxStreams > 0 && len(c.streams) >= c.maxStreams {
+		if t.maxStreams > 0 && len(t.streams) >= t.maxStreams {
 			return nil, status.ResourceExhausted.Err()
 		}
 		for i := uint32(1); i < math.MaxInt8; i++ {
-			streamID := c.streamID + i
-			if _, ok := c.streams[streamID]; ok {
+			streamID := t.streamID + i
+			if _, ok := t.streams[streamID]; ok {
 				continue
 			}
-			s := newStream(streamID, c.channel)
-			c.streams[s.id] = s
-			c.streamID = streamID
+			s := newStream(streamID, t.channel)
+			t.streams[s.id] = s
+			t.streamID = streamID
 			return s, nil
 		}
 	}
 	return nil, status.ResourceExhausted.Err()
 }
 
-func (c *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return c.createStream(ctx)
+func (t *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	return t.createStream(ctx)
 }
 
-func (c *Transport) deleteStream(s *stream) {
-	c.Lock()
-	defer c.Unlock()
-	delete(c.streams, s.id)
+func (t *Transport) deleteStream(s *stream) {
+	t.Lock()
+	defer t.Unlock()
+	delete(t.streams, s.id)
 	s.close()
 }
 
-func (c *Transport) getStream(sid uint32) *stream {
-	c.RLock()
-	defer c.RUnlock()
-	s := c.streams[sid]
+func (t *Transport) getStream(sid uint32) *stream {
+	t.RLock()
+	defer t.RUnlock()
+	s := t.streams[sid]
 	return s
 }
 
-func (c *Transport) cleanupStreams() {
-	c.Lock()
-	defer c.Unlock()
-	for sid, s := range c.streams {
-		delete(c.streams, sid)
+func (t *Transport) cleanupStreams() {
+	t.Lock()
+	defer t.Unlock()
+	for sid, s := range t.streams {
+		delete(t.streams, sid)
 		s.close()
 	}
 }
 
-func (c *Transport) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	payload, err := c.Marshal(req)
+func (t *Transport) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
+	payload, err := t.Marshal(req)
 	if err != nil {
 		return err
 	}
 	request := &api.Request{
 		Method:  method,
 		Payload: payload,
-		Timeout: c.timeout.Milliseconds(),
+		Timeout: t.timeout.Milliseconds(),
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		for k, v := range medatas {
 			request.Metadatas = append(request.Metadatas, k, v)
 		}
 	}
-	response, err := c.RoundTrip(ctx, request)
+	response, err := t.RoundTrip(ctx, request)
 	if err != nil {
 		return err
 	}
@@ -216,31 +216,31 @@ func (c *Transport) Invoke(ctx context.Context, method string, req any, reply an
 	if code != codes.OK {
 		return status.Error(code, response.Message)
 	}
-	if err = c.Unmarshal(response.Payload, reply); err != nil {
+	if err = t.Unmarshal(response.Payload, reply); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
+func (t *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
-	b, err := c.Marshal(req)
+	b, err := t.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	s, err := c.createStream(timeoutCtx)
+	s, err := t.createStream(timeoutCtx)
 	if err != nil {
 		return nil, err
 	}
-	defer c.deleteStream(s)
+	defer t.deleteStream(s)
 	if err := s.send(timeoutCtx, b); err != nil {
 		return nil, err
 	}
 	select {
 	case <-timeoutCtx.Done():
 		return nil, status.Canceled.Err()
-	case <-c.ctx.Done():
+	case <-t.ctx.Done():
 		return nil, status.Canceled.Err()
 	case msg, ok := <-s.recv:
 		if !ok {
@@ -251,10 +251,10 @@ func (c *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 }
 
 // Close closes the ttrpc connection and underlying connection
-func (c *Transport) Close() error {
-	if c.closed != nil {
-		c.closed()
+func (t *Transport) Close() error {
+	if t.closed != nil {
+		t.closed()
 	}
-	c.cleanupStreams()
+	t.cleanupStreams()
 	return nil
 }

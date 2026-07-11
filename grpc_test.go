@@ -42,12 +42,6 @@ func startStdGRPCServer() {
 	})
 }
 
-// cpu: Intel(R) Core(TM) i5-14600KF
-// BenchmarkStdGRPC_Echo
-// BenchmarkStdGRPC_Echo-4            13398             80192 ns/op
-// BenchmarkStdGRPC_Echo-8            15651             71895 ns/op
-// BenchmarkStdGRPC_Echo-16           17827             67518 ns/op
-// BenchmarkStdGRPC_Echo-20           16614             67318 ns/op
 func BenchmarkStdGRPC_Echo(b *testing.B) {
 	startStdGRPCServer()
 	conn, err := grpc.NewClient(stdGRPCAddr,

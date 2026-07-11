@@ -31,6 +31,7 @@ const (
 	messageLengthMax    = math.MaxUint16
 )
 
+// Sender is the interface for sending messages to a channel.
 type Sender interface {
 	Send(uint32, []byte) error
 }
@@ -39,11 +40,13 @@ type Sender interface {
 // with every request.
 var buffers sync.Pool
 
+// channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
 	net.Conn
 	br *bufio.Reader
 }
 
+// NewChannel creates a new channel with the given net.Conn.
 func newChannel(conn net.Conn) *channel {
 	return &channel{
 		Conn: conn,
@@ -86,6 +89,7 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 	return s, p, nil
 }
 
+// Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
 func (ch *channel) Send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
 		return status.DataLoss.Err()
@@ -103,6 +107,7 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	return nil
 }
 
+// getmbuf returns a buffer from the pool. The buffer is guaranteed to be at least size bytes long.
 func (ch *channel) getmbuf(size int) []byte {
 	// we can't use the standard New method on pool because we want to allocate
 	// based on size.
@@ -117,6 +122,7 @@ func (ch *channel) getmbuf(size int) []byte {
 	return *b
 }
 
+// putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
 func (ch *channel) putmbuf(p []byte) {
 	buffers.Put(&p)
 }

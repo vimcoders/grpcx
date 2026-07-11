@@ -12,8 +12,45 @@ import (
 	"google.golang.org/grpc"
 )
 
+// Client is a ttrpc client that handles outgoing requests and dispatches them to the appropriate transport.
 type Option func(c *Client)
 
+// WithCodec sets the codec for the ttrpc client.
+func WithCodec(c encoding.Codec) Option {
+	return func(c *Client) {
+		c.Codec = c
+	}
+}
+
+// WithBalancer sets the balancer for the ttrpc client.
+func WithBalancer(b balancer.Picker) Option {
+	return func(c *Client) {
+		c.Picker = b
+	}
+}
+
+// WithUnaryClientInterceptor sets the unary client interceptor for the ttrpc client.
+func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
+	return func(c *Client) {
+		c.interceptor = i
+	}
+}
+
+// WithTimeout sets the timeout for the ttrpc client.
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		c.opts = append(c.opts, ttrpc.WithTimeout(d))
+	}
+}
+
+// WithMaxStreams sets the maximum number of streams for the ttrpc client.
+func WithMaxStreams(n int) Option {
+	return func(c *Client) {
+		c.opts = append(c.opts, ttrpc.WithMaxStreams(n))
+	}
+}
+
+// Client is a ttrpc client that handles outgoing requests and dispatches them to the appropriate transport.
 type Client struct {
 	balancer.Picker
 	encoding.Codec
@@ -38,24 +75,6 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ttrpc.Ro
 	}
 	c.Picker = picker
 	return &c, nil
-}
-
-func WithMaxStreams(n int) Option {
-	return func(c *Client) {
-		c.opts = append(c.opts, ttrpc.WithMaxStreams(n))
-	}
-}
-
-func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
-	return func(c *Client) {
-		c.interceptor = i
-	}
-}
-
-func WithTimeout(d time.Duration) Option {
-	return func(c *Client) {
-		c.opts = append(c.opts, ttrpc.WithTimeout(d))
-	}
 }
 
 func Dial(endpoint string, opts ...Option) (ttrpc.RoundTripper, error) {

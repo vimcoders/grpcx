@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 )
 
+// stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type stream struct {
 	grpc.ClientStream
 	id     uint32
@@ -35,6 +36,7 @@ type stream struct {
 	closeOnce sync.Once
 }
 
+// newStream creates a new stream with the given id and sender.
 func newStream(id uint32, send Sender) *stream {
 	return &stream{
 		id:     id,
@@ -44,15 +46,18 @@ func newStream(id uint32, send Sender) *stream {
 	}
 }
 
+// close closes the stream and releases any resources associated with it.
 func (s *stream) close() error {
 	s.closeOnce.Do(func() { close(s.recv) })
 	return nil
 }
 
+// send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
 func (s *stream) send(_ context.Context, b []byte) error {
 	return s.sender.Send(s.id, b)
 }
 
+// receive receives a message from the stream. The message is received with a fixed-length header that includes the stream id. If the stream is closed, an error is returned.
 func (s *stream) receive(ctx context.Context, response *api.Response) error {
 	select {
 	case s.recv <- response:

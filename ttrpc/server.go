@@ -17,8 +17,10 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+// Server is a ttrpc server that handles incoming requests and dispatches them to the appropriate service method.
 type ServerOption func(c *ServerOptions)
 
+// ServerOptions is a struct that holds the options for a ttrpc server.
 type ServerOptions struct {
 	encoding.Codec
 	desc        *grpc.ServiceDesc
@@ -26,6 +28,7 @@ type ServerOptions struct {
 	interceptor grpc.UnaryServerInterceptor
 }
 
+// DefaultServerOptions is the default options for a ttrpc server.
 var DefaultServerOptions = ServerOptions{
 	Codec: encoding.GetCodec(encoding.Name),
 	interceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
@@ -33,12 +36,14 @@ var DefaultServerOptions = ServerOptions{
 	},
 }
 
+// NewServer creates a new ttrpc server with the given options.
 func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
 	return func(so *ServerOptions) {
 		so.interceptor = interceptor
 	}
 }
 
+// Codec sets the codec for the ttrpc server.
 func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	return func(so *ServerOptions) {
 		so.desc = sd
@@ -46,6 +51,7 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	}
 }
 
+// NewServer creates a new ttrpc server with the given options.
 func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	if req.Method == "" {
 		return &api.Response{
@@ -91,6 +97,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.
 	}, nil
 }
 
+// Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 	defer c.Close()
 	channel := newChannel(c)

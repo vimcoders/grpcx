@@ -39,6 +39,14 @@ var (
 
 func startTTServer() {
 	setupTT.Do(func() {
+		h := &TTHandler{}
+		ttServer = grpcx.NewServer()
+		ttServer.RegisterService(&api.EchoService_ServiceDesc, h)
+		go func() {
+			if err := ttServer.ListenAndServe(context.Background(), ttAddr); err != nil {
+				panic(err)
+			}
+		}()
 		exporter, err := otlptracegrpc.New(context.Background(),
 			otlptracegrpc.WithEndpoint("192.168.11.63:4317"),
 			otlptracegrpc.WithInsecure(),
@@ -61,24 +69,9 @@ func startTTServer() {
 			propagation.TraceContext{},
 			propagation.Baggage{},
 		))
-		h := &TTHandler{}
-		ttServer = grpcx.NewServer()
-		ttServer.RegisterService(&api.EchoService_ServiceDesc, h)
-		go func() {
-			if err := ttServer.ListenAndServe(context.Background(), ttAddr); err != nil {
-				panic(err)
-			}
-		}()
 	})
 }
 
-// go test -bench "^BenchmarkEcho$" -cpu="4,8,16,20" -v
-// cpu: Intel(R) Core(TM) i5-14600KF
-// BenchmarkEcho
-// BenchmarkEcho-4            42422             28080 ns/op
-// BenchmarkEcho-8            43660             27479 ns/op
-// BenchmarkEcho-16           42249             28007 ns/op
-// BenchmarkEcho-20           42492             27629 ns/op
 func BenchmarkEcho(b *testing.B) {
 	startTTServer()
 	conn, err := grpcx.Dial(ttAddr)

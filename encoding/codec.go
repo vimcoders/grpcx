@@ -23,10 +23,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Name is the name of the codec.
 const Name = "proto"
 
+// Codec is an alias for encoding.Codec.
 type Codec encoding.Codec
 
+// GetCodec returns a new instance of the proto codec.
 type codec struct{}
 
 // Name implements [encoding.Codec].
@@ -34,6 +37,7 @@ func (c *codec) Name() string {
 	return Name
 }
 
+// Marshal implements [encoding.Codec].
 func (c codec) Marshal(msg any) ([]byte, error) {
 	switch v := msg.(type) {
 	case proto.Message:
@@ -43,6 +47,7 @@ func (c codec) Marshal(msg any) ([]byte, error) {
 	}
 }
 
+// Unmarshal implements [encoding.Codec].
 func (c codec) Unmarshal(p []byte, msg any) error {
 	switch v := msg.(type) {
 	case proto.Message:
@@ -52,6 +57,7 @@ func (c codec) Unmarshal(p []byte, msg any) error {
 	}
 }
 
+// GetCodec returns a new instance of the proto codec.
 func GetCodec(contentSubtype string) encoding.Codec {
 	return &codec{}
 }

@@ -31,20 +31,38 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+const (
+	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
+	defaultMaxStreams = 64
+	// DefaultTimeout is the default timeout for each request.
+	defaultTimeout = 3 * time.Second
+)
+
+// RoundTripper is the interface for sending and receiving messages over a transport.
 type Option func(*Transport)
 
+// WithCodec sets the codec for the ttrpc transport.
 func WithMaxStreams(n int) Option {
 	return func(t *Transport) {
 		t.maxStreams = n
 	}
 }
 
+// WithCodec sets the codec for the ttrpc transport.
 func WithTimeout(d time.Duration) Option {
 	return func(t *Transport) {
 		t.timeout = d
 	}
 }
 
+// WithCodec sets the codec for the ttrpc transport.
+func WithCodec(c encoding.Codec) Option {
+	return func(t *Transport) {
+		t.Codec = c
+	}
+}
+
+// Transport is the implementation of RoundTripper for ttrpc.
 type Transport struct {
 	RoundTripper
 	sync.RWMutex
@@ -60,17 +78,12 @@ type Transport struct {
 	timeout     time.Duration
 }
 
+// Dial creates a new ttrpc transport to the given target.
 func Dial(target string, opts ...Option) (RoundTripper, error) {
 	return DialContext(context.Background(), target, opts...)
 }
 
-const (
-	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
-	defaultMaxStreams = 64
-	// DefaultTimeout is the default timeout for each request.
-	defaultTimeout = 3 * time.Second
-)
-
+// DialContext creates a new ttrpc transport to the given target with the given context.
 func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripper, error) {
 	dialContext := func(ctx context.Context) (net.Conn, error) {
 		d := net.Dialer{
@@ -107,10 +120,12 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	return rt, nil
 }
 
+// run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
 func (t *Transport) run(ctx context.Context) error {
 	return t.receiveLoop(ctx)
 }
 
+// receiveLoop runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
 func (t *Transport) receiveLoop(ctx context.Context) error {
 	defer t.Close()
 	for {
@@ -141,6 +156,7 @@ func (t *Transport) receiveLoop(ctx context.Context) error {
 	}
 }
 
+// createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (t *Transport) createStream(ctx context.Context) (*stream, error) {
 	t.Lock()
 	defer t.Unlock()
@@ -166,10 +182,12 @@ func (t *Transport) createStream(ctx context.Context) (*stream, error) {
 	return nil, status.ResourceExhausted.Err()
 }
 
+// NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (t *Transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return t.createStream(ctx)
 }
 
+// deleteStream deletes the given stream from the transport. It closes the stream and removes it from the map of streams.
 func (t *Transport) deleteStream(s *stream) {
 	t.Lock()
 	defer t.Unlock()
@@ -177,6 +195,7 @@ func (t *Transport) deleteStream(s *stream) {
 	s.close()
 }
 
+// getStream returns the stream with the given stream ID. It returns nil if the stream does not exist.
 func (t *Transport) getStream(sid uint32) *stream {
 	t.RLock()
 	defer t.RUnlock()
@@ -184,6 +203,7 @@ func (t *Transport) getStream(sid uint32) *stream {
 	return s
 }
 
+// cleanupStreams closes all streams and removes them from the transport. It is called when the transport is closed.
 func (t *Transport) cleanupStreams() {
 	t.Lock()
 	defer t.Unlock()
@@ -193,6 +213,7 @@ func (t *Transport) cleanupStreams() {
 	}
 }
 
+// Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
 func (t *Transport) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	payload, err := t.Marshal(req)
 	if err != nil {
@@ -222,6 +243,7 @@ func (t *Transport) Invoke(ctx context.Context, method string, req any, reply an
 	return nil
 }
 
+// RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *Transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()

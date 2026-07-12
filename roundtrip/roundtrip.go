@@ -115,18 +115,13 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 		o(rt)
 	}
 	go func() {
-		rt.run(ctx)
+		_ = rt.run(ctx)
 	}()
 	return rt, nil
 }
 
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
 func (t *roundtrip) run(ctx context.Context) error {
-	return t.receiveLoop(ctx)
-}
-
-// receiveLoop runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
-func (t *roundtrip) receiveLoop(ctx context.Context) error {
 	defer t.Close()
 	for {
 		select {

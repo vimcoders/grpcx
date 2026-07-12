@@ -3,7 +3,6 @@ package grpcx
 import (
 	"context"
 	"grpcx/ttrpc"
-	"log/slog"
 	"net"
 	"sync"
 
@@ -64,9 +63,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.S
 			return err
 		}
 		s.wg.Go(func() {
-			if err := s.Handle(cancelCtx, conn); err != nil {
-				slog.Error("grpcx disconnected", "Handle", err.Error())
-			}
+			_ = s.Handle(cancelCtx, conn)
 		})
 	}
 }

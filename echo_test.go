@@ -8,8 +8,10 @@ import (
 	"grpcx/status"
 	"grpcx/ttrpc"
 	"log"
+	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
@@ -37,7 +39,7 @@ var (
 	setupTT  sync.Once
 )
 
-func startTTServer() {
+func startTTServer(ctx context.Context) {
 	setupTT.Do(func() {
 		h := &TTHandler{}
 		ttServer = grpcx.NewServer()
@@ -69,11 +71,24 @@ func startTTServer() {
 			propagation.TraceContext{},
 			propagation.Baggage{},
 		))
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := net.Dial("tcp", ttAddr); err != nil {
+					continue
+				}
+				return
+			}
+		}
 	})
 }
 
 func BenchmarkEcho(b *testing.B) {
-	startTTServer()
+	startTTServer(context.Background())
 	conn, err := grpcx.Dial(ttAddr)
 	if err != nil {
 		b.Fatalf("dial failed: %v", err)

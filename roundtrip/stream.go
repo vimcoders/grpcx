@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package ttrpc
+package roundtrip
 
 import (
 	"context"

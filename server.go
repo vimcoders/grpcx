@@ -2,7 +2,7 @@ package grpcx
 
 import (
 	"context"
-	"grpcx/ttrpc"
+	"grpcx/roundtrip"
 	"net"
 	"sync"
 
@@ -10,14 +10,14 @@ import (
 )
 
 type Server struct {
-	ttrpc.ServerOptions
+	roundtrip.ServerOptions
 	wg       sync.WaitGroup
 	listener net.Listener
 	closed   context.CancelFunc
 }
 
-func NewServer(opt ...ttrpc.ServerOption) *Server {
-	opts := ttrpc.DefaultServerOptions
+func NewServer(opt ...roundtrip.ServerOption) *Server {
+	opts := roundtrip.DefaultServerOptions
 	for i := range opt {
 		opt[i](&opts)
 	}
@@ -31,7 +31,7 @@ func NewServer(opt ...ttrpc.ServerOption) *Server {
 // invoking Serve. If ss is non-nil (for legacy code), its type is checked to
 // ensure it implements sd.HandlerType.
 func (s *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
-	ttrpc.RegisterService(sd, ss)(&s.ServerOptions)
+	roundtrip.RegisterService(sd, ss)(&s.ServerOptions)
 }
 
 func (s *Server) Close() error {
@@ -45,7 +45,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...ttrpc.ServerOption) error {
+func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...roundtrip.ServerOption) error {
 	for i := range opt {
 		opt[i](&s.ServerOptions)
 	}

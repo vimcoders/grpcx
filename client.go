@@ -4,7 +4,7 @@ import (
 	"context"
 	"grpcx/balancer"
 	"grpcx/generated/api"
-	"grpcx/ttrpc"
+	"grpcx/roundtrip"
 	"time"
 
 	"grpcx/encoding"
@@ -39,14 +39,14 @@ func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 // WithTimeout sets the timeout for the ttrpc client.
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) {
-		c.opts = append(c.opts, ttrpc.WithTimeout(d))
+		c.opts = append(c.opts, roundtrip.WithTimeout(d))
 	}
 }
 
 // WithMaxStreams sets the maximum number of streams for the ttrpc client.
 func WithMaxStreams(n int) Option {
 	return func(c *Client) {
-		c.opts = append(c.opts, ttrpc.WithMaxStreams(n))
+		c.opts = append(c.opts, roundtrip.WithMaxStreams(n))
 	}
 }
 
@@ -56,13 +56,13 @@ type Client struct {
 	encoding.Codec
 	interceptor UnaryClientInterceptor
 	grpc.UnaryClientInterceptor
-	opts []ttrpc.Option
+	opts []roundtrip.Option
 }
 
-func DialContext(ctx context.Context, endpoint string, opts ...Option) (ttrpc.RoundTripper, error) {
+func DialContext(ctx context.Context, endpoint string, opts ...Option) (roundtrip.RoundTripper, error) {
 	c := Client{
 		Codec: encoding.GetCodec(encoding.Name),
-		interceptor: func(ctx context.Context, method string, req, reply any, rt ttrpc.RoundTripper, opts ...grpc.CallOption) error {
+		interceptor: func(ctx context.Context, method string, req, reply any, rt roundtrip.RoundTripper, opts ...grpc.CallOption) error {
 			return rt.Invoke(ctx, method, req, reply, opts...)
 		},
 	}
@@ -77,7 +77,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ttrpc.Ro
 	return &c, nil
 }
 
-func Dial(endpoint string, opts ...Option) (ttrpc.RoundTripper, error) {
+func Dial(endpoint string, opts ...Option) (roundtrip.RoundTripper, error) {
 	return DialContext(context.Background(), endpoint, opts...)
 }
 

@@ -2,13 +2,13 @@ package balancer
 
 import (
 	"context"
-	"grpcx/ttrpc"
+	"grpcx/roundtrip"
 	"io"
 )
 
 // Picker is the interface for picking a round tripper from a list of round trippers.
 type Picker interface {
-	Pick(context.Context, PickInfo) (ttrpc.RoundTripper, error)
+	Pick(context.Context, PickInfo) (roundtrip.RoundTripper, error)
 	io.Closer
 }
 
@@ -19,5 +19,5 @@ type PickInfo struct {
 
 // Builder is the interface for building a balancer.
 type Builder interface {
-	Build(ctx context.Context, endpoint string, opts ...ttrpc.Option) (Picker, error)
+	Build(ctx context.Context, endpoint string, opts ...roundtrip.Option) (Picker, error)
 }

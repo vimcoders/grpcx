@@ -8,10 +8,7 @@ import (
 	"grpcx/status"
 	"grpcx/ttrpc"
 	"log"
-	"net"
-	"sync"
 	"testing"
-	"time"
 
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
@@ -25,6 +22,54 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+var (
+	ttServer *grpcx.Server
+	ttAddr   = "127.0.0.1:50051"
+)
+
+func init() {
+	h := &TTHandler{}
+	ttServer = grpcx.NewServer()
+	ttServer.RegisterService(&api.EchoService_ServiceDesc, h)
+	go func() {
+		if err := ttServer.ListenAndServe(context.Background(), ttAddr); err != nil {
+			panic(err)
+		}
+	}()
+	exporter, err := otlptracegrpc.New(context.Background(),
+		otlptracegrpc.WithEndpoint("192.168.11.63:4317"),
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String("your-service"),
+		)),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()), // 开发阶段确保采样
+	)
+
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+}
+
+func dail(_ context.Context) api.EchoServiceClient {
+	for {
+		conn, err := grpcx.Dial(ttAddr)
+		if err != nil {
+			continue
+		}
+		return api.NewEchoServiceClient(conn)
+	}
+}
+
 type TTHandler struct {
 	api.UnimplementedEchoServiceServer
 }
@@ -33,67 +78,8 @@ func (h *TTHandler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoRe
 	return &api.EchoResponse{Message: req.Message}, nil
 }
 
-var (
-	ttServer *grpcx.Server
-	ttAddr   = "127.0.0.1:50051"
-	setupTT  sync.Once
-)
-
-func startTTServer(ctx context.Context) {
-	setupTT.Do(func() {
-		h := &TTHandler{}
-		ttServer = grpcx.NewServer()
-		ttServer.RegisterService(&api.EchoService_ServiceDesc, h)
-		go func() {
-			if err := ttServer.ListenAndServe(context.Background(), ttAddr); err != nil {
-				panic(err)
-			}
-		}()
-		exporter, err := otlptracegrpc.New(context.Background(),
-			otlptracegrpc.WithEndpoint("192.168.11.63:4317"),
-			otlptracegrpc.WithInsecure(),
-		)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithBatcher(exporter),
-			sdktrace.WithResource(resource.NewWithAttributes(
-				semconv.SchemaURL,
-				semconv.ServiceNameKey.String("your-service"),
-			)),
-			sdktrace.WithSampler(sdktrace.AlwaysSample()), // 开发阶段确保采样
-		)
-
-		otel.SetTracerProvider(tp)
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-			propagation.TraceContext{},
-			propagation.Baggage{},
-		))
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if _, err := net.Dial("tcp", ttAddr); err != nil {
-					continue
-				}
-				return
-			}
-		}
-	})
-}
-
 func BenchmarkEcho(b *testing.B) {
-	startTTServer(context.Background())
-	conn, err := grpcx.Dial(ttAddr)
-	if err != nil {
-		b.Fatalf("dial failed: %v", err)
-	}
-	client := api.NewEchoServiceClient(conn)
+	client := dail(context.Background())
 	req := &api.EchoRequest{Message: "Hello, grpcx!"}
 	ctx := context.Background()
 	b.ResetTimer()

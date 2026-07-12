@@ -12,6 +12,20 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+func init() {
+	lis, err := net.Listen("tcp", stdGRPCAddr)
+	if err != nil {
+		panic(err)
+	}
+	stdGRPCServer = grpc.NewServer()
+	api.RegisterEchoServiceServer(stdGRPCServer, &StdHandler{})
+	go func() {
+		if err := stdGRPCServer.Serve(lis); err != nil {
+			panic(err)
+		}
+	}()
+}
+
 type StdHandler struct {
 	api.UnimplementedEchoServiceServer
 }
@@ -26,24 +40,7 @@ var (
 	setupStdGRPC  sync.Once
 )
 
-func startStdGRPCServer() {
-	setupStdGRPC.Do(func() {
-		lis, err := net.Listen("tcp", stdGRPCAddr)
-		if err != nil {
-			panic(err)
-		}
-		stdGRPCServer = grpc.NewServer()
-		api.RegisterEchoServiceServer(stdGRPCServer, &StdHandler{})
-		go func() {
-			if err := stdGRPCServer.Serve(lis); err != nil {
-				panic(err)
-			}
-		}()
-	})
-}
-
 func BenchmarkStdGRPC_Echo(b *testing.B) {
-	startStdGRPCServer()
 	conn, err := grpc.NewClient(stdGRPCAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

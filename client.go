@@ -2,6 +2,7 @@ package grpcx
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/vimcoders/grpcx/roundtrip"
@@ -15,46 +16,52 @@ import (
 	"google.golang.org/grpc"
 )
 
+type ClientConnInterface interface {
+	grpc.ClientConnInterface
+	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+	io.Closer
+}
+
 // Client is a ttrpc client that handles outgoing requests and dispatches them to the appropriate transport.
-type Option func(c *Client)
+type Option func(c *client)
 
 // WithCodec sets the codec for the ttrpc client.
 func WithCodec(c encoding.Codec) Option {
-	return func(c *Client) {
+	return func(c *client) {
 		c.Codec = c
 	}
 }
 
 // WithBalancer sets the balancer for the ttrpc client.
 func WithBalancer(b balancer.Picker) Option {
-	return func(c *Client) {
+	return func(c *client) {
 		c.Picker = b
 	}
 }
 
 // WithUnaryClientInterceptor sets the unary client interceptor for the ttrpc client.
 func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
-	return func(c *Client) {
+	return func(c *client) {
 		c.interceptor = i
 	}
 }
 
 // WithTimeout sets the timeout for the ttrpc client.
 func WithTimeout(d time.Duration) Option {
-	return func(c *Client) {
+	return func(c *client) {
 		c.opts = append(c.opts, roundtrip.WithTimeout(d))
 	}
 }
 
 // WithMaxStreams sets the maximum number of streams for the ttrpc client.
 func WithMaxStreams(n int) Option {
-	return func(c *Client) {
+	return func(c *client) {
 		c.opts = append(c.opts, roundtrip.WithMaxStreams(n))
 	}
 }
 
 // Client is a ttrpc client that handles outgoing requests and dispatches them to the appropriate transport.
-type Client struct {
+type client struct {
 	balancer.Picker
 	encoding.Codec
 	interceptor UnaryClientInterceptor
@@ -62,8 +69,8 @@ type Client struct {
 	opts []roundtrip.Option
 }
 
-func DialContext(ctx context.Context, endpoint string, opts ...Option) (roundtrip.RoundTripper, error) {
-	c := Client{
+func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
+	c := client{
 		Codec: encoding.GetCodec(encoding.Name),
 		interceptor: func(ctx context.Context, method string, req, reply any, rt roundtrip.RoundTripper, opts ...grpc.CallOption) error {
 			return rt.Invoke(ctx, method, req, reply, opts...)
@@ -80,11 +87,11 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (roundtri
 	return &c, nil
 }
 
-func Dial(endpoint string, opts ...Option) (roundtrip.RoundTripper, error) {
+func Dial(endpoint string, opts ...Option) (ClientConnInterface, error) {
 	return DialContext(context.Background(), endpoint, opts...)
 }
 
-func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
+func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	info := balancer.PickInfo{
 		FullMethodName: method,
 	}
@@ -98,7 +105,7 @@ func (c *Client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return nil
 }
 
-func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	info := balancer.PickInfo{
 		FullMethodName: req.Method,
 	}
@@ -112,7 +119,7 @@ func (c *Client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 // NewStream creates a new stream with the given stream descriptor to the
 // specified service and method. If not a streaming client, the request object
 // may be provided.
-func (c *Client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	info := balancer.PickInfo{
 		FullMethodName: method,
 	}
@@ -123,6 +130,6 @@ func (c *Client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 	return rt.NewStream(ctx, desc, method, opts...)
 }
 
-func (c *Client) Close() error {
+func (c *client) Close() error {
 	return c.Picker.Close()
 }

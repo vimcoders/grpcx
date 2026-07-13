@@ -1,4 +1,4 @@
-module grpcx
+module github.com/vimcoders/grpcx
 
 go 1.26.3
 

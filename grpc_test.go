@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"grpcx/generated/api"
+	"github.com/vimcoders/grpcx/generated/api"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

@@ -2,8 +2,9 @@ package roundtrip
 
 import (
 	"context"
-	"grpcx/generated/api"
 	"io"
+
+	"github.com/vimcoders/grpcx/generated/api"
 
 	"google.golang.org/grpc"
 )

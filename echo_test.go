@@ -2,13 +2,18 @@ package grpcx_test
 
 import (
 	"context"
-	"grpcx"
-	"grpcx/generated/api"
-	"grpcx/metadata"
-	"grpcx/roundtrip"
-	"grpcx/status"
 	"log"
 	"testing"
+
+	"github.com/vimcoders/grpcx/status"
+
+	"github.com/vimcoders/grpcx/roundtrip"
+
+	"github.com/vimcoders/grpcx/metadata"
+
+	"github.com/vimcoders/grpcx/generated/api"
+
+	"github.com/vimcoders/grpcx"
 
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"

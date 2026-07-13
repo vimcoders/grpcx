@@ -2,8 +2,9 @@ package balancer
 
 import (
 	"context"
-	"grpcx/roundtrip"
 	"io"
+
+	"github.com/vimcoders/grpcx/roundtrip"
 )
 
 // Picker is the interface for picking a round tripper from a list of round trippers.

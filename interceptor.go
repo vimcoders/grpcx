@@ -2,7 +2,8 @@ package grpcx
 
 import (
 	"context"
-	"grpcx/roundtrip"
+
+	"github.com/vimcoders/grpcx/roundtrip"
 
 	"google.golang.org/grpc"
 )

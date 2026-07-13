@@ -1,9 +1,10 @@
 package resolver_test
 
 import (
-	"grpcx/resolver"
 	"net/url"
 	"testing"
+
+	"github.com/vimcoders/grpcx/resolver"
 )
 
 func TestResolver(t *testing.T) {

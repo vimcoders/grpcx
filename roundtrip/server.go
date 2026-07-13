@@ -2,16 +2,18 @@ package roundtrip
 
 import (
 	"context"
-	"grpcx/generated/api"
-	"grpcx/status"
 	"net"
 	"path"
 	"slices"
 	"time"
 
-	"grpcx/encoding"
+	"github.com/vimcoders/grpcx/status"
 
-	"grpcx/metadata"
+	"github.com/vimcoders/grpcx/generated/api"
+
+	"github.com/vimcoders/grpcx/encoding"
+
+	"github.com/vimcoders/grpcx/metadata"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

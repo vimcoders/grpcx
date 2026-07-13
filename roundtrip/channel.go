@@ -19,11 +19,12 @@ package roundtrip
 import (
 	"bufio"
 	"encoding/binary"
-	"grpcx/status"
 	"io"
 	"math"
 	"net"
 	"sync"
+
+	"github.com/vimcoders/grpcx/status"
 )
 
 const (

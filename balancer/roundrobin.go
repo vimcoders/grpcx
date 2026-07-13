@@ -2,15 +2,19 @@ package balancer
 
 import (
 	"context"
-	"grpcx/generated/api"
-	"grpcx/resolver"
-	"grpcx/roundtrip"
-	"grpcx/status"
 	"math/rand"
 	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/vimcoders/grpcx/status"
+
+	"github.com/vimcoders/grpcx/roundtrip"
+
+	"github.com/vimcoders/grpcx/resolver"
+
+	"github.com/vimcoders/grpcx/generated/api"
 )
 
 const (

@@ -2,9 +2,10 @@ package grpcx
 
 import (
 	"context"
-	"grpcx/roundtrip"
 	"net"
 	"sync"
+
+	"github.com/vimcoders/grpcx/roundtrip"
 
 	"google.golang.org/grpc"
 )

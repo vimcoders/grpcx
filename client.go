@@ -2,12 +2,15 @@ package grpcx
 
 import (
 	"context"
-	"grpcx/balancer"
-	"grpcx/generated/api"
-	"grpcx/roundtrip"
 	"time"
 
-	"grpcx/encoding"
+	"github.com/vimcoders/grpcx/roundtrip"
+
+	"github.com/vimcoders/grpcx/generated/api"
+
+	"github.com/vimcoders/grpcx/balancer"
+
+	"github.com/vimcoders/grpcx/encoding"
 
 	"google.golang.org/grpc"
 )

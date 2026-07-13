@@ -18,9 +18,11 @@ package roundtrip
 
 import (
 	"context"
-	"grpcx/encoding"
-	"grpcx/generated/api"
 	"sync"
+
+	"github.com/vimcoders/grpcx/generated/api"
+
+	"github.com/vimcoders/grpcx/encoding"
 
 	"google.golang.org/grpc"
 )

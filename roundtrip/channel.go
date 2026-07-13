@@ -73,17 +73,17 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 
 	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {
-			return 0, nil, status.DataLoss.Err()
+			return 0, nil, err
 		}
 
-		return 0, nil, status.DataLoss.Err()
+		return 0, nil, status.OutOfRange.Err()
 	}
 
 	var p []byte
 	if h > 0 {
 		p = ch.getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
-			return 0, nil, status.DataLoss.Err()
+			return 0, nil, err
 		}
 	}
 
@@ -99,7 +99,7 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	defer ch.putmbuf(hwbuf)
 	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
 	binary.BigEndian.PutUint32(hwbuf[4:], streamID)
-	copy(hwbuf[8:], p)
+	copy(hwbuf[messageHeaderLength:], p)
 
 	_, err := ch.Write(hwbuf)
 	if err != nil {

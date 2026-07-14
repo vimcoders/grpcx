@@ -65,16 +65,6 @@ func init() {
 	))
 }
 
-func dail(_ context.Context) api.EchoServiceClient {
-	for {
-		conn, err := grpcx.Dial(ttAddr)
-		if err != nil {
-			continue
-		}
-		return api.NewEchoServiceClient(conn)
-	}
-}
-
 type TTHandler struct {
 	api.UnimplementedEchoServiceServer
 }
@@ -84,7 +74,12 @@ func (h *TTHandler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoRe
 }
 
 func BenchmarkEcho(b *testing.B) {
-	client := dail(context.Background())
+	c, err := grpcx.Dial(ttAddr)
+	if err != nil {
+		b.Errorf("Dial failed: %v", err)
+		return
+	}
+	client := api.NewEchoServiceClient(c)
 	req := &api.EchoRequest{Message: "Hello, grpcx!"}
 	ctx := context.Background()
 	b.ResetTimer()

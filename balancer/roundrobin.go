@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"net/url"
 	"sync"
@@ -101,7 +102,14 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (roundtrip.RoundTrippe
 // DialContext dials a round robin balancer.
 func DialContext(ctx context.Context, endpoint string, opts ...roundtrip.Option) (Picker, error) {
 	var b rrBuilder
-	return b.Build(ctx, endpoint, opts...)
+	for range math.MaxInt8 {
+		p, err := b.Build(ctx, endpoint, opts...)
+		if err != nil {
+			continue
+		}
+		return p, nil
+	}
+	return nil, status.OutOfRange.Err()
 }
 
 // Keepalive keeps the round robin balancer alive.

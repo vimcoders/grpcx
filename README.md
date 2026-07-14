@@ -1,6 +1,6 @@
 # grpcx
 
-gRPC 的高性能替代方案，基于 ttrpc 传输，兼容 gRPC API。
+k8s微服务通信方案，传输层roundtrip部分源码来自k8s容器运行时containerd中的ttrpc，兼容 gRPC API。
 
 ## 特点
 - 比标准 gRPC 快 2.5-3 倍

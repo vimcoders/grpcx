@@ -3,7 +3,6 @@ package grpcx_test
 import (
 	"context"
 	"net"
-	"sync"
 	"testing"
 
 	"github.com/vimcoders/grpcx/generated/api"
@@ -37,7 +36,6 @@ func (h *StdHandler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoR
 var (
 	stdGRPCServer *grpc.Server
 	stdGRPCAddr   = "127.0.0.1:50052"
-	setupStdGRPC  sync.Once
 )
 
 func BenchmarkStdGRPC_Echo(b *testing.B) {

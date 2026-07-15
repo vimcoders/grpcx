@@ -57,7 +57,9 @@ func (c codec) Unmarshal(p []byte, msg any) error {
 	}
 }
 
+var defaultCodec = &codec{}
+
 // GetCodec returns a new instance of the proto codec.
 func GetCodec(contentSubtype string) encoding.Codec {
-	return &codec{}
+	return defaultCodec
 }

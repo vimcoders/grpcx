@@ -126,6 +126,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
 func (t *roundtrip) run(ctx context.Context) error {
 	defer t.Close()
+	codec := encoding.GetCodec(encoding.Name)
 	for {
 		select {
 		case <-ctx.Done():
@@ -141,7 +142,7 @@ func (t *roundtrip) run(ctx context.Context) error {
 				continue
 			}
 			var response api.Response
-			if err := t.Unmarshal(payload, &response); err != nil {
+			if err := codec.Unmarshal(payload, &response); err != nil {
 				s.close()
 				t.channel.putmbuf(payload)
 				continue
@@ -243,9 +244,10 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	codec := encoding.GetCodec(encoding.Name)
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
-	b, err := t.Marshal(req)
+	b, err := codec.Marshal(req)
 	if err != nil {
 		return nil, err
 	}

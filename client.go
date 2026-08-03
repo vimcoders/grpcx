@@ -26,9 +26,9 @@ type ClientConnInterface interface {
 type Option func(c *client)
 
 // WithCodec sets the codec for the ttrpc client.
-func WithCodec(c encoding.Codec) Option {
+func WithCodec(codec encoding.Codec) Option {
 	return func(c *client) {
-		c.Codec = c
+		c.Codec = codec
 	}
 }
 

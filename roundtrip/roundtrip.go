@@ -126,33 +126,36 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
 func (t *roundtrip) run(ctx context.Context) error {
 	defer t.Close()
-	codec := encoding.GetCodec(encoding.Name)
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			streamID, payload, err := t.channel.Recv()
-			if err != nil {
+			if err := t.recv(ctx); err != nil {
 				return err
-			}
-			s := t.getStream(streamID)
-			if s == nil {
-				t.channel.putmbuf(payload)
-				continue
-			}
-			var response api.Response
-			if err := codec.Unmarshal(payload, &response); err != nil {
-				s.close()
-				t.channel.putmbuf(payload)
-				continue
-			}
-			t.channel.putmbuf(payload)
-			if err := s.receive(ctx, &response); err != nil {
-				continue
 			}
 		}
 	}
+}
+
+func (t *roundtrip) recv(ctx context.Context) error {
+	streamID, payload, err := t.channel.Recv()
+	if err != nil {
+		return err
+	}
+	defer t.channel.putmbuf(payload)
+	s := t.getStream(streamID)
+	if s == nil {
+		return nil
+	}
+	var response api.Response
+	if err := t.Codec.Unmarshal(payload, &response); err != nil {
+		return err
+	}
+	if err := s.receive(ctx, &response); err != nil {
+		return err
+	}
+	return nil
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.

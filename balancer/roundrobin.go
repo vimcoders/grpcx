@@ -38,8 +38,8 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 	childCtx, cancel := context.WithCancel(ctx)
 	// Create a round robin balancer.
 	var x = RoundRobin{
-		dialContext: func(ctx context.Context) (roundtrip.RoundTripper, error) {
-			return roundtrip.DialContext(ctx, endpoint, opts...)
+		dialContext: func(ctx context.Context, addr string) (roundtrip.RoundTripper, error) {
+			return roundtrip.DialContext(ctx, addr, opts...)
 		},
 		resolveContext: func(ctx context.Context) ([]resolver.Address, error) {
 			resolver := resolver.GetResolver("dns")
@@ -57,8 +57,8 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 		return nil, err
 	}
 	// Dial to each address and create a round tripper for each.
-	for range address {
-		rt, err := x.dialContext(ctx)
+	for _, addr := range address {
+		rt, err := x.dialContext(ctx, addr.Addr)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +81,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 type RoundRobin struct {
 	rts            []roundtrip.RoundTripper
 	next           atomic.Uint32
-	dialContext    func(ctx context.Context) (roundtrip.RoundTripper, error)
+	dialContext    func(ctx context.Context, endpoint string) (roundtrip.RoundTripper, error)
 	resolveContext func(ctx context.Context) ([]resolver.Address, error)
 	cancelFunc     context.CancelFunc
 	sync.RWMutex
@@ -156,7 +156,7 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 	}
 	// Create new round trippers for any new addresses.
 	for i := len(rts); i < len(ips); i++ {
-		rt, err := rr.dialContext(timeoutCtx)
+		rt, err := rr.dialContext(timeoutCtx, ips[i].Addr)
 		if err != nil {
 			continue
 		}

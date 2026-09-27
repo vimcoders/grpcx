@@ -70,7 +70,6 @@ type roundtrip struct {
 	RoundTripper
 	sync.RWMutex
 	encoding.Codec
-	c           net.Conn
 	channel     *channel
 	streams     map[uint32]*stream
 	streamID    uint32
@@ -105,7 +104,6 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := &roundtrip{
 		channel:     newChannel(cc),
-		c:           cc,
 		maxStreams:  defaultMaxStreams,
 		ctx:         ctx,
 		closed:      cancel,

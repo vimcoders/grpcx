@@ -72,7 +72,11 @@ type client struct {
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
 	c := client{
 		Codec: encoding.GetCodec(encoding.Name),
-		interceptor: func(ctx context.Context, method string, req, reply any, rt roundtrip.RoundTripper, opts ...grpc.CallOption) error {
+		interceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
+			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
+			if err != nil {
+				return err
+			}
 			return rt.Invoke(ctx, method, req, reply, opts...)
 		},
 	}
@@ -92,14 +96,7 @@ func Dial(endpoint string, opts ...Option) (ClientConnInterface, error) {
 }
 
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	info := balancer.PickInfo{
-		FullMethodName: method,
-	}
-	rt, err := c.Pick(ctx, info)
-	if err != nil {
-		return err
-	}
-	if err := c.interceptor(ctx, method, req, reply, rt, opts...); err != nil {
+	if err := c.interceptor(ctx, method, req, reply, c.Picker, opts...); err != nil {
 		return err
 	}
 	return nil

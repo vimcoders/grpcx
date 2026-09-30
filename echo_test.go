@@ -5,9 +5,8 @@ import (
 	"log"
 	"testing"
 
+	"github.com/vimcoders/grpcx/balancer"
 	"github.com/vimcoders/grpcx/status"
-
-	"github.com/vimcoders/grpcx/roundtrip"
 
 	"github.com/vimcoders/grpcx/metadata"
 
@@ -94,8 +93,12 @@ func BenchmarkEcho(b *testing.B) {
 }
 
 func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req any, reply any, rt roundtrip.RoundTripper, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req any, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
 		for i := retries; i >= 0; i-- {
+			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
+			if err != nil {
+				return err
+			}
 			if err := rt.Invoke(ctx, method, req, reply, opts...); err != nil {
 				if s, ok := status.FromError(err); ok {
 					switch s.Code() {
@@ -120,7 +123,11 @@ func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
 func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
 	var tracer = otel.Tracer("grpc-client-retries")
 	var propagator = otel.GetTextMapPropagator()
-	return func(ctx context.Context, method string, req any, reply any, rt roundtrip.RoundTripper, opts ...grpc.CallOption) error {
+	return func(ctx context.Context, method string, req any, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
+		rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
+		if err != nil {
+			return err
+		}
 		otelCtx, span := tracer.Start(ctx, "ttrpc.client.call",
 			trace.WithAttributes(
 				semconv.RPCSystemKey.String("ttrpc"),

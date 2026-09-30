@@ -83,6 +83,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 	for _, o := range opts {
 		o(&c)
 	}
+	c.opts = append(c.opts, roundtrip.WithCodec(c.Codec))
 	picker, err := balancer.DialContext(ctx, endpoint, c.opts...)
 	if err != nil {
 		return nil, err

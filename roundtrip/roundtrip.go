@@ -148,7 +148,8 @@ func (t *roundtrip) recv(ctx context.Context) error {
 		return nil
 	}
 	var response api.Response
-	if err := t.Codec.Unmarshal(payload, &response); err != nil {
+	codec := encoding.GetCodec(encoding.Name)
+	if err := codec.Unmarshal(payload, &response); err != nil {
 		return err
 	}
 	if err := s.receive(ctx, &response); err != nil {

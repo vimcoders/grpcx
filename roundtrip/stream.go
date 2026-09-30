@@ -66,7 +66,5 @@ func (s *stream) receive(ctx context.Context, response *api.Response) error {
 		return nil
 	case <-ctx.Done():
 		return s.close()
-	default:
-		return s.close()
 	}
 }

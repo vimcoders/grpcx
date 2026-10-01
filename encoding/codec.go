@@ -63,3 +63,13 @@ var defaultCodec = &codec{}
 func GetCodec(contentSubtype string) encoding.Codec {
 	return defaultCodec
 }
+
+// Marshal implements [encoding.Codec].
+func Marshal(msg any) ([]byte, error) {
+	return defaultCodec.Marshal(msg)
+}
+
+// Unmarshal implements [encoding.Codec].
+func Unmarshal(p []byte, msg any) error {
+	return defaultCodec.Unmarshal(p, msg)
+}

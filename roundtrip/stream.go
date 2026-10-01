@@ -32,8 +32,7 @@ type stream struct {
 	grpc.ClientStream
 	id     uint32
 	sender Sender
-	recv   chan *api.Response
-	encoding.Codec
+	c      chan *api.Response
 
 	closeOnce sync.Once
 }
@@ -43,14 +42,13 @@ func newStream(id uint32, send Sender) *stream {
 	return &stream{
 		id:     id,
 		sender: send,
-		recv:   make(chan *api.Response, 1),
-		Codec:  encoding.GetCodec(encoding.Name),
+		c:      make(chan *api.Response, 1),
 	}
 }
 
 // close closes the stream and releases any resources associated with it.
 func (s *stream) close() error {
-	s.closeOnce.Do(func() { close(s.recv) })
+	s.closeOnce.Do(func() { close(s.c) })
 	return nil
 }
 
@@ -60,9 +58,13 @@ func (s *stream) send(_ context.Context, b []byte) error {
 }
 
 // receive receives a message from the stream. The message is received with a fixed-length header that includes the stream id. If the stream is closed, an error is returned.
-func (s *stream) receive(ctx context.Context, response *api.Response) error {
+func (s *stream) recv(ctx context.Context, b []byte) error {
+	var response api.Response
+	if err := encoding.Unmarshal(b, &response); err != nil {
+		return err
+	}
 	select {
-	case s.recv <- response:
+	case s.c <- &response:
 		return nil
 	case <-ctx.Done():
 		return s.close()

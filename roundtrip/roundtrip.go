@@ -147,12 +147,7 @@ func (t *roundtrip) recv(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	var response api.Response
-	codec := encoding.GetCodec(encoding.Name)
-	if err := codec.Unmarshal(payload, &response); err != nil {
-		return err
-	}
-	if err := s.receive(ctx, &response); err != nil {
+	if err := s.recv(ctx, payload); err != nil {
 		return err
 	}
 	return nil
@@ -247,10 +242,9 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	codec := encoding.GetCodec(encoding.Name)
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
-	b, err := codec.Marshal(req)
+	b, err := encoding.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +261,7 @@ func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 		return nil, status.Canceled.Err()
 	case <-t.ctx.Done():
 		return nil, status.Canceled.Err()
-	case msg, ok := <-s.recv:
+	case msg, ok := <-s.c:
 		if !ok {
 			return nil, status.Unavailable.Err()
 		}

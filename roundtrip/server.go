@@ -108,7 +108,6 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 	defer c.Close()
-	codec := encoding.GetCodec(encoding.Name)
 	channel := newChannel(c)
 	for {
 		select {
@@ -120,7 +119,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 				return err
 			}
 			var request api.Request
-			if err := codec.Unmarshal(payload, &request); err != nil {
+			if err := encoding.Unmarshal(payload, &request); err != nil {
 				return err
 			}
 			channel.putmbuf(payload)
@@ -128,7 +127,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 			if err != nil {
 				return err
 			}
-			b, err := codec.Marshal(response)
+			b, err := encoding.Marshal(response)
 			if err != nil {
 				return err
 			}

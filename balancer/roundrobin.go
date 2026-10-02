@@ -66,8 +66,8 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 	}
 	// Randomly select the next round tripper to use.
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	next := uint32(rng.Intn(len(x.rts)))
-	x.next.Store(next)
+	count := uint32(rng.Intn(len(x.rts)))
+	x.count.Store(count)
 	go func() {
 		if err := x.Keepalive(childCtx); err != nil {
 			return
@@ -80,7 +80,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 // RoundRobin is a round robin balancer.
 type RoundRobin struct {
 	rts            []roundtrip.RoundTripper
-	next           atomic.Uint32
+	count          atomic.Uint32
 	dialContext    func(ctx context.Context) (roundtrip.RoundTripper, error)
 	resolveContext func(ctx context.Context) ([]resolver.Address, error)
 	cancelFunc     context.CancelFunc
@@ -95,7 +95,7 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (roundtrip.RoundTrippe
 	if len(rts) == 0 {
 		return nil, status.ResourceExhausted.Err()
 	}
-	idx := rr.next.Add(defaultStep) % uint32(len(rts))
+	idx := rr.count.Add(defaultStep) % uint32(len(rts))
 	return rts[idx], nil
 }
 

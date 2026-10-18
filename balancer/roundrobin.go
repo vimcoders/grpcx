@@ -132,8 +132,6 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultKeepaliveTimeout)
 	defer cancel()
 
-	rr.Lock()
-	defer rr.Unlock()
 	// Resolve the endpoint to get the addresses.
 	ips, err := rr.resolveContext(timeoutCtx)
 	if err != nil {
@@ -143,7 +141,7 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 	req := &api.Request{}
 	var rts []roundtrip.RoundTripper
 	// Check the existing round trippers and remove any that are no longer valid.
-	for _, rt := range rr.rts {
+	for _, rt := range rr.clone() {
 		if _, err := rt.RoundTrip(timeoutCtx, req); err != nil {
 			_ = rt.Close()
 			continue
@@ -162,9 +160,17 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 		}
 		rts = append(rts, rt)
 	}
+	rr.Lock()
+	defer rr.Unlock()
 	// Update the round tripper list.
 	rr.rts = rts
 	return nil
+}
+
+func (rr *RoundRobin) clone() []roundtrip.RoundTripper {
+	rr.Lock()
+	defer rr.Unlock()
+	return append([]roundtrip.RoundTripper(nil), rr.rts...)
 }
 
 // Close closes the round robin balancer.

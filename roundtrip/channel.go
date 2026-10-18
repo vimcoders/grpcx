@@ -20,7 +20,6 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
-	"math"
 	"net"
 	"sync"
 
@@ -29,7 +28,7 @@ import (
 
 const (
 	messageHeaderLength = 8
-	messageLengthMax    = math.MaxUint16
+	messageLengthMax    = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
 )
 
 // Sender is the interface for sending messages to a channel.

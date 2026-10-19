@@ -17,7 +17,6 @@ package roundtrip
 
 import (
 	"context"
-	"math"
 	"net"
 	"sync"
 	"time"
@@ -45,7 +44,7 @@ const (
 type Option func(*roundtrip)
 
 // WithCodec sets the codec for the ttrpc transport.
-func WithMaxStreams(n int) Option {
+func WithMaxStreams(n uint32) Option {
 	return func(t *roundtrip) {
 		t.maxStreams = n
 	}
@@ -73,7 +72,7 @@ type roundtrip struct {
 	channel     *channel
 	streams     map[uint32]*stream
 	streamID    uint32
-	maxStreams  int
+	maxStreams  uint32
 	ctx         context.Context
 	closed      func()
 	dialContext func(ctx context.Context) (net.Conn, error)
@@ -157,15 +156,14 @@ func (t *roundtrip) recv(ctx context.Context) error {
 func (t *roundtrip) createStream(ctx context.Context) (*stream, error) {
 	t.Lock()
 	defer t.Unlock()
-
-	select {
-	case <-ctx.Done():
-		return nil, status.Canceled.Err()
-	default:
-		if t.maxStreams > 0 && len(t.streams) >= t.maxStreams {
-			return nil, status.ResourceExhausted.Err()
-		}
-		for i := uint32(1); i < math.MaxInt8; i++ {
+	if t.maxStreams > 0 && len(t.streams) >= int(t.maxStreams) {
+		return nil, status.ResourceExhausted.Err()
+	}
+	for i := uint32(1); i < t.maxStreams; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, status.Canceled.Err()
+		default:
 			streamID := t.streamID + i
 			if _, ok := t.streams[streamID]; ok {
 				continue

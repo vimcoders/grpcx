@@ -54,7 +54,7 @@ func WithTimeout(d time.Duration) Option {
 }
 
 // WithMaxStreams sets the maximum number of streams for the ttrpc client.
-func WithMaxStreams(n int) Option {
+func WithMaxStreams(n uint32) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, roundtrip.WithMaxStreams(n))
 	}

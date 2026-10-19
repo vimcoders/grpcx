@@ -18,23 +18,17 @@ package roundtrip
 
 import (
 	"context"
-	"sync"
 
 	"github.com/vimcoders/grpcx/generated/api"
 
 	"github.com/vimcoders/grpcx/encoding"
-
-	"google.golang.org/grpc"
 )
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type stream struct {
-	grpc.ClientStream
-	id        uint32
-	sender    Sender
-	c         chan *api.Response
-	done      chan struct{} // 替代 close(s.c) 作为关闭信号
-	closeOnce sync.Once
+	id     uint32
+	sender Sender
+	c      chan *api.Response
 }
 
 // newStream creates a new stream with the given id and sender.
@@ -43,13 +37,11 @@ func newStream(id uint32, send Sender) *stream {
 		id:     id,
 		sender: send,
 		c:      make(chan *api.Response, 1),
-		done:   make(chan struct{}),
 	}
 }
 
 // close closes the stream and releases any resources associated with it.
 func (s *stream) close() error {
-	s.closeOnce.Do(func() { close(s.done) })
 	return nil
 }
 
@@ -68,8 +60,6 @@ func (s *stream) recv(ctx context.Context, b []byte) error {
 	case s.c <- &response:
 		return nil
 	case <-ctx.Done():
-		return s.close()
-	case <-s.done:
 		return s.close()
 	default: // 上一个响应还没被取走，属于异常帧，丢弃
 		return nil

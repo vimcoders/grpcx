@@ -179,7 +179,7 @@ func (t *roundtrip) createStream(ctx context.Context) (*stream, error) {
 
 // NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (t *roundtrip) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return t.createStream(ctx)
+	return nil, status.Unimplemented.Err()
 }
 
 // deleteStream deletes the given stream from the transport. It closes the stream and removes it from the map of streams.

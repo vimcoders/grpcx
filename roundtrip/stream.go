@@ -45,7 +45,11 @@ func (s *stream) close() error {
 }
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
-func (s *stream) send(_ context.Context, b []byte) error {
+func (s *stream) send(_ context.Context, req *api.Request) error {
+	b, err := encoding.Marshal(req)
+	if err != nil {
+		return err
+	}
 	return s.sender.Send(s.id, b)
 }
 

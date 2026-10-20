@@ -242,16 +242,12 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
-	b, err := encoding.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
 	s, err := t.createStream(timeoutCtx)
 	if err != nil {
 		return nil, err
 	}
 	defer t.deleteStream(s)
-	if err := s.send(timeoutCtx, b); err != nil {
+	if err := s.send(timeoutCtx, req); err != nil {
 		return nil, err
 	}
 	select {

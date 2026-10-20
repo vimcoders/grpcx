@@ -263,7 +263,11 @@ func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 		if !ok {
 			return nil, status.Unavailable.Err()
 		}
-		return msg, nil
+		var response api.Response
+		if err := encoding.Unmarshal(msg, &response); err != nil {
+			return nil, err
+		}
+		return &response, nil
 	}
 }
 

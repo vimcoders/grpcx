@@ -21,16 +21,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vimcoders/grpcx/status"
-
 	"github.com/vimcoders/grpcx/metadata"
+	"github.com/vimcoders/grpcx/status"
 
 	"github.com/vimcoders/grpcx/generated/api"
 
 	"github.com/vimcoders/grpcx/encoding"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 )
 
 const (
@@ -153,7 +151,7 @@ func (t *roundtrip) recv(ctx context.Context) error {
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
-func (t *roundtrip) createStream(ctx context.Context) (*stream, error) {
+func (t *roundtrip) createStream(ctx context.Context, opts ...CallOption) (*stream, error) {
 	t.Lock()
 	defer t.Unlock()
 	if t.maxStreams > 0 && len(t.streams) >= int(t.maxStreams) {
@@ -168,7 +166,7 @@ func (t *roundtrip) createStream(ctx context.Context) (*stream, error) {
 			if _, ok := t.streams[streamID]; ok {
 				continue
 			}
-			s := newStream(streamID, t.channel)
+			s := newStream(ctx, streamID, t.channel, opts...)
 			t.streams[s.id] = s
 			t.streamID = streamID
 			return s, nil
@@ -210,29 +208,25 @@ func (t *roundtrip) cleanupStreams() {
 
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
 func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	payload, err := t.Marshal(req)
-	if err != nil {
-		return err
-	}
-	request := &api.Request{
+	info := CallOptions{
 		Method:  method,
-		Payload: payload,
 		Timeout: t.timeout.Milliseconds(),
+		codec:   t.Codec,
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
-		for k, v := range medatas {
-			request.Metadatas = append(request.Metadatas, k, v)
-		}
+		info.Metadata = medatas
 	}
-	response, err := t.RoundTrip(ctx, request)
+	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
+	defer cancel()
+	s, err := t.createStream(timeoutCtx, &info)
 	if err != nil {
 		return err
 	}
-	code := codes.Code(response.Code)
-	if code != codes.OK {
-		return status.Error(code, response.Message)
+	defer t.deleteStream(s)
+	if err := s.SendMsg(req); err != nil {
+		return err
 	}
-	if err = t.Unmarshal(response.Payload, reply); err != nil {
+	if err := s.RecvMsg(reply); err != nil {
 		return err
 	}
 	return nil
@@ -242,7 +236,10 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
-	s, err := t.createStream(timeoutCtx)
+	info := CallOptions{
+		codec: t.Codec,
+	}
+	s, err := t.createStream(timeoutCtx, &info)
 	if err != nil {
 		return nil, err
 	}

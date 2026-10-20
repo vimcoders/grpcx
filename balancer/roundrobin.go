@@ -55,25 +55,24 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 	if err != nil {
 		return nil, err
 	}
-	var rts []roundtrip.RoundTripper
 	// Dial to each address and create a round tripper for each.
 	for range address {
 		rt, err := x.dialContext(ctx)
 		if err != nil {
+			x.Close()
 			return nil, err
 		}
-		rts = append(rts, rt)
+		x.rts = append(x.rts, rt)
 	}
 	// Randomly select the next round tripper to use.
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	count := uint32(rng.Intn(len(rts)))
+	count := uint32(rng.Intn(len(x.rts)))
 	x.count.Store(count)
 	go func() {
 		if err := x.Keepalive(childCtx); err != nil {
 			return
 		}
 	}()
-	x.rts = rts
 	// Return the round robin balancer.
 	return &x, nil
 }

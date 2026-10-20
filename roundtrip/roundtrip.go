@@ -137,16 +137,16 @@ func (t *roundtrip) run(ctx context.Context) error {
 }
 
 func (t *roundtrip) recv(ctx context.Context) error {
-	streamID, payload, err := t.channel.Recv()
+	streamID, b, err := t.channel.Recv()
 	if err != nil {
 		return err
 	}
-	defer t.channel.putmbuf(payload)
+	defer t.channel.putmbuf(b)
 	s := t.getStream(streamID)
 	if s == nil {
 		return nil
 	}
-	if err := s.recv(ctx, payload); err != nil {
+	if err := s.process(ctx, b); err != nil {
 		return err
 	}
 	return nil
@@ -259,15 +259,11 @@ func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 		return nil, status.Canceled.Err()
 	case <-t.ctx.Done():
 		return nil, status.Canceled.Err()
-	case msg, ok := <-s.c:
+	case response, ok := <-s.c:
 		if !ok {
 			return nil, status.Unavailable.Err()
 		}
-		var response api.Response
-		if err := encoding.Unmarshal(msg, &response); err != nil {
-			return nil, err
-		}
-		return &response, nil
+		return response, nil
 	}
 }
 

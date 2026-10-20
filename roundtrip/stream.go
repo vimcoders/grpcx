@@ -18,13 +18,16 @@ package roundtrip
 
 import (
 	"context"
+
+	"github.com/vimcoders/grpcx/encoding"
+	"github.com/vimcoders/grpcx/generated/api"
 )
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type stream struct {
 	id     uint32
 	sender Sender
-	c      chan []byte
+	c      chan *api.Response
 }
 
 // newStream creates a new stream with the given id and sender.
@@ -32,7 +35,7 @@ func newStream(id uint32, send Sender) *stream {
 	return &stream{
 		id:     id,
 		sender: send,
-		c:      make(chan []byte, 1),
+		c:      make(chan *api.Response, 1),
 	}
 }
 
@@ -47,9 +50,13 @@ func (s *stream) send(_ context.Context, b []byte) error {
 }
 
 // receive receives a message from the stream. The message is received with a fixed-length header that includes the stream id. If the stream is closed, an error is returned.
-func (s *stream) recv(ctx context.Context, b []byte) error {
+func (s *stream) process(ctx context.Context, b []byte) error {
+	var response api.Response
+	if err := encoding.Unmarshal(b, &response); err != nil {
+		return err
+	}
 	select {
-	case s.c <- b:
+	case s.c <- &response:
 		return nil
 	case <-ctx.Done():
 		return s.close()

@@ -50,11 +50,6 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 	}
 }
 
-// CloseSend closes the send direction of the stream. It does not close the receive direction, so the stream can still receive messages.
-func (s *stream) CloseSend() error {
-	return s.Close()
-}
-
 // close closes the stream and releases any resources associated with it.
 func (s *stream) Close() error {
 	if s.deleteStream != nil {

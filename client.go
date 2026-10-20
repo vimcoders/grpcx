@@ -32,13 +32,6 @@ func WithCodec(codec encoding.Codec) Option {
 	}
 }
 
-// WithBalancer sets the balancer for the ttrpc client.
-func WithBalancer(b balancer.Picker) Option {
-	return func(c *client) {
-		c.Picker = b
-	}
-}
-
 // WithUnaryClientInterceptor sets the unary client interceptor for the ttrpc client.
 func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *client) {

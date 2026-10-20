@@ -212,10 +212,19 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 		Codec:        t.Codec,
 		deleteStream: t.deleteStream,
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		timeout := time.Until(dl)
+		if timeout <= 0 {
+			return status.DeadlineExceeded.Err()
+		}
+		if timeout < t.timeout {
+			info.Timeout = timeout.Milliseconds()
+		}
+	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		info.Metadatas = medatas
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(info.Timeout)*time.Millisecond)
 	defer cancel()
 	s, err := t.createStream(timeoutCtx, &info)
 	if err != nil {
@@ -233,13 +242,22 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
-	defer cancel()
 	info := CallOptions{
 		Timeout:      t.timeout.Milliseconds(),
 		Codec:        t.Codec,
 		deleteStream: t.deleteStream,
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		timeout := time.Until(dl)
+		if timeout <= 0 {
+			return nil, status.DeadlineExceeded.Err()
+		}
+		if timeout < t.timeout {
+			info.Timeout = timeout.Milliseconds()
+		}
+	}
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(info.Timeout)*time.Millisecond)
+	defer cancel()
 	s, err := t.createStream(timeoutCtx, &info)
 	if err != nil {
 		return nil, err

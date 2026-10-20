@@ -28,21 +28,25 @@ import (
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type stream struct {
-	ctx  context.Context
-	id   uint32
-	s    Sender
-	c    chan *api.Response
-	opts []CallOption
+	ctx context.Context
+	id  uint32
+	s   Sender
+	c   chan *api.Response
+	CallOptions
 }
 
 // newStream creates a new stream with the given id and sender.
 func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) *stream {
+	var options CallOptions
+	for _, opt := range opts {
+		opt.apply(&options)
+	}
 	return &stream{
-		ctx:  ctx,
-		id:   id,
-		s:    send,
-		c:    make(chan *api.Response, 1),
-		opts: opts,
+		ctx:         ctx,
+		id:          id,
+		s:           send,
+		c:           make(chan *api.Response, 1),
+		CallOptions: options,
 	}
 }
 
@@ -52,11 +56,12 @@ func (s *stream) close() error {
 }
 
 func (s *stream) SendMsg(m any) error {
-	req := &api.Request{}
-	for _, opt := range s.opts {
-		if err := opt.before(req, m); err != nil {
-			return err
-		}
+	req := &api.Request{
+		Method:  s.Method,
+		Timeout: s.Timeout,
+	}
+	for k, v := range s.Metadatas {
+		req.Metadatas = append(req.Metadatas, k, v)
 	}
 	return s.send(s.Context(), req)
 }
@@ -70,10 +75,8 @@ func (s *stream) RecvMsg(m any) error {
 	if code != codes.OK {
 		return status.Error(code, response.Message)
 	}
-	for _, opt := range s.opts {
-		if err := opt.after(response, m); err != nil {
-			return err
-		}
+	if err := s.Unmarshal(response.Payload, m); err != nil {
+		return err
 	}
 	return nil
 }
@@ -125,42 +128,27 @@ func (s *stream) recv(ctx context.Context) (*api.Response, error) {
 }
 
 type CallOption interface {
-	// before is called before sending the request. It can be used to modify the request or add metadata.
-	before(*api.Request, any) error
-	// after is called after receiving the response. It can be used to modify the response or extract metadata.
-	after(*api.Response, any) error
+	apply(*CallOptions)
 }
 
 type CallOptions struct {
-	Method   string
-	Timeout  int64
-	Metadata metadata.MD
-	codec    encoding.Codec
+	Method    string
+	Timeout   int64
+	Metadatas metadata.MD
+	encoding.Codec
 }
 
-func (c *CallOptions) before(r *api.Request, m any) error {
-	if c.Method != "" {
-		r.Method = c.Method
+func (c CallOptions) apply(opts *CallOptions) {
+	if c.Codec != nil {
+		opts.Codec = c.Codec
+	}
+	if len(c.Method) > 0 {
+		opts.Method = c.Method
 	}
 	if c.Timeout > 0 {
-		r.Timeout = c.Timeout
+		opts.Timeout = c.Timeout
 	}
-	for k, v := range c.Metadata {
-		r.Metadatas = append(r.Metadatas, k, v)
+	if len(c.Metadatas) > 0 {
+		opts.Metadatas = c.Metadatas
 	}
-	if c.codec != nil {
-		b, err := c.codec.Marshal(m)
-		if err != nil {
-			return err
-		}
-		r.Payload = b
-	}
-	return nil
-}
-
-func (c *CallOptions) after(r *api.Response, m any) error {
-	if c.codec != nil {
-		return c.codec.Unmarshal(r.Payload, m)
-	}
-	return nil
 }

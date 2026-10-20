@@ -211,10 +211,10 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 	info := CallOptions{
 		Method:  method,
 		Timeout: t.timeout.Milliseconds(),
-		codec:   t.Codec,
+		Codec:   t.Codec,
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
-		info.Metadata = medatas
+		info.Metadatas = medatas
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
@@ -237,7 +237,8 @@ func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 	info := CallOptions{
-		codec: t.Codec,
+		Timeout: t.timeout.Milliseconds(),
+		Codec:   t.Codec,
 	}
 	s, err := t.createStream(timeoutCtx, &info)
 	if err != nil {

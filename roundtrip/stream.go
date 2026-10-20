@@ -21,6 +21,7 @@ import (
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
+	"github.com/vimcoders/grpcx/status"
 )
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
@@ -66,5 +67,18 @@ func (s *stream) process(ctx context.Context, b []byte) error {
 		return s.close()
 	default: // 上一个响应还没被取走，属于异常帧，丢弃
 		return nil
+	}
+}
+
+// recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
+func (s *stream) recv(ctx context.Context) (*api.Response, error) {
+	select {
+	case <-ctx.Done():
+		return nil, status.Canceled.Err()
+	case response, ok := <-s.c:
+		if !ok {
+			return nil, status.Unavailable.Err()
+		}
+		return response, nil
 	}
 }

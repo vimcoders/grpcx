@@ -250,17 +250,7 @@ func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	if err := s.send(timeoutCtx, req); err != nil {
 		return nil, err
 	}
-	select {
-	case <-timeoutCtx.Done():
-		return nil, status.Canceled.Err()
-	case <-t.ctx.Done():
-		return nil, status.Canceled.Err()
-	case response, ok := <-s.c:
-		if !ok {
-			return nil, status.Unavailable.Err()
-		}
-		return response, nil
-	}
+	return s.recv(timeoutCtx)
 }
 
 // Close closes the ttrpc connection and underlying connection

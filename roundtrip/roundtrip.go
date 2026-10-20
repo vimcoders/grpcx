@@ -181,11 +181,10 @@ func (t *roundtrip) NewStream(ctx context.Context, desc *grpc.StreamDesc, method
 }
 
 // deleteStream deletes the given stream from the transport. It closes the stream and removes it from the map of streams.
-func (t *roundtrip) deleteStream(s *stream) {
+func (t *roundtrip) deleteStream(id uint32) {
 	t.Lock()
 	defer t.Unlock()
-	delete(t.streams, s.id)
-	s.close()
+	delete(t.streams, id)
 }
 
 // getStream returns the stream with the given stream ID. It returns nil if the stream does not exist.
@@ -200,18 +199,18 @@ func (t *roundtrip) getStream(sid uint32) *stream {
 func (t *roundtrip) cleanupStreams() {
 	t.Lock()
 	defer t.Unlock()
-	for sid, s := range t.streams {
+	for sid := range t.streams {
 		delete(t.streams, sid)
-		s.close()
 	}
 }
 
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
 func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	info := CallOptions{
-		Method:  method,
-		Timeout: t.timeout.Milliseconds(),
-		Codec:   t.Codec,
+		Method:       method,
+		Timeout:      t.timeout.Milliseconds(),
+		Codec:        t.Codec,
+		deleteStream: t.deleteStream,
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		info.Metadatas = medatas
@@ -222,7 +221,7 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 	if err != nil {
 		return err
 	}
-	defer t.deleteStream(s)
+	defer s.Close()
 	if err := s.SendMsg(req); err != nil {
 		return err
 	}
@@ -237,14 +236,15 @@ func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 	info := CallOptions{
-		Timeout: t.timeout.Milliseconds(),
-		Codec:   t.Codec,
+		Timeout:      t.timeout.Milliseconds(),
+		Codec:        t.Codec,
+		deleteStream: t.deleteStream,
 	}
 	s, err := t.createStream(timeoutCtx, &info)
 	if err != nil {
 		return nil, err
 	}
-	defer t.deleteStream(s)
+	defer s.Close()
 	if err := s.send(timeoutCtx, req); err != nil {
 		return nil, err
 	}

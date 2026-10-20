@@ -50,8 +50,16 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 	}
 }
 
+// CloseSend closes the send direction of the stream. It does not close the receive direction, so the stream can still receive messages.
+func (s *stream) CloseSend() error {
+	return s.Close()
+}
+
 // close closes the stream and releases any resources associated with it.
-func (s *stream) close() error {
+func (s *stream) Close() error {
+	if s.deleteStream != nil {
+		s.deleteStream(s.id)
+	}
 	return nil
 }
 
@@ -104,9 +112,9 @@ func (s *stream) process(ctx context.Context, b []byte) error {
 	case s.c <- &response:
 		return nil
 	case <-s.ctx.Done():
-		return s.close()
+		return s.Close()
 	case <-ctx.Done():
-		return s.close()
+		return s.Close()
 	default: // 上一个响应还没被取走，属于异常帧，丢弃
 		return nil
 	}
@@ -136,6 +144,7 @@ type CallOptions struct {
 	Timeout   int64
 	Metadatas metadata.MD
 	encoding.Codec
+	deleteStream func(id uint32)
 }
 
 func (c CallOptions) apply(opts *CallOptions) {
@@ -150,5 +159,8 @@ func (c CallOptions) apply(opts *CallOptions) {
 	}
 	if len(c.Metadatas) > 0 {
 		opts.Metadatas = c.Metadatas
+	}
+	if c.deleteStream != nil {
+		opts.deleteStream = c.deleteStream
 	}
 }

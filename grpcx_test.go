@@ -2,7 +2,6 @@ package grpcx_test
 
 import (
 	"context"
-	"log"
 	"testing"
 
 	"github.com/vimcoders/grpcx/balancer"
@@ -16,10 +15,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	otelcodes "go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
@@ -27,50 +23,8 @@ import (
 )
 
 var (
-	ttServer *grpcx.Server
-	ttAddr   = "127.0.0.1:50051"
+	ttAddr = "127.0.0.1:50051"
 )
-
-func init() {
-	h := &TTHandler{}
-	ttServer = grpcx.NewServer()
-	ttServer.RegisterService(&api.EchoService_ServiceDesc, h)
-	go func() {
-		if err := ttServer.ListenAndServe(context.Background(), ttAddr); err != nil {
-			panic(err)
-		}
-	}()
-	exporter, err := otlptracegrpc.New(context.Background(),
-		otlptracegrpc.WithEndpoint("192.168.11.63:4317"),
-		otlptracegrpc.WithInsecure(),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String("your-service"),
-		)),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()), // 开发阶段确保采样
-	)
-
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
-}
-
-type TTHandler struct {
-	api.UnimplementedEchoServiceServer
-}
-
-func (h *TTHandler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
-	return &api.EchoResponse{Message: req.Message}, nil
-}
 
 func BenchmarkEcho(b *testing.B) {
 	c, err := grpcx.Dial(ttAddr)

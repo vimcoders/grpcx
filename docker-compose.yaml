@@ -11,3 +11,19 @@ services:
       - 4317:4317 # OTLP gRPC 接收器
       - 4318:4318 # OTLP HTTP 接收器
       - 55679:55679 # zpages 扩展
+  grpc:
+    build:
+      dockerfile: cmd/grpc/Dockerfile
+    cpus: "1.0"
+    environment:
+      PORT: ":50052"
+    ports:
+      - 50052:50052
+  grpcx:
+    build:
+      dockerfile: cmd/grpcx/Dockerfile
+    cpus: "1.0"
+    environment:
+      PORT: ":50051"
+    ports:
+      - 50051:50051

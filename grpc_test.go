@@ -2,7 +2,6 @@ package grpcx_test
 
 import (
 	"context"
-	"net"
 	"testing"
 
 	"github.com/vimcoders/grpcx/generated/api"
@@ -11,31 +10,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func init() {
-	lis, err := net.Listen("tcp", stdGRPCAddr)
-	if err != nil {
-		panic(err)
-	}
-	stdGRPCServer = grpc.NewServer()
-	api.RegisterEchoServiceServer(stdGRPCServer, &StdHandler{})
-	go func() {
-		if err := stdGRPCServer.Serve(lis); err != nil {
-			panic(err)
-		}
-	}()
-}
-
-type StdHandler struct {
-	api.UnimplementedEchoServiceServer
-}
-
-func (h *StdHandler) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
-	return &api.EchoResponse{Message: req.Message}, nil
-}
-
 var (
-	stdGRPCServer *grpc.Server
-	stdGRPCAddr   = "127.0.0.1:50052"
+	stdGRPCAddr = "127.0.0.1:50052"
 )
 
 func BenchmarkStdGRPC_Echo(b *testing.B) {

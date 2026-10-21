@@ -17,6 +17,8 @@ echo ✨ 安装Protobuf格式化工具
 go install github.com/bufbuild/buf/cmd/buf@latest
 echo 🎨 执行代码自动格式化与规范检测
 golangci-lint run --fix ./...
-go test -bench "^BenchmarkEcho$" -cpu="1,2,4,8" -benchtime=90s -benchmem -count=6
-go test -bench "^BenchmarkStdGRPC_Echo$" -cpu="1,2,4,8" -benchtime=90s -benchmem -count=6
+docker compose up -d --build
+echo 🚀 执行压力测试
+go test -bench "^BenchmarkStdGRPC_Echo$" -cpu="1,2,4,8" -benchtime=100s -benchmem -count=1
+go test -bench "^BenchmarkEcho$" -cpu="1,2,4,8" -benchtime=100s -benchmem -count=1
 pause

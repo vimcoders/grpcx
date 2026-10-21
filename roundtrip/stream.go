@@ -18,6 +18,7 @@ package roundtrip
 
 import (
 	"context"
+	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
@@ -37,8 +38,16 @@ type stream struct {
 
 // newStream creates a new stream with the given id and sender.
 func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) *stream {
-	var options CallOptions
+	options := CallOptions{
+		Timeout: defaultTimeout,
+	}
 	for _, opt := range opts {
+		opt.apply(&options)
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		opt := CallOptions{
+			Timeout: time.Until(dl),
+		}
 		opt.apply(&options)
 	}
 	return &stream{
@@ -65,7 +74,7 @@ func (s *stream) SendMsg(m any) error {
 	}
 	req := &api.Request{
 		Method:  s.Method,
-		Timeout: s.Timeout,
+		Timeout: s.Timeout.Milliseconds(),
 		Payload: b,
 	}
 	for k, v := range s.Metadatas {
@@ -125,8 +134,6 @@ func (s *stream) recv(ctx context.Context) (*api.Response, error) {
 	select {
 	case <-ctx.Done():
 		return nil, status.Canceled.Err()
-	case <-s.ctx.Done():
-		return nil, status.Canceled.Err()
 	case response, ok := <-s.c:
 		if !ok {
 			return nil, status.Unavailable.Err()
@@ -141,7 +148,7 @@ type CallOption interface {
 
 type CallOptions struct {
 	Method    string
-	Timeout   int64
+	Timeout   time.Duration
 	Metadatas metadata.MD
 	encoding.Codec
 	deleteStream func(id uint32)
@@ -154,7 +161,7 @@ func (c CallOptions) apply(opts *CallOptions) {
 	if len(c.Method) > 0 {
 		opts.Method = c.Method
 	}
-	if c.Timeout > 0 {
+	if c.Timeout > 0 && c.Timeout < opts.Timeout {
 		opts.Timeout = c.Timeout
 	}
 	if len(c.Metadatas) > 0 {

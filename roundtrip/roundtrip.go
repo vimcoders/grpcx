@@ -208,25 +208,14 @@ func (t *roundtrip) cleanupStreams() {
 func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	info := CallOptions{
 		Method:       method,
-		Timeout:      t.timeout.Milliseconds(),
+		Timeout:      t.timeout,
 		Codec:        t.Codec,
 		deleteStream: t.deleteStream,
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		timeout := time.Until(dl)
-		if timeout <= 0 {
-			return status.DeadlineExceeded.Err()
-		}
-		if timeout < t.timeout {
-			info.Timeout = timeout.Milliseconds()
-		}
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		info.Metadatas = medatas
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(info.Timeout)*time.Millisecond)
-	defer cancel()
-	s, err := t.createStream(timeoutCtx, &info)
+	s, err := t.createStream(ctx, &info)
 	if err != nil {
 		return err
 	}
@@ -243,30 +232,19 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	info := CallOptions{
-		Timeout:      t.timeout.Milliseconds(),
+		Timeout:      t.timeout,
 		Codec:        t.Codec,
 		deleteStream: t.deleteStream,
 	}
-	if dl, ok := ctx.Deadline(); ok {
-		timeout := time.Until(dl)
-		if timeout <= 0 {
-			return nil, status.DeadlineExceeded.Err()
-		}
-		if timeout < t.timeout {
-			info.Timeout = timeout.Milliseconds()
-		}
-	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(info.Timeout)*time.Millisecond)
-	defer cancel()
-	s, err := t.createStream(timeoutCtx, &info)
+	s, err := t.createStream(ctx, &info)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	if err := s.send(timeoutCtx, req); err != nil {
+	if err := s.send(ctx, req); err != nil {
 		return nil, err
 	}
-	return s.recv(timeoutCtx)
+	return s.recv(ctx)
 }
 
 // Close closes the ttrpc connection and underlying connection

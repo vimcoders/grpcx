@@ -14,7 +14,7 @@ services:
   grpc:
     build:
       dockerfile: cmd/grpc/Dockerfile
-    cpus: "1.0"
+    cpus: "1"
     environment:
       PORT: ":50052"
     ports:
@@ -22,7 +22,7 @@ services:
   grpcx:
     build:
       dockerfile: cmd/grpcx/Dockerfile
-    cpus: "1.0"
+    cpus: "1"
     environment:
       PORT: ":50051"
     ports:

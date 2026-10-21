@@ -172,16 +172,13 @@ func (rr *RoundRobin) clone() []roundtrip.RoundTripper {
 
 // Close closes the round robin balancer.
 func (rr *RoundRobin) Close() error {
-	rr.Lock()
-	defer rr.Unlock()
 	// Cancel the context to stop the keepalive goroutine.
 	if rr.cancelFunc != nil {
 		rr.cancelFunc()
 	}
 	// 	Close all the round trippers.
-	rts := rr.rts
-	for i := range rts {
-		_ = rts[i].Close()
+	for _, rt := range rr.clone() {
+		_ = rt.Close()
 	}
 	return nil
 }

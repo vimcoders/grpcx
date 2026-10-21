@@ -59,9 +59,14 @@ func (s *stream) Close() error {
 }
 
 func (s *stream) SendMsg(m any) error {
+	b, err := s.Marshal(m)
+	if err != nil {
+		return err
+	}
 	req := &api.Request{
 		Method:  s.Method,
 		Timeout: s.Timeout,
+		Payload: b,
 	}
 	for k, v := range s.Metadatas {
 		req.Metadatas = append(req.Metadatas, k, v)

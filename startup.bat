@@ -19,6 +19,6 @@ echo 🎨 执行代码自动格式化与规范检测
 golangci-lint run --fix ./...
 docker compose up -d --build
 echo 🚀 执行压力测试
-go test -bench "^BenchmarkStdGRPC_Echo$" -cpu="1,2,4,8" -benchtime=100s -benchmem -count=1
-go test -bench "^BenchmarkEcho$" -cpu="1,2,4,8" -benchtime=100s -benchmem -count=1
+go test -bench "^BenchmarkStdGRPC_Echo$" -cpu="1,2,4,8" -benchtime=100s -benchmem -count=1 ./bench/grpc
+go test -bench "^BenchmarkEcho$" -cpu="1,2,4,8" -benchtime=100s -benchmem -count=1 ./bench/grpcx
 pause

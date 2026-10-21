@@ -157,7 +157,7 @@ func (t *roundtrip) createStream(ctx context.Context, opts ...CallOption) (*stre
 	if t.maxStreams > 0 && len(t.streams) >= int(t.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}
-	for i := uint32(1); i < t.maxStreams; i++ {
+	for i := uint32(1); i <= t.maxStreams; i++ {
 		select {
 		case <-ctx.Done():
 			return nil, status.Canceled.Err()

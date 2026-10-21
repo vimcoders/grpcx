@@ -38,9 +38,7 @@ type stream struct {
 
 // newStream creates a new stream with the given id and sender.
 func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) *stream {
-	options := CallOptions{
-		Timeout: defaultTimeout,
-	}
+	options := defaultCallOptions
 	for _, opt := range opts {
 		opt.apply(&options)
 	}
@@ -144,6 +142,11 @@ func (s *stream) recv(ctx context.Context) (*api.Response, error) {
 
 type CallOption interface {
 	apply(*CallOptions)
+}
+
+var defaultCallOptions = CallOptions{
+	Timeout: defaultTimeout,
+	Codec:   encoding.GetCodec(encoding.Name),
 }
 
 type CallOptions struct {

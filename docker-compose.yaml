@@ -20,6 +20,12 @@ services:
       PORT: ":50052"
     ports:
       - 50052:50052
+    healthcheck:
+      test: ["CMD", "/bin/portcheck", "--port", "50052"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
   grpcx:
     build:
       dockerfile: cmd/grpcx/Dockerfile
@@ -29,3 +35,9 @@ services:
       PORT: ":50051"
     ports:
       - 50051:50051
+    healthcheck:
+      test: ["CMD", "/bin/portcheck", "--port", "50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

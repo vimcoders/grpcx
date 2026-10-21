@@ -32,6 +32,7 @@ func BenchmarkEcho(b *testing.B) {
 		b.Errorf("Dial failed: %v", err)
 		return
 	}
+	defer c.Close()
 	client := api.NewEchoServiceClient(c)
 	req := &api.EchoRequest{Message: "Hello, grpcx!"}
 	ctx := context.Background()

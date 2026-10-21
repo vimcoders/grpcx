@@ -17,5 +17,6 @@ USER nonroot
 WORKDIR /app
 # 从构建阶段复制二进制文件和配置
 COPY --from=builder /build/runner .
+COPY --from=ghcr.io/tarampampam/microcheck:1 /bin/portcheck /bin/portcheck
 # 设置容器启动命令
 ENTRYPOINT ["/app/runner"]

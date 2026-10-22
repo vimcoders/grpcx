@@ -78,7 +78,7 @@ func (s *stream) SendMsg(ctx context.Context, m any) error {
 	for k, v := range s.Metadatas {
 		req.Metadatas = append(req.Metadatas, k, v)
 	}
-	return s.send(s.Context(), req)
+	return s.send(ctx, req)
 }
 
 func (s *stream) RecvMsg(ctx context.Context, m any) error {

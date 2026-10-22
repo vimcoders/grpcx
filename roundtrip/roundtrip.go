@@ -33,7 +33,7 @@ import (
 
 const (
 	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
-	defaultMaxStreams = 64
+	defaultMaxStreams = 250
 	// DefaultTimeout is the default timeout for each request.
 	defaultTimeout = 3 * time.Second
 )

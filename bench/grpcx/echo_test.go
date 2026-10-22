@@ -26,7 +26,7 @@ var (
 	ttAddr = "127.0.0.1:50051"
 )
 
-func BenchmarkEcho(b *testing.B) {
+func Benchmark(b *testing.B) {
 	c, err := grpcx.Dial(ttAddr)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
@@ -38,13 +38,30 @@ func BenchmarkEcho(b *testing.B) {
 	ctx := context.Background()
 	b.ResetTimer()
 	for b.Loop() {
-		resp, err := client.Echo(ctx, req)
-		if err != nil {
+		if _, err := client.Echo(ctx, req); err != nil {
 			b.Errorf("echo call failed: %v", err)
-			continue
 		}
-		_ = resp.Message
 	}
+}
+
+func BenchmarkParallel(b *testing.B) {
+	c, err := grpcx.Dial(ttAddr)
+	if err != nil {
+		b.Errorf("Dial failed: %v", err)
+		return
+	}
+	defer c.Close()
+	client := api.NewEchoServiceClient(c)
+	req := &api.EchoRequest{Message: "Hello, grpcx!"}
+	ctx := context.Background()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := client.Echo(ctx, req); err != nil {
+				b.Errorf("echo call failed: %v", err)
+			}
+		}
+	})
 }
 
 func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {

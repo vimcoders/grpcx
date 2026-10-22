@@ -112,9 +112,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	for _, o := range opts {
 		o(rt)
 	}
-	go func() {
-		_ = rt.run(ctx)
-	}()
+	go rt.run(ctx)
 	return rt, nil
 }
 

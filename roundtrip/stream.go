@@ -42,12 +42,6 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 	for _, opt := range opts {
 		opt.apply(&options)
 	}
-	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
-			Timeout: time.Until(dl),
-		}
-		opt.apply(&options)
-	}
 	return &stream{
 		ctx:         ctx,
 		id:          id,
@@ -69,6 +63,12 @@ func (s *stream) SendMsg(ctx context.Context, m any) error {
 	b, err := s.Marshal(m)
 	if err != nil {
 		return err
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		opt := CallOptions{
+			Timeout: time.Until(dl),
+		}
+		opt.apply(&s.CallOptions)
 	}
 	req := &api.Request{
 		Method:  s.Method,
@@ -122,8 +122,8 @@ func (s *stream) process(ctx context.Context, b []byte) error {
 		return s.Close()
 	case <-ctx.Done():
 		return s.Close()
-	default: // 上一个响应还没被取走，属于异常帧，丢弃
-		return nil
+	default:
+		return status.OutOfRange.Err()
 	}
 }
 

@@ -22,6 +22,6 @@ echo 🚀 执行基准测试
 go test -bench "^Benchmark$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpc
 go test -bench "^Benchmark$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpcx
 echo 🚀 执行并发基准测试
-go test -bench "^BenchmarkParallel$" -cpu="1,2,4,8,16" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^BenchmarkParallel$" -cpu="1,2,4,8,16" -benchtime=10s -benchmem -count=1 ./bench/grpcx
+go test -bench "^BenchmarkParallel$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
+go test -bench "^BenchmarkParallel$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
 pause

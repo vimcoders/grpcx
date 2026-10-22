@@ -221,7 +221,7 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	s, err := t.createStream(t.ctx, &CallOptions{})
+	s, err := t.createStream(t.ctx, &CallOptions{deleteStream: t.deleteStream})
 	if err != nil {
 		return nil, err
 	}

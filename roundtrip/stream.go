@@ -132,6 +132,8 @@ func (s *stream) recv(ctx context.Context) (*api.Response, error) {
 	select {
 	case <-ctx.Done():
 		return nil, status.Canceled.Err()
+	case <-s.ctx.Done():
+		return nil, status.Canceled.Err()
 	case response, ok := <-s.c:
 		if !ok {
 			return nil, status.Unavailable.Err()

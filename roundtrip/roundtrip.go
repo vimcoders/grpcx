@@ -98,7 +98,7 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	rt := &roundtrip{
 		channel:     newChannel(cc),
 		maxStreams:  defaultMaxStreams,
@@ -195,15 +195,6 @@ func (t *roundtrip) getStream(sid uint32) *stream {
 	return s
 }
 
-// cleanupStreams closes all streams and removes them from the transport. It is called when the transport is closed.
-func (t *roundtrip) cleanupStreams() {
-	t.Lock()
-	defer t.Unlock()
-	for sid := range t.streams {
-		delete(t.streams, sid)
-	}
-}
-
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
 func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	info := CallOptions{
@@ -247,6 +238,5 @@ func (t *roundtrip) Close() error {
 	if t.closed != nil {
 		t.closed()
 	}
-	t.cleanupStreams()
-	return nil
+	return t.channel.Close()
 }

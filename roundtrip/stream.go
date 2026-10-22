@@ -65,7 +65,7 @@ func (s *stream) Close() error {
 	return nil
 }
 
-func (s *stream) SendMsg(m any) error {
+func (s *stream) SendMsg(ctx context.Context, m any) error {
 	b, err := s.Marshal(m)
 	if err != nil {
 		return err
@@ -81,8 +81,8 @@ func (s *stream) SendMsg(m any) error {
 	return s.send(s.Context(), req)
 }
 
-func (s *stream) RecvMsg(m any) error {
-	response, err := s.recv(s.Context())
+func (s *stream) RecvMsg(ctx context.Context, m any) error {
+	response, err := s.recv(ctx)
 	if err != nil {
 		return err
 	}

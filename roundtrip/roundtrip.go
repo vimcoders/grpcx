@@ -205,15 +205,15 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		info.Metadatas = medatas
 	}
-	s, err := t.createStream(ctx, &info)
+	s, err := t.createStream(t.ctx, &info)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	if err := s.SendMsg(req); err != nil {
+	if err := s.SendMsg(ctx, req); err != nil {
 		return err
 	}
-	if err := s.RecvMsg(reply); err != nil {
+	if err := s.RecvMsg(ctx, reply); err != nil {
 		return err
 	}
 	return nil
@@ -221,7 +221,7 @@ func (t *roundtrip) Invoke(ctx context.Context, method string, req any, reply an
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (t *roundtrip) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	s, err := t.createStream(ctx, &CallOptions{})
+	s, err := t.createStream(t.ctx, &CallOptions{})
 	if err != nil {
 		return nil, err
 	}

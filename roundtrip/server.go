@@ -87,7 +87,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.
 		so.interceptor)
 	if err != nil {
 		return &api.Response{
-			Code:    int32(codes.Unavailable),
+			Code:    int32(codes.Internal),
 			Message: err.Error(),
 		}, nil
 	}

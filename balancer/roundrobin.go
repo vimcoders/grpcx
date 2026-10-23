@@ -68,11 +68,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	count := uint32(rng.Intn(len(x.rts)))
 	x.count.Store(count)
-	go func() {
-		if err := x.Keepalive(childCtx); err != nil {
-			return
-		}
-	}()
+	go x.keepalive(childCtx)
 	// Return the round robin balancer.
 	return &x, nil
 }

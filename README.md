@@ -14,9 +14,9 @@ k8s微服务通信方案，传输层roundtrip部分源码来自k8s容器运行�
 
 ## 性能测试
 
-测试环境：Intel i5-14600KF, 
+测试环境：Intel i5-14600KF
 
-go version: go1.27.3。
+go version: go1.27.3
 
 执行命令：`go test -bench='Benchmark' -cpu='1,2,4,8' -benchtime=10s -benchmem ./bench/...`
 

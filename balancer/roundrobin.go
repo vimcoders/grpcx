@@ -24,8 +24,6 @@ const (
 	defaultStep = 1
 	// defaultKeepalive is the default keepalive interval of round robin balancer.
 	defaultKeepalive = time.Minute
-	// defaultKeepaliveTimeout is the default keepalive timeout of round robin balancer.
-	defaultKeepaliveTimeout = time.Second * 5
 )
 
 // rrBuilder is the builder of round robin balancer.

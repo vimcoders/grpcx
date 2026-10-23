@@ -165,9 +165,9 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 }
 
 func (rr *RoundRobin) clone() []roundtrip.RoundTripper {
-	rr.Lock()
-	defer rr.Unlock()
-	return append([]roundtrip.RoundTripper(nil), rr.rts...)
+	rr.RLock()
+	defer rr.RUnlock()
+	return append([]roundtrip.RoundTripper{}, rr.rts...)
 }
 
 // Close closes the round robin balancer.

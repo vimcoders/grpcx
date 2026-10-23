@@ -125,12 +125,8 @@ func (rr *RoundRobin) Keepalive(ctx context.Context) error {
 
 // keepalive keeps the round robin balancer alive.
 func (rr *RoundRobin) keepalive(ctx context.Context) error {
-	// Create a timeout context for the keepalive.
-	timeoutCtx, cancel := context.WithTimeout(ctx, defaultKeepaliveTimeout)
-	defer cancel()
-
 	// Resolve the endpoint to get the addresses.
-	ips, err := rr.resolveContext(timeoutCtx)
+	ips, err := rr.resolveContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -139,7 +135,7 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 	var rts []roundtrip.RoundTripper
 	// Check the existing round trippers and remove any that are no longer valid.
 	for _, rt := range rr.clone() {
-		if _, err := rt.RoundTrip(timeoutCtx, req); err != nil {
+		if _, err := rt.RoundTrip(ctx, req); err != nil {
 			_ = rt.Close()
 			continue
 		}
@@ -151,7 +147,7 @@ func (rr *RoundRobin) keepalive(ctx context.Context) error {
 	}
 	// Create new round trippers for any new addresses.
 	for i := len(rts); i < len(ips); i++ {
-		rt, err := rr.dialContext(timeoutCtx)
+		rt, err := rr.dialContext(ctx)
 		if err != nil {
 			continue
 		}

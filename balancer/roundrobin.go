@@ -66,7 +66,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	count := uint32(rng.Intn(len(x.rts)))
 	x.count.Store(count)
-	go x.keepalive(childCtx)
+	go x.Keepalive(childCtx)
 	// Return the round robin balancer.
 	return &x, nil
 }
@@ -112,13 +112,14 @@ func (rr *RoundRobin) Keepalive(ctx context.Context) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			_ = rr.keepalive(ctx)
+			if err := rr.Ping(ctx); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-// keepalive keeps the round robin balancer alive.
-func (rr *RoundRobin) keepalive(ctx context.Context) error {
+func (rr *RoundRobin) Ping(ctx context.Context) error {
 	// Resolve the endpoint to get the addresses.
 	ips, err := rr.resolveContext(ctx)
 	if err != nil {

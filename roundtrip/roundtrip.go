@@ -124,14 +124,14 @@ func (t *roundtrip) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := t.recv(ctx); err != nil {
+			if err := t.recv(); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (t *roundtrip) recv(ctx context.Context) error {
+func (t *roundtrip) recv() error {
 	streamID, b, err := t.channel.Recv()
 	if err != nil {
 		return err

@@ -112,9 +112,7 @@ func (rr *RoundRobin) Keepalive(ctx context.Context) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			if err := rr.Ping(ctx); err != nil {
-				return err
-			}
+			_ = rr.Ping(ctx)
 		}
 	}
 }

@@ -42,6 +42,12 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 	for _, opt := range opts {
 		opt.apply(&options)
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		opt := CallOptions{
+			Timeout: time.Until(dl),
+		}
+		opt.apply(&options)
+	}
 	return &stream{
 		ctx:         ctx,
 		id:          id,
@@ -59,16 +65,10 @@ func (s *stream) Close() error {
 	return nil
 }
 
-func (s *stream) SendMsg(ctx context.Context, m any) error {
+func (s *stream) SendMsg(m any) error {
 	b, err := s.Marshal(m)
 	if err != nil {
 		return err
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
-			Timeout: time.Until(dl),
-		}
-		opt.apply(&s.CallOptions)
 	}
 	req := &api.Request{
 		Method:  s.Method,
@@ -78,11 +78,11 @@ func (s *stream) SendMsg(ctx context.Context, m any) error {
 	for k, v := range s.Metadatas {
 		req.Metadatas = append(req.Metadatas, k, v)
 	}
-	return s.send(ctx, req)
+	return s.send(req)
 }
 
-func (s *stream) RecvMsg(ctx context.Context, m any) error {
-	response, err := s.recv(ctx)
+func (s *stream) RecvMsg(m any) error {
+	response, err := s.recv()
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func (s *stream) Context() context.Context {
 }
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
-func (s *stream) send(_ context.Context, req *api.Request) error {
+func (s *stream) send(req *api.Request) error {
 	b, err := encoding.Marshal(req)
 	if err != nil {
 		return err
@@ -123,16 +123,16 @@ func (s *stream) process(ctx context.Context, b []byte) error {
 	case <-ctx.Done():
 		return s.Close()
 	default:
-		return status.OutOfRange.Err()
+		return s.Close()
 	}
 }
 
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
-func (s *stream) recv(ctx context.Context) (*api.Response, error) {
+func (s *stream) recv() (*api.Response, error) {
+	ctx, cancel := context.WithTimeout(s.ctx, s.Timeout)
+	defer cancel()
 	select {
 	case <-ctx.Done():
-		return nil, status.Canceled.Err()
-	case <-s.ctx.Done():
 		return nil, status.Canceled.Err()
 	case response, ok := <-s.c:
 		if !ok {

@@ -38,23 +38,23 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 		dialContext: func(ctx context.Context) (roundtrip.RoundTripper, error) {
 			return roundtrip.DialContext(ctx, endpoint, opts...)
 		},
-		resolveContext: func(ctx context.Context) ([]resolver.Address, error) {
+		resolveContext: func(ctx context.Context) (int, error) {
 			resolver := resolver.GetResolver("dns")
 			address, err := resolver.Resolve(url.URL{Scheme: "dns", Host: endpoint})
 			if err != nil {
-				return nil, err
+				return 0, err
 			}
-			return address, nil
+			return len(address), nil
 		},
 		cancelFunc: cancel,
 	}
 	// Resolve the endpoint to get the addresses.
-	address, err := x.resolveContext(ctx)
+	podCount, err := x.resolveContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	// Dial to each address and create a round tripper for each.
-	for range address {
+	for range podCount {
 		rt, err := x.dialContext(ctx)
 		if err != nil {
 			x.Close()
@@ -76,7 +76,7 @@ type RoundRobin struct {
 	rts            []roundtrip.RoundTripper
 	count          atomic.Uint32
 	dialContext    func(ctx context.Context) (roundtrip.RoundTripper, error)
-	resolveContext func(ctx context.Context) ([]resolver.Address, error)
+	resolveContext func(ctx context.Context) (int, error)
 	cancelFunc     context.CancelFunc
 	sync.RWMutex
 }
@@ -119,7 +119,7 @@ func (rr *RoundRobin) Keepalive(ctx context.Context) error {
 
 func (rr *RoundRobin) Ping(ctx context.Context) error {
 	// Resolve the endpoint to get the addresses.
-	ips, err := rr.resolveContext(ctx)
+	podCount, err := rr.resolveContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -132,14 +132,14 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 			_ = rt.Close()
 			continue
 		}
-		if len(rts) >= len(ips) {
+		if len(rts) >= podCount {
 			_ = rt.Close()
 			continue
 		}
 		rts = append(rts, rt)
 	}
 	// Create new round trippers for any new addresses.
-	for i := len(rts); i < len(ips); i++ {
+	for i := len(rts); i < podCount; i++ {
 		rt, err := rr.dialContext(ctx)
 		if err != nil {
 			continue

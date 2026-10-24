@@ -141,7 +141,7 @@ func (t *roundtrip) recv(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.process(ctx, b); err != nil {
+	if err := s.process(b); err != nil {
 		return err
 	}
 	return nil

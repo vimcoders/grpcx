@@ -110,7 +110,7 @@ func (s *stream) send(req *api.Request) error {
 }
 
 // receive receives a message from the stream. The message is received with a fixed-length header that includes the stream id. If the stream is closed, an error is returned.
-func (s *stream) process(ctx context.Context, b []byte) error {
+func (s *stream) process(b []byte) error {
 	var response api.Response
 	if err := encoding.Unmarshal(b, &response); err != nil {
 		return err
@@ -119,8 +119,6 @@ func (s *stream) process(ctx context.Context, b []byte) error {
 	case s.c <- &response:
 		return nil
 	case <-s.ctx.Done():
-		return s.Close()
-	case <-ctx.Done():
 		return s.Close()
 	default:
 		return s.Close()

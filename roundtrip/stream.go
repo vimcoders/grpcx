@@ -18,6 +18,7 @@ package roundtrip
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
@@ -29,11 +30,13 @@ import (
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type stream struct {
-	ctx context.Context
-	id  uint32
-	s   Sender
-	c   chan *api.Response
 	CallOptions
+	ctx    context.Context
+	id     uint32
+	s      Sender
+	c      chan *api.Response
+	cancel context.CancelFunc
+	sync.Once
 }
 
 // newStream creates a new stream with the given id and sender.
@@ -48,20 +51,27 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 		}
 		opt.apply(&options)
 	}
+	timeoutCtx, cancel := context.WithCancel(ctx)
 	return &stream{
-		ctx:         ctx,
+		ctx:         timeoutCtx,
 		id:          id,
 		s:           send,
 		c:           make(chan *api.Response, 1),
 		CallOptions: options,
+		cancel:      cancel,
 	}
 }
 
 // close closes the stream and releases any resources associated with it.
 func (s *stream) Close() error {
-	if s.deleteStream != nil {
-		s.deleteStream(s.id)
-	}
+	s.Once.Do(func() {
+		if s.deleteStream != nil {
+			s.deleteStream(s.id)
+		}
+		if s.cancel != nil {
+			s.cancel()
+		}
+	})
 	return nil
 }
 
@@ -127,10 +137,8 @@ func (s *stream) process(b []byte) error {
 
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
 func (s *stream) recv() (*api.Response, error) {
-	ctx, cancel := context.WithTimeout(s.ctx, s.Timeout)
-	defer cancel()
 	select {
-	case <-ctx.Done():
+	case <-s.ctx.Done():
 		return nil, status.Canceled.Err()
 	case response, ok := <-s.c:
 		if !ok {

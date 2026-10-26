@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	stdGRPCAddr = "127.0.0.1:50052"
+	stdGRPCAddr = "grpc:50052"
 )
 
 func Benchmark1K(b *testing.B) {

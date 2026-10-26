@@ -1,4 +1,4 @@
-FROM golang:1.26.5 AS builder
+FROM golang:1.27.3 AS builder
 RUN mkdir -p /build
 WORKDIR /build
 RUN go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy,direct && go env -w GOSUMDB=sum.golang.google.cn

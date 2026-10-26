@@ -1,6 +1,6 @@
 module github.com/vimcoders/grpcx
 
-go 1.26.3
+go 1.27.3
 
 require (
 	go.opentelemetry.io/otel v1.44.0

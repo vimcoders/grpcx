@@ -18,22 +18,7 @@ go install github.com/bufbuild/buf/cmd/buf@latest
 echo 🎨 执行代码自动格式化与规范检测
 golangci-lint run --fix ./...
 docker compose up -d --build --wait grpc grpcx
-echo 🚀 执行基准测试1K
-go test -bench "^Benchmark1K$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^Benchmark1K$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-echo 🚀 执行基准测试5K
-go test -bench "^Benchmark5K$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^Benchmark5K$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-echo 🚀 执行基准测试1024K
-go test -bench "^Benchmark1024K$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^Benchmark1024K$" -cpu="1,2,4,8" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-echo 🚀 执行并发基准测试1K
-go test -bench "^BenchmarkParallel1K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^BenchmarkParallel1K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-echo 🚀 执行并发基准测试5K
-go test -bench "^BenchmarkParallel5K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^BenchmarkParallel5K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-echo 🚀 执行并发基准测试1024K
-go test -bench "^BenchmarkParallel1024K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
-go test -bench "^BenchmarkParallel1024K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
+docker compose run bench-1k 
+docker compose run bench-5k 
+docker compose run bench-1024k 
 pause

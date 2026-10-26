@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	ttAddr = "127.0.0.1:50051"
+	ttAddr = "grpcx:50051"
 )
 
 func Benchmark1K(b *testing.B) {

@@ -181,10 +181,15 @@ func (c CallOptions) apply(opts *CallOptions) {
 }
 
 type serverStream struct {
-	id uint32
-	s  Sender
+	Stream
+	ctx context.Context
+	id  uint32
+	s   Sender
 	encoding.Codec
-	payload []byte
+}
+
+func (s *serverStream) Context() context.Context {
+	return s.ctx
 }
 
 func (s *serverStream) send(resp *api.Response) error {
@@ -206,11 +211,4 @@ func (s *serverStream) SendMsg(m any) error {
 		Payload: b,
 	}
 	return s.send(resp)
-}
-
-func (s *serverStream) RecvMsg(m any) error {
-	if err := s.Unmarshal(s.payload, m); err != nil {
-		return err
-	}
-	return nil
 }

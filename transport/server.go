@@ -15,7 +15,6 @@ import (
 	"github.com/vimcoders/grpcx/metadata"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 )
 
 // Server is a ttrpc server that handles incoming requests and dispatches them to the appropriate service method.
@@ -27,6 +26,7 @@ type ServerOptions struct {
 	desc        *grpc.ServiceDesc
 	imp         any
 	interceptor grpc.UnaryServerInterceptor
+	Handler
 }
 
 // DefaultServerOptions is the default options for a ttrpc server.
@@ -64,32 +64,23 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 	if err != nil {
 		return err
 	}
+	s := serverStream{
+		ctx:   ctx,
+		id:    streamID,
+		s:     channel,
+		Codec: so.Codec,
+	}
 	var req api.Request
-	s := serverStream{id: streamID, s: channel, Codec: so.Codec, payload: payload}
 	if err := encoding.Unmarshal(payload, &req); err != nil {
 		code, message := int32(status.InvalidArgument.Code()), err.Error()
 		return s.send(&api.Response{Code: code, Message: message})
 	}
 	defer channel.putmbuf(payload)
-	for _, v := range so.desc.Methods {
-		if req.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
-			continue
-		}
-		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Millisecond)
-		defer cancel()
-		reply, err := v.Handler(
-			so.imp,
-			metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
-			s.RecvMsg,
-			so.interceptor)
-		if err != nil {
-			code, message := int32(status.Code(err)), err.Error()
-			return s.send(&api.Response{Code: code, Message: message})
-		}
-		return s.SendMsg(reply)
+	if err := so.ServeGRPC(&s, &req); err != nil {
+		code, message := int32(status.Code(err)), err.Error()
+		return s.send(&api.Response{Code: code, Message: message})
 	}
-	code, message := int32(codes.Unimplemented), codes.Unimplemented.String()
-	return s.send(&api.Response{Code: code, Message: message})
+	return nil
 }
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
@@ -106,4 +97,26 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 			}
 		}
 	}
+}
+
+func (so *ServerOptions) ServeGRPC(s Stream, req *api.Request) error {
+	for _, v := range so.desc.Methods {
+		if req.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+			continue
+		}
+		timeoutCtx, cancel := context.WithTimeout(s.Context(), time.Duration(req.Timeout)*time.Millisecond)
+		defer cancel()
+		dec := func(in any) error {
+			return encoding.Unmarshal(req.Payload, in)
+		}
+		reply, err := v.Handler(
+			so.imp,
+			metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
+			dec, so.interceptor)
+		if err != nil {
+			return err
+		}
+		return s.SendMsg(reply)
+	}
+	return status.Unimplemented.Err()
 }

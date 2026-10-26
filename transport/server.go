@@ -60,15 +60,22 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // NewServer creates a new ttrpc server with the given options.
-func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error {
+	streamID, payload, err := channel.Recv()
+	if err != nil {
+		return err
+	}
+	var req api.Request
+	if err := encoding.Unmarshal(payload, &req); err != nil {
+		return err
+	}
+	defer channel.putmbuf(payload)
+	s := serverStream{id: streamID, s: channel, Codec: so.Codec}
 	idx := slices.IndexFunc(so.desc.Methods, func(v grpc.MethodDesc) bool {
 		return path.Join("/", so.desc.ServiceName, v.MethodName) == req.Method
 	})
 	if idx < 0 {
-		return &api.Response{
-			Code:    int32(codes.Unimplemented),
-			Message: codes.Unimplemented.String(),
-		}, nil
+		return s.send(&api.Response{Code: int32(codes.Unimplemented), Message: codes.Unimplemented.String()})
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Millisecond)
 	defer cancel()
@@ -80,23 +87,9 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, req *api.Request) (*api.
 		},
 		so.interceptor)
 	if err != nil {
-		return &api.Response{
-			Code:    int32(status.Code(err)),
-			Message: err.Error(),
-		}, nil
+		return s.send(&api.Response{Code: int32(status.Code(err)), Message: err.Error()})
 	}
-	response, err := so.Marshal(reply)
-	if err != nil {
-		return &api.Response{
-			Code:    int32(codes.Unavailable),
-			Message: err.Error(),
-		}, nil
-	}
-	return &api.Response{
-		Code:    int32(codes.OK),
-		Message: codes.OK.String(),
-		Payload: response,
-	}, nil
+	return s.SendMsg(reply)
 }
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
@@ -108,24 +101,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			streamID, payload, err := channel.Recv()
-			if err != nil {
-				return err
-			}
-			var request api.Request
-			if err := encoding.Unmarshal(payload, &request); err != nil {
-				return err
-			}
-			channel.putmbuf(payload)
-			response, err := so.RoundTrip(ctx, &request)
-			if err != nil {
-				return err
-			}
-			b, err := encoding.Marshal(response)
-			if err != nil {
-				return err
-			}
-			if err := channel.Send(streamID, b); err != nil {
+			if err := so.RoundTrip(ctx, channel); err != nil {
 				return err
 			}
 		}

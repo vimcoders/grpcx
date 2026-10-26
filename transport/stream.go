@@ -182,3 +182,30 @@ func (c CallOptions) apply(opts *CallOptions) {
 		opts.deleteStream = c.deleteStream
 	}
 }
+
+type serverStream struct {
+	id uint32
+	s  Sender
+	encoding.Codec
+}
+
+func (s *serverStream) send(resp *api.Response) error {
+	b, err := encoding.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	return s.s.Send(s.id, b)
+}
+
+func (s *serverStream) SendMsg(m any) error {
+	b, err := s.Marshal(m)
+	if err != nil {
+		return err
+	}
+	resp := &api.Response{
+		Code:    int32(codes.OK),
+		Message: codes.OK.String(),
+		Payload: b,
+	}
+	return s.send(resp)
+}

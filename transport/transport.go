@@ -72,7 +72,6 @@ type transport struct {
 	streamID    uint32
 	maxStreams  uint32
 	ctx         context.Context
-	closed      func()
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
 	sync.Once
@@ -99,12 +98,10 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
 	rt := &transport{
 		channel:     newChannel(cc),
 		maxStreams:  defaultMaxStreams,
 		ctx:         ctx,
-		closed:      cancel,
 		streams:     make(map[uint32]*clientStream),
 		Codec:       encoding.GetCodec(encoding.Name),
 		dialContext: dialContext,
@@ -231,14 +228,21 @@ func (t *transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	return s.recv()
 }
 
+func (t *transport) Ping(ctx context.Context) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
+	defer cancel()
+	if _, err := t.RoundTrip(timeoutCtx, &api.Request{}); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Close closes the ttrpc connection and underlying connection
 func (t *transport) Close() error {
 	t.Do(func() {
-		if t.closed != nil {
-			t.closed()
-		}
 		t.Lock()
 		defer t.Unlock()
+		t.maxStreams = 0
 		for _, s := range t.streams {
 			s.Cancel()
 			delete(t.streams, s.id)

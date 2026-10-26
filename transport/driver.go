@@ -41,5 +41,6 @@ type RoundTripper interface {
 	// The Request's URL and Header fields must be initialized.
 	grpc.ClientConnInterface
 	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+	Ping(ctx context.Context) error
 	io.Closer
 }

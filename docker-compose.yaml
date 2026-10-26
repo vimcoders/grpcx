@@ -56,10 +56,8 @@ services:
         go version
         go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy,direct && go env -w GOSUMDB=sum.golang.google.cn
         go mod download -x
-        go test -bench "^Benchmark1K$" -benchtime=10s -benchmem -count=1 ./bench/grpc
-        go test -bench "^Benchmark1K$" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-        go test -bench "^BenchmarkParallel1K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
-        go test -bench "^BenchmarkParallel1K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
+        go test -bench "^Benchmark1K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
+        go test -bench "^Benchmark1K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
   bench-5k:
     image: golang:1.27.3
     cpus: "1"
@@ -75,10 +73,8 @@ services:
         go version
         go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy,direct && go env -w GOSUMDB=sum.golang.google.cn
         go mod download -x
-        go test -bench "^Benchmark5K$" -benchtime=10s -benchmem -count=1 ./bench/grpc
-        go test -bench "^Benchmark5K$" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-        go test -bench "^BenchmarkParallel5K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
-        go test -bench "^BenchmarkParallel5K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
+        go test -bench "^Benchmark5K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
+        go test -bench "^Benchmark5K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
   bench-1024k:
     image: golang:1.27.3
     cpus: "1"
@@ -94,7 +90,5 @@ services:
         go version
         go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy,direct && go env -w GOSUMDB=sum.golang.google.cn
         go mod download -x
-        go test -bench "^Benchmark1024K$" -benchtime=10s -benchmem -count=1 ./bench/grpc
-        go test -bench "^Benchmark1024K$" -benchtime=10s -benchmem -count=1 ./bench/grpcx
-        go test -bench "^BenchmarkParallel1024K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
-        go test -bench "^BenchmarkParallel1024K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx
+        go test -bench "^Benchmark1024K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpc
+        go test -bench "^Benchmark1024K$" -cpu="1,2,4,8,16,32,64,128,250" -benchtime=10s -benchmem -count=1 ./bench/grpcx

@@ -12,8 +12,6 @@ import (
 	"github.com/vimcoders/grpcx/transport"
 
 	"github.com/vimcoders/grpcx/resolver"
-
-	"github.com/vimcoders/grpcx/generated/api"
 )
 
 const (
@@ -123,13 +121,10 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 		return err
 	}
 	// Create a request to send to the round trippers.
-	req := &api.Request{}
 	var rts []transport.RoundTripper
-	timeoutCtx, cancel := context.WithTimeout(ctx, defaultKeepalive)
-	defer cancel()
 	// Check the existing round trippers and remove any that are no longer valid.
 	for _, rt := range rr.clone() {
-		if _, err := rt.RoundTrip(timeoutCtx, req); err != nil {
+		if err := rt.Ping(ctx); err != nil {
 			_ = rt.Close()
 			continue
 		}

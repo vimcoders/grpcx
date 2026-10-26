@@ -38,11 +38,13 @@ func Benchmark1K(b *testing.B) {
 	req := &api.EchoRequest{Message: strings.Repeat("a", 1024)}
 	ctx := context.Background()
 	b.ResetTimer()
-	for b.Loop() {
-		if _, err := client.Echo(ctx, req); err != nil {
-			b.Errorf("echo call failed: %v", err)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := client.Echo(ctx, req); err != nil {
+				b.Errorf("echo call failed: %v", err)
+			}
 		}
-	}
+	})
 }
 
 func Benchmark5K(b *testing.B) {
@@ -56,72 +58,16 @@ func Benchmark5K(b *testing.B) {
 	req := &api.EchoRequest{Message: strings.Repeat("a", 5120)}
 	ctx := context.Background()
 	b.ResetTimer()
-	for b.Loop() {
-		if _, err := client.Echo(ctx, req); err != nil {
-			b.Errorf("echo call failed: %v", err)
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := client.Echo(ctx, req); err != nil {
+				b.Errorf("echo call failed: %v", err)
+			}
 		}
-	}
+	})
 }
 
 func Benchmark1024K(b *testing.B) {
-	c, err := grpcx.Dial(ttAddr)
-	if err != nil {
-		b.Errorf("Dial failed: %v", err)
-		return
-	}
-	defer c.Close()
-	client := api.NewEchoServiceClient(c)
-	req := &api.EchoRequest{Message: strings.Repeat("a", 1024*1024)}
-	ctx := context.Background()
-	b.ResetTimer()
-	for b.Loop() {
-		if _, err := client.Echo(ctx, req); err != nil {
-			b.Errorf("echo call failed: %v", err)
-		}
-	}
-}
-
-func BenchmarkParallel1K(b *testing.B) {
-	c, err := grpcx.Dial(ttAddr)
-	if err != nil {
-		b.Errorf("Dial failed: %v", err)
-		return
-	}
-	defer c.Close()
-	client := api.NewEchoServiceClient(c)
-	req := &api.EchoRequest{Message: strings.Repeat("a", 1024)}
-	ctx := context.Background()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, err := client.Echo(ctx, req); err != nil {
-				b.Errorf("echo call failed: %v", err)
-			}
-		}
-	})
-}
-
-func BenchmarkParallel5K(b *testing.B) {
-	c, err := grpcx.Dial(ttAddr)
-	if err != nil {
-		b.Errorf("Dial failed: %v", err)
-		return
-	}
-	defer c.Close()
-	client := api.NewEchoServiceClient(c)
-	req := &api.EchoRequest{Message: strings.Repeat("a", 5120)}
-	ctx := context.Background()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if _, err := client.Echo(ctx, req); err != nil {
-				b.Errorf("echo call failed: %v", err)
-			}
-		}
-	})
-}
-
-func BenchmarkParallel1024K(b *testing.B) {
 	c, err := grpcx.Dial(ttAddr)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)

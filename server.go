@@ -5,20 +5,20 @@ import (
 	"net"
 	"sync"
 
-	"github.com/vimcoders/grpcx/roundtrip"
+	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
 )
 
 type Server struct {
-	roundtrip.ServerOptions
+	transport.ServerOptions
 	wg       sync.WaitGroup
 	listener net.Listener
 	closed   context.CancelFunc
 }
 
-func NewServer(opt ...roundtrip.ServerOption) *Server {
-	opts := roundtrip.DefaultServerOptions
+func NewServer(opt ...transport.ServerOption) *Server {
+	opts := transport.DefaultServerOptions
 	for i := range opt {
 		opt[i](&opts)
 	}
@@ -32,7 +32,7 @@ func NewServer(opt ...roundtrip.ServerOption) *Server {
 // invoking Serve. If ss is non-nil (for legacy code), its type is checked to
 // ensure it implements sd.HandlerType.
 func (s *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
-	roundtrip.RegisterService(sd, ss)(&s.ServerOptions)
+	transport.RegisterService(sd, ss)(&s.ServerOptions)
 }
 
 func (s *Server) Close() error {
@@ -46,7 +46,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...roundtrip.ServerOption) error {
+func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...transport.ServerOption) error {
 	for i := range opt {
 		opt[i](&s.ServerOptions)
 	}

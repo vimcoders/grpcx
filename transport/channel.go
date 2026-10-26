@@ -14,7 +14,7 @@
    limitations under the License.
 */
 
-package roundtrip
+package transport
 
 import (
 	"bufio"

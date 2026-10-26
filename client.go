@@ -5,13 +5,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/vimcoders/grpcx/roundtrip"
-
-	"github.com/vimcoders/grpcx/generated/api"
-
 	"github.com/vimcoders/grpcx/balancer"
-
 	"github.com/vimcoders/grpcx/encoding"
+	"github.com/vimcoders/grpcx/generated/api"
+	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
 )
@@ -42,14 +39,14 @@ func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 // WithTimeout sets the timeout for the ttrpc client.
 func WithTimeout(d time.Duration) Option {
 	return func(c *client) {
-		c.opts = append(c.opts, roundtrip.WithTimeout(d))
+		c.opts = append(c.opts, transport.WithTimeout(d))
 	}
 }
 
 // WithMaxStreams sets the maximum number of streams for the ttrpc client.
 func WithMaxStreams(n uint32) Option {
 	return func(c *client) {
-		c.opts = append(c.opts, roundtrip.WithMaxStreams(n))
+		c.opts = append(c.opts, transport.WithMaxStreams(n))
 	}
 }
 
@@ -59,7 +56,7 @@ type client struct {
 	encoding.Codec
 	interceptor UnaryClientInterceptor
 	grpc.UnaryClientInterceptor
-	opts []roundtrip.Option
+	opts []transport.Option
 }
 
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
@@ -76,7 +73,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 	for _, o := range opts {
 		o(&c)
 	}
-	c.opts = append(c.opts, roundtrip.WithCodec(c.Codec))
+	c.opts = append(c.opts, transport.WithCodec(c.Codec))
 	picker, err := balancer.DialContext(ctx, endpoint, c.opts...)
 	if err != nil {
 		return nil, err

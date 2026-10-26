@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/vimcoders/grpcx/status"
-
-	"github.com/vimcoders/grpcx/roundtrip"
+	"github.com/vimcoders/grpcx/transport"
 
 	"github.com/vimcoders/grpcx/resolver"
 
@@ -30,13 +29,13 @@ const (
 type rrBuilder struct{}
 
 // Build builds a round robin balancer.
-func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtrip.Option) (Picker, error) {
+func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
 	// Create a child context that can be canceled when the balancer is closed.
 	childCtx, cancel := context.WithCancel(ctx)
 	// Create a round robin balancer.
 	var x = RoundRobin{
-		dialContext: func(ctx context.Context) (roundtrip.RoundTripper, error) {
-			return roundtrip.DialContext(ctx, endpoint, opts...)
+		dialContext: func(ctx context.Context) (transport.RoundTripper, error) {
+			return transport.DialContext(ctx, endpoint, opts...)
 		},
 		resolveContext: func(ctx context.Context) (int, error) {
 			resolver := resolver.GetResolver("dns")
@@ -73,16 +72,16 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...roundtri
 
 // RoundRobin is a round robin balancer.
 type RoundRobin struct {
-	rts            []roundtrip.RoundTripper
+	rts            []transport.RoundTripper
 	count          atomic.Uint32
-	dialContext    func(ctx context.Context) (roundtrip.RoundTripper, error)
+	dialContext    func(ctx context.Context) (transport.RoundTripper, error)
 	resolveContext func(ctx context.Context) (int, error)
 	cancelFunc     context.CancelFunc
 	sync.RWMutex
 }
 
 // Pick picks a round tripper from the round robin balancer.
-func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (roundtrip.RoundTripper, error) {
+func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTripper, error) {
 	rr.RLock()
 	defer rr.RUnlock()
 	rts := rr.rts
@@ -94,7 +93,7 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (roundtrip.RoundTrippe
 }
 
 // DialContext dials a round robin balancer.
-func DialContext(ctx context.Context, endpoint string, opts ...roundtrip.Option) (Picker, error) {
+func DialContext(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
 	var b rrBuilder
 	p, err := b.Build(ctx, endpoint, opts...)
 	if err != nil {
@@ -125,7 +124,7 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 	}
 	// Create a request to send to the round trippers.
 	req := &api.Request{}
-	var rts []roundtrip.RoundTripper
+	var rts []transport.RoundTripper
 	// Check the existing round trippers and remove any that are no longer valid.
 	for _, rt := range rr.clone() {
 		if _, err := rt.RoundTrip(ctx, req); err != nil {
@@ -153,10 +152,10 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (rr *RoundRobin) clone() []roundtrip.RoundTripper {
+func (rr *RoundRobin) clone() []transport.RoundTripper {
 	rr.RLock()
 	defer rr.RUnlock()
-	return append([]roundtrip.RoundTripper{}, rr.rts...)
+	return append([]transport.RoundTripper{}, rr.rts...)
 }
 
 // Close closes the round robin balancer.

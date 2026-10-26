@@ -4,12 +4,12 @@ import (
 	"context"
 	"io"
 
-	"github.com/vimcoders/grpcx/roundtrip"
+	"github.com/vimcoders/grpcx/transport"
 )
 
 // Picker is the interface for picking a round tripper from a list of round trippers.
 type Picker interface {
-	Pick(context.Context, PickInfo) (roundtrip.RoundTripper, error)
+	Pick(context.Context, PickInfo) (transport.RoundTripper, error)
 	io.Closer
 }
 
@@ -20,5 +20,5 @@ type PickInfo struct {
 
 // Builder is the interface for building a balancer.
 type Builder interface {
-	Build(ctx context.Context, endpoint string, opts ...roundtrip.Option) (Picker, error)
+	Build(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error)
 }

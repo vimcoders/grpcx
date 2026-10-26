@@ -75,6 +75,7 @@ type transport struct {
 	closed      func()
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
+	sync.Once
 }
 
 // Dial creates a new ttrpc transport to the given target.
@@ -232,8 +233,16 @@ func (t *transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 
 // Close closes the ttrpc connection and underlying connection
 func (t *transport) Close() error {
-	if t.closed != nil {
-		t.closed()
-	}
+	t.Do(func() {
+		if t.closed != nil {
+			t.closed()
+		}
+		t.Lock()
+		defer t.Unlock()
+		for _, s := range t.streams {
+			s.Cancel()
+			delete(t.streams, s.id)
+		}
+	})
 	return t.channel.Close()
 }

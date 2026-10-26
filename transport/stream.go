@@ -35,7 +35,7 @@ type clientStream struct {
 	id     uint32
 	s      Sender
 	c      chan *api.Response
-	cancel context.CancelFunc
+	Cancel context.CancelFunc
 	sync.Once
 }
 
@@ -51,14 +51,14 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 		}
 		opt.apply(&options)
 	}
-	timeoutCtx, cancel := context.WithCancel(ctx)
+	cancelCtx, cancel := context.WithCancel(ctx)
 	return &clientStream{
-		ctx:         timeoutCtx,
+		ctx:         cancelCtx,
 		id:          id,
 		s:           send,
 		c:           make(chan *api.Response, 1),
 		CallOptions: options,
-		cancel:      cancel,
+		Cancel:      cancel,
 	}
 }
 
@@ -67,9 +67,6 @@ func (s *clientStream) Close() error {
 	s.Once.Do(func() {
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)
-		}
-		if s.cancel != nil {
-			s.cancel()
 		}
 	})
 	return nil

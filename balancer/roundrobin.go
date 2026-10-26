@@ -125,9 +125,11 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 	// Create a request to send to the round trippers.
 	req := &api.Request{}
 	var rts []transport.RoundTripper
+	timeoutCtx, cancel := context.WithTimeout(ctx, defaultKeepalive)
+	defer cancel()
 	// Check the existing round trippers and remove any that are no longer valid.
 	for _, rt := range rr.clone() {
-		if _, err := rt.RoundTrip(ctx, req); err != nil {
+		if _, err := rt.RoundTrip(timeoutCtx, req); err != nil {
 			_ = rt.Close()
 			continue
 		}

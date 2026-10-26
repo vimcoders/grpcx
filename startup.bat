@@ -18,7 +18,7 @@ go install github.com/bufbuild/buf/cmd/buf@latest
 echo 🎨 执行代码自动格式化与规范检测
 golangci-lint run --fix ./...
 docker compose up -d --build --wait grpc grpcx
-docker compose run bench-1k 
-docker compose run bench-5k 
-docker compose run bench-1024k 
+docker compose run --rm bench-1k 
+docker compose run --rm bench-5k 
+docker compose run --rm bench-1024k 
 pause

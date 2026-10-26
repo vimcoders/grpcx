@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"path"
-	"slices"
 	"time"
 
 	"github.com/vimcoders/grpcx/status"
@@ -71,23 +70,23 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 	}
 	defer channel.putmbuf(payload)
 	s := serverStream{id: streamID, s: channel, Codec: so.Codec, payload: payload}
-	idx := slices.IndexFunc(so.desc.Methods, func(v grpc.MethodDesc) bool {
-		return path.Join("/", so.desc.ServiceName, v.MethodName) == req.Method
-	})
-	if idx < 0 {
-		return s.send(&api.Response{Code: int32(codes.Unimplemented), Message: codes.Unimplemented.String()})
+	for _, v := range so.desc.Methods {
+		if req.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+			continue
+		}
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Millisecond)
+		defer cancel()
+		reply, err := v.Handler(
+			so.imp,
+			metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
+			s.RecvMsg,
+			so.interceptor)
+		if err != nil {
+			return s.send(&api.Response{Code: int32(status.Code(err)), Message: err.Error()})
+		}
+		return s.SendMsg(reply)
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Millisecond)
-	defer cancel()
-	reply, err := so.desc.Methods[idx].Handler(
-		so.imp,
-		metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
-		s.RecvMsg,
-		so.interceptor)
-	if err != nil {
-		return s.send(&api.Response{Code: int32(status.Code(err)), Message: err.Error()})
-	}
-	return s.SendMsg(reply)
+	return s.send(&api.Response{Code: int32(codes.Unimplemented), Message: codes.Unimplemented.String()})
 }
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.

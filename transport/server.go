@@ -70,7 +70,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 		return err
 	}
 	defer channel.putmbuf(payload)
-	s := serverStream{id: streamID, s: channel, Codec: so.Codec}
+	s := serverStream{id: streamID, s: channel, Codec: so.Codec, payload: payload}
 	idx := slices.IndexFunc(so.desc.Methods, func(v grpc.MethodDesc) bool {
 		return path.Join("/", so.desc.ServiceName, v.MethodName) == req.Method
 	})
@@ -82,9 +82,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 	reply, err := so.desc.Methods[idx].Handler(
 		so.imp,
 		metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
-		func(in any) error {
-			return so.Unmarshal(req.Payload, in)
-		},
+		s.RecvMsg,
 		so.interceptor)
 	if err != nil {
 		return s.send(&api.Response{Code: int32(status.Code(err)), Message: err.Error()})

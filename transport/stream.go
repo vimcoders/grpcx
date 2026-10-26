@@ -29,7 +29,7 @@ import (
 )
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
-type stream struct {
+type clientStream struct {
 	CallOptions
 	ctx    context.Context
 	id     uint32
@@ -40,7 +40,7 @@ type stream struct {
 }
 
 // newStream creates a new stream with the given id and sender.
-func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) *stream {
+func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) *clientStream {
 	options := defaultCallOptions
 	for _, opt := range opts {
 		opt.apply(&options)
@@ -52,7 +52,7 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 		opt.apply(&options)
 	}
 	timeoutCtx, cancel := context.WithCancel(ctx)
-	return &stream{
+	return &clientStream{
 		ctx:         timeoutCtx,
 		id:          id,
 		s:           send,
@@ -63,7 +63,7 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 }
 
 // close closes the stream and releases any resources associated with it.
-func (s *stream) Close() error {
+func (s *clientStream) Close() error {
 	s.Once.Do(func() {
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)
@@ -75,7 +75,7 @@ func (s *stream) Close() error {
 	return nil
 }
 
-func (s *stream) SendMsg(m any) error {
+func (s *clientStream) SendMsg(m any) error {
 	b, err := s.Marshal(m)
 	if err != nil {
 		return err
@@ -91,7 +91,7 @@ func (s *stream) SendMsg(m any) error {
 	return s.send(req)
 }
 
-func (s *stream) RecvMsg(m any) error {
+func (s *clientStream) RecvMsg(m any) error {
 	response, err := s.recv()
 	if err != nil {
 		return err
@@ -106,12 +106,12 @@ func (s *stream) RecvMsg(m any) error {
 	return nil
 }
 
-func (s *stream) Context() context.Context {
+func (s *clientStream) Context() context.Context {
 	return s.ctx
 }
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
-func (s *stream) send(req *api.Request) error {
+func (s *clientStream) send(req *api.Request) error {
 	b, err := encoding.Marshal(req)
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func (s *stream) send(req *api.Request) error {
 }
 
 // receive receives a message from the stream. The message is received with a fixed-length header that includes the stream id. If the stream is closed, an error is returned.
-func (s *stream) process(b []byte) error {
+func (s *clientStream) process(b []byte) error {
 	var response api.Response
 	if err := encoding.Unmarshal(b, &response); err != nil {
 		return err
@@ -136,7 +136,7 @@ func (s *stream) process(b []byte) error {
 }
 
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
-func (s *stream) recv() (*api.Response, error) {
+func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():
 		return nil, status.Canceled.Err()
@@ -187,6 +187,7 @@ type serverStream struct {
 	id uint32
 	s  Sender
 	encoding.Codec
+	payload []byte
 }
 
 func (s *serverStream) send(resp *api.Response) error {
@@ -208,4 +209,11 @@ func (s *serverStream) SendMsg(m any) error {
 		Payload: b,
 	}
 	return s.send(resp)
+}
+
+func (s *serverStream) RecvMsg(m any) error {
+	if err := s.Unmarshal(s.payload, m); err != nil {
+		return err
+	}
+	return nil
 }

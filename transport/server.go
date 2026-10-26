@@ -65,11 +65,12 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 		return err
 	}
 	var req api.Request
+	s := serverStream{id: streamID, s: channel, Codec: so.Codec, payload: payload}
 	if err := encoding.Unmarshal(payload, &req); err != nil {
-		return err
+		code, message := int32(status.InvalidArgument.Code()), err.Error()
+		return s.send(&api.Response{Code: code, Message: message})
 	}
 	defer channel.putmbuf(payload)
-	s := serverStream{id: streamID, s: channel, Codec: so.Codec, payload: payload}
 	for _, v := range so.desc.Methods {
 		if req.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
@@ -82,11 +83,13 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 			s.RecvMsg,
 			so.interceptor)
 		if err != nil {
-			return s.send(&api.Response{Code: int32(status.Code(err)), Message: err.Error()})
+			code, message := int32(status.Code(err)), err.Error()
+			return s.send(&api.Response{Code: code, Message: message})
 		}
 		return s.SendMsg(reply)
 	}
-	return s.send(&api.Response{Code: int32(codes.Unimplemented), Message: codes.Unimplemented.String()})
+	code, message := int32(codes.Unimplemented), codes.Unimplemented.String()
+	return s.send(&api.Response{Code: code, Message: message})
 }
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.

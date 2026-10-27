@@ -23,11 +23,11 @@ func (h *hashRing) Pick(_ context.Context, info PickInfo) (transport.RoundTrippe
 	if len(h.ring) == 0 {
 		return nil, status.ResourceExhausted.Err()
 	}
-	hash := info.Authority / h.step
-	if hash > int64(len(h.ring)) {
+	bucket := info.Authority / h.step
+	if bucket > int64(len(h.ring)) {
 		return nil, status.OutOfRange.Err()
 	}
-	return h.ring[hash], nil
+	return h.ring[bucket], nil
 }
 
 func (h *hashRing) Ping(ctx context.Context) error {

@@ -64,6 +64,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 	if err != nil {
 		return err
 	}
+	defer channel.putmbuf(payload)
 	s := serverStream{
 		ctx:   ctx,
 		id:    streamID,
@@ -75,7 +76,9 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error 
 		code, message := int32(status.InvalidArgument.Code()), err.Error()
 		return s.send(&api.Response{Code: code, Message: message})
 	}
-	defer channel.putmbuf(payload)
+	s.dec = func(in any) error {
+		return encoding.Unmarshal(req.Payload, in)
+	}
 	if err := so.ServeGRPC(&s, &req); err != nil {
 		code, message := int32(status.Code(err)), err.Error()
 		return s.send(&api.Response{Code: code, Message: message})
@@ -99,24 +102,29 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
 	}
 }
 
-func (so *ServerOptions) ServeGRPC(s Stream, req *api.Request) error {
+func (so *ServerOptions) ServeGRPC(s grpc.ServerStream, req *api.Request) error {
 	for _, v := range so.desc.Methods {
 		if req.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), time.Duration(req.Timeout)*time.Millisecond)
 		defer cancel()
-		dec := func(in any) error {
-			return encoding.Unmarshal(req.Payload, in)
-		}
 		reply, err := v.Handler(
 			so.imp,
 			metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
-			dec, so.interceptor)
+			s.RecvMsg, so.interceptor)
 		if err != nil {
 			return err
 		}
 		return s.SendMsg(reply)
+	}
+	for _, v := range so.desc.Streams {
+		if req.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
+			continue
+		}
+		if err := v.Handler(so.imp, s); err != nil {
+			return err
+		}
 	}
 	return status.Unimplemented.Err()
 }

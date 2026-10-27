@@ -25,11 +25,13 @@ import (
 	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/metadata"
 	"github.com/vimcoders/grpcx/status"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type clientStream struct {
+	grpc.ClientStream
 	CallOptions
 	ctx    context.Context
 	id     uint32
@@ -60,6 +62,10 @@ func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) 
 		CallOptions: options,
 		Cancel:      cancel,
 	}
+}
+
+func (s *clientStream) CloseSend() error {
+	return s.Close()
 }
 
 // close closes the stream and releases any resources associated with it.
@@ -181,11 +187,12 @@ func (c CallOptions) apply(opts *CallOptions) {
 }
 
 type serverStream struct {
-	Stream
+	grpc.ServerStream
 	ctx context.Context
 	id  uint32
 	s   Sender
 	encoding.Codec
+	dec func(in any) error
 }
 
 func (s *serverStream) Context() context.Context {
@@ -211,4 +218,11 @@ func (s *serverStream) SendMsg(m any) error {
 		Payload: b,
 	}
 	return s.send(resp)
+}
+
+func (s *serverStream) RecvMsg(m any) error {
+	if s.dec != nil {
+		return s.dec(m)
+	}
+	return status.Unimplemented.Err()
 }

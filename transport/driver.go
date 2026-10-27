@@ -45,14 +45,6 @@ type RoundTripper interface {
 	io.Closer
 }
 
-type Stream interface {
-	Context() context.Context
-	// Deprecated: See ClientStream and ServerStream documentation instead.
-	SendMsg(m any) error
-	// Deprecated: See ClientStream and ServerStream documentation instead.
-	RecvMsg(m any) error
-}
-
 type Handler interface {
-	ServeGRPC(Stream, *api.Request)
+	ServeGRPC(grpc.ServerStream, *api.Request)
 }

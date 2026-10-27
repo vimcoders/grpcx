@@ -11,6 +11,8 @@ import (
 	"github.com/vimcoders/grpcx/transport"
 )
 
+var _ hashBuilder
+
 type hashBuilder struct{}
 
 // Build builds a round robin balancer.

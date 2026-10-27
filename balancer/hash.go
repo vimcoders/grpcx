@@ -2,7 +2,6 @@ package balancer
 
 import (
 	"context"
-	"sort"
 	"sync"
 
 	"github.com/vimcoders/grpcx/status"
@@ -10,17 +9,12 @@ import (
 )
 
 type hashRing struct {
-	ring           []RoundTripper // 排序后的虚拟节点
-	dialContext    func(ctx context.Context) (RoundTripper, error)
+	ring           []transport.RoundTripper
+	dialContext    func(ctx context.Context) (transport.RoundTripper, error)
 	resolveContext func(ctx context.Context) (int, error)
 	cancelFunc     context.CancelFunc
 	step           int64
 	sync.RWMutex
-}
-
-type RoundTripper struct {
-	hash int64
-	transport.RoundTripper
 }
 
 func (h *hashRing) Pick(_ context.Context, info PickInfo) (transport.RoundTripper, error) {
@@ -29,13 +23,11 @@ func (h *hashRing) Pick(_ context.Context, info PickInfo) (transport.RoundTrippe
 	if len(h.ring) == 0 {
 		return nil, status.ResourceExhausted.Err()
 	}
-	i := sort.Search(len(h.ring), func(i int) bool {
-		return h.ring[i].hash >= info.Authority
-	})
-	if i == len(h.ring) {
-		return h.ring[i%len(h.ring)], nil
+	hash := info.Authority / h.step
+	if hash > int64(len(h.ring)) {
+		return nil, status.OutOfRange.Err()
 	}
-	return h.ring[i], nil
+	return h.ring[hash], nil
 }
 
 func (h *hashRing) Ping(ctx context.Context) error {
@@ -45,7 +37,7 @@ func (h *hashRing) Ping(ctx context.Context) error {
 		return err
 	}
 	// Create a request to send to the round trippers.
-	var ring []RoundTripper
+	var ring []transport.RoundTripper
 	// Check the existing round trippers and remove any that are no longer valid.
 	for _, rt := range h.clone() {
 		if err := rt.Ping(ctx); err != nil {
@@ -64,10 +56,8 @@ func (h *hashRing) Ping(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
-		rt.hash = h.step * int64(i)
 		ring = append(ring, rt)
 	}
-	sort.Slice(ring, func(i, j int) bool { return ring[i].hash < ring[j].hash })
 	h.Lock()
 	defer h.Unlock()
 	// Update the round tripper list.
@@ -75,10 +65,10 @@ func (h *hashRing) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (h *hashRing) clone() []RoundTripper {
+func (h *hashRing) clone() []transport.RoundTripper {
 	h.RLock()
 	defer h.RUnlock()
-	return append([]RoundTripper{}, h.ring...)
+	return append([]transport.RoundTripper{}, h.ring...)
 }
 
 // Close closes the round robin balancer.

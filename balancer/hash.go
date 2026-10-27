@@ -2,11 +2,55 @@ package balancer
 
 import (
 	"context"
+	"net/url"
 	"sync"
+	"time"
 
+	"github.com/vimcoders/grpcx/resolver"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
 )
+
+type hashBuilder struct{}
+
+// Build builds a round robin balancer.
+func (h *hashBuilder) Build(ctx context.Context, step int64, endpoint string, opts ...transport.Option) (Picker, error) {
+	// Create a child context that can be canceled when the balancer is closed.
+	childCtx, cancel := context.WithCancel(ctx)
+	// Create a round robin balancer.
+	var x = hashRing{
+		dialContext: func(ctx context.Context) (transport.RoundTripper, error) {
+			return transport.DialContext(ctx, endpoint, opts...)
+		},
+		resolveContext: func(ctx context.Context) (int, error) {
+			resolver := resolver.GetResolver("dns")
+			address, err := resolver.Resolve(url.URL{Scheme: "dns", Host: endpoint})
+			if err != nil {
+				return 0, err
+			}
+			return len(address), nil
+		},
+		cancelFunc: cancel,
+		step:       step,
+	}
+	// Resolve the endpoint to get the addresses.
+	podCount, err := x.resolveContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Dial to each address and create a round tripper for each.
+	for range podCount {
+		rt, err := x.dialContext(ctx)
+		if err != nil {
+			x.Close()
+			return nil, err
+		}
+		x.ring = append(x.ring, rt)
+	}
+	go x.Keepalive(childCtx)
+	// Return the round robin balancer.
+	return &x, nil
+}
 
 type hashRing struct {
 	ring           []transport.RoundTripper
@@ -82,4 +126,18 @@ func (h *hashRing) Close() error {
 		_ = rt.Close()
 	}
 	return nil
+}
+
+// Keepalive keeps the round robin balancer alive.
+func (h *hashRing) Keepalive(ctx context.Context) error {
+	ticker := time.NewTicker(defaultKeepalive)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Canceled.Err()
+		case <-ticker.C:
+			_ = h.Ping(ctx)
+		}
+	}
 }

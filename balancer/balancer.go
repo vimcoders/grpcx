@@ -16,6 +16,7 @@ type Picker interface {
 // PickInfo contains information about the request being made.
 type PickInfo struct {
 	FullMethodName string // 请求方法名
+	Authority      int64
 }
 
 // Builder is the interface for building a balancer.

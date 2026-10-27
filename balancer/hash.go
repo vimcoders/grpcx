@@ -24,7 +24,7 @@ func (h *hashRing) Pick(_ context.Context, info PickInfo) (transport.RoundTrippe
 		return nil, status.ResourceExhausted.Err()
 	}
 	bucket := info.Authority / h.step
-	if bucket > int64(len(h.ring)) {
+	if bucket >= int64(len(h.ring)) {
 		return nil, status.OutOfRange.Err()
 	}
 	return h.ring[bucket], nil

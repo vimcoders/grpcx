@@ -210,8 +210,7 @@ func (t *transport) deleteStream(id uint32) {
 func (t *transport) getStream(sid uint32) *clientStream {
 	t.RLock()
 	defer t.RUnlock()
-	s := t.streams[sid]
-	return s
+	return t.streams[sid]
 }
 
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.

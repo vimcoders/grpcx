@@ -196,7 +196,7 @@ func (t *transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method
 		Timeout: t.timeout,
 		Codec:   t.Codec,
 	}
-	return t.createStream(ctx, info)
+	return t.createStream(ctx, &info)
 }
 
 // deleteStream deletes the given stream from the transport. It closes the stream and removes it from the map of streams.

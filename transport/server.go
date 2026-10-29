@@ -69,10 +69,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opt
 		}
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), options.Timeout)
 		defer cancel()
-		reply, err := v.Handler(
-			so.imp,
-			metadata.WithMetadata(timeoutCtx, options.Metadatas),
-			s.RecvMsg, so.interceptor)
+		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.interceptor)
 		if err != nil {
 			return err
 		}
@@ -99,14 +96,15 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 	if err := encoding.Unmarshal(b, &request); err != nil {
 		return serverStream{}, err
 	}
+	metadatas := metadata.Pairs(request.Metadatas...)
 	return serverStream{
-		ctx:       ctx,
 		b:         b,
-		id:        streamID,
 		s:         channel,
+		id:        streamID,
 		Codec:     so.Codec,
+		Metadatas: metadatas,
 		Method:    request.Method,
-		Metadatas: metadata.Pairs(request.Metadatas...),
+		ctx:       metadata.WithMetadata(ctx, metadatas),
 		Timeout:   time.Duration(request.Timeout) * time.Millisecond,
 	}, nil
 }

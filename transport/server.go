@@ -26,7 +26,6 @@ type ServerOptions struct {
 	desc        *grpc.ServiceDesc
 	imp         any
 	interceptor grpc.UnaryServerInterceptor
-	Handler
 }
 
 // DefaultServerOptions is the default options for a ttrpc server.
@@ -59,59 +58,16 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // NewServer creates a new ttrpc server with the given options.
-func (so *ServerOptions) RoundTrip(ctx context.Context, channel *channel) error {
-	streamID, payload, err := channel.Recv()
-	if err != nil {
-		return err
-	}
-	defer channel.putmbuf(payload)
-	s := serverStream{
-		ctx:   ctx,
-		id:    streamID,
-		s:     channel,
-		Codec: so.Codec,
-	}
-	var req api.Request
-	if err := encoding.Unmarshal(payload, &req); err != nil {
-		code, message := int32(status.InvalidArgument.Code()), err.Error()
-		return s.send(&api.Response{Code: code, Message: message})
-	}
-	s.dec = func(in any) error {
-		return encoding.Unmarshal(req.Payload, in)
-	}
-	if err := so.ServeGRPC(&s, &req); err != nil {
-		code, message := int32(status.Code(err)), err.Error()
-		return s.send(&api.Response{Code: code, Message: message})
-	}
-	return nil
-}
-
-// Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
-func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) (err error) {
-	defer c.Close()
-	channel := newChannel(c)
-	for {
-		select {
-		case <-ctx.Done():
-			return status.Canceled.Err()
-		default:
-			if err := so.RoundTrip(ctx, channel); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (so *ServerOptions) ServeGRPC(s grpc.ServerStream, req *api.Request) error {
+func (so *ServerOptions) RoundTrip(ctx context.Context, s *serverStream) (err error) {
 	for _, v := range so.desc.Methods {
-		if req.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+		if s.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeoutCtx, cancel := context.WithTimeout(s.Context(), time.Duration(req.Timeout)*time.Millisecond)
+		timeoutCtx, cancel := context.WithTimeout(s.Context(), s.Timeout)
 		defer cancel()
 		reply, err := v.Handler(
 			so.imp,
-			metadata.WithMetadata(timeoutCtx, metadata.Pairs(req.Metadatas...)),
+			metadata.WithMetadata(timeoutCtx, s.Metadatas),
 			s.RecvMsg, so.interceptor)
 		if err != nil {
 			return err
@@ -119,7 +75,7 @@ func (so *ServerOptions) ServeGRPC(s grpc.ServerStream, req *api.Request) error 
 		return s.SendMsg(reply)
 	}
 	for _, v := range so.desc.Streams {
-		if req.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
+		if s.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
 		if err := v.Handler(so.imp, s); err != nil {
@@ -127,4 +83,47 @@ func (so *ServerOptions) ServeGRPC(s grpc.ServerStream, req *api.Request) error 
 		}
 	}
 	return status.Unimplemented.Err()
+}
+
+func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (serverStream, error) {
+	streamID, b, err := channel.Recv()
+	if err != nil {
+		return serverStream{}, err
+	}
+	defer channel.putmbuf(b)
+	var request api.Request
+	if err := encoding.Unmarshal(b, &request); err != nil {
+		return serverStream{}, err
+	}
+	return serverStream{
+		ctx:       ctx,
+		b:         b,
+		id:        streamID,
+		s:         channel,
+		Codec:     so.Codec,
+		Method:    request.Method,
+		Metadatas: metadata.Pairs(request.Metadatas...),
+		Timeout:   time.Duration(request.Timeout) * time.Millisecond,
+	}, nil
+}
+
+// Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
+func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
+	defer c.Close()
+	channel := newChannel(c)
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Canceled.Err()
+		default:
+			s, err := so.createStream(ctx, channel)
+			if err != nil {
+				return err
+			}
+			if err := so.RoundTrip(ctx, &s); err != nil {
+				code := int32(status.Code(err))
+				s.send(&api.Response{Code: code, Message: err.Error()})
+			}
+		}
+	}
 }

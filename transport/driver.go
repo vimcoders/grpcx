@@ -44,7 +44,3 @@ type RoundTripper interface {
 	Ping(ctx context.Context) error
 	io.Closer
 }
-
-type Handler interface {
-	ServeGRPC(grpc.ServerStream, *api.Request)
-}

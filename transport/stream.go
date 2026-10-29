@@ -38,43 +38,19 @@ type clientStream struct {
 	s      Sender
 	c      chan *api.Response
 	Cancel context.CancelFunc
+	t      *transport
 	sync.Once
 }
 
-// newStream creates a new stream with the given id and sender.
-func newStream(ctx context.Context, id uint32, send Sender, opts ...CallOption) *clientStream {
-	options := defaultCallOptions
-	for _, opt := range opts {
-		opt.apply(&options)
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
-			Timeout: time.Until(dl),
-		}
-		opt.apply(&options)
-	}
-	cancelCtx, cancel := context.WithCancel(ctx)
-	return &clientStream{
-		ctx:         cancelCtx,
-		id:          id,
-		s:           send,
-		c:           make(chan *api.Response, 1),
-		CallOptions: options,
-		Cancel:      cancel,
-	}
-}
-
 func (s *clientStream) CloseSend() error {
+	s.Once.Do(func() {
+		s.t.deleteStream(s.id)
+	})
 	return s.Close()
 }
 
 // close closes the stream and releases any resources associated with it.
 func (s *clientStream) Close() error {
-	s.Once.Do(func() {
-		if s.deleteStream != nil {
-			s.deleteStream(s.id)
-		}
-	})
 	return nil
 }
 
@@ -165,7 +141,6 @@ type CallOptions struct {
 	Timeout   time.Duration
 	Metadatas metadata.MD
 	encoding.Codec
-	deleteStream func(id uint32)
 }
 
 func (c CallOptions) apply(opts *CallOptions) {
@@ -181,9 +156,6 @@ func (c CallOptions) apply(opts *CallOptions) {
 	if len(c.Metadatas) > 0 {
 		opts.Metadatas = c.Metadatas
 	}
-	if c.deleteStream != nil {
-		opts.deleteStream = c.deleteStream
-	}
 }
 
 type serverStream struct {
@@ -191,8 +163,8 @@ type serverStream struct {
 	ctx context.Context
 	id  uint32
 	s   Sender
-	encoding.Codec
-	dec func(in any) error
+	b   []byte
+	CallOptions
 }
 
 func (s *serverStream) Context() context.Context {
@@ -221,8 +193,10 @@ func (s *serverStream) SendMsg(m any) error {
 }
 
 func (s *serverStream) RecvMsg(m any) error {
-	if s.dec != nil {
-		return s.dec(m)
-	}
-	return status.Unimplemented.Err()
+	return s.Unmarshal(s.b, m)
+}
+
+// close closes the stream and releases any resources associated with it.
+func (s *serverStream) Close() error {
+	return nil
 }

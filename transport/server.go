@@ -58,16 +58,20 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // NewServer creates a new ttrpc server with the given options.
-func (so *ServerOptions) RoundTrip(ctx context.Context, s *serverStream) (err error) {
+func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opts ...CallOption) error {
+	options := defaultCallOptions
+	for _, opt := range opts {
+		opt.apply(&options)
+	}
 	for _, v := range so.desc.Methods {
-		if s.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+		if options.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeoutCtx, cancel := context.WithTimeout(s.Context(), s.Timeout)
+		timeoutCtx, cancel := context.WithTimeout(s.Context(), options.Timeout)
 		defer cancel()
 		reply, err := v.Handler(
 			so.imp,
-			metadata.WithMetadata(timeoutCtx, s.Metadatas),
+			metadata.WithMetadata(timeoutCtx, options.Metadatas),
 			s.RecvMsg, so.interceptor)
 		if err != nil {
 			return err
@@ -75,7 +79,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s *serverStream) (err er
 		return s.SendMsg(reply)
 	}
 	for _, v := range so.desc.Streams {
-		if s.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
+		if options.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
 		if err := v.Handler(so.imp, s); err != nil {
@@ -120,7 +124,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 			if err != nil {
 				return err
 			}
-			if err := so.RoundTrip(ctx, &s); err != nil {
+			if err := so.RoundTrip(ctx, &s, &s.CallOptions); err != nil {
 				code := int32(status.Code(err))
 				s.send(&api.Response{Code: code, Message: err.Error()})
 			}

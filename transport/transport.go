@@ -262,14 +262,14 @@ func (t *transport) Ping(ctx context.Context) error {
 
 // Close closes the ttrpc connection and underlying connection
 func (t *transport) Close() error {
+	t.Lock()
+	defer t.Unlock()
 	t.Do(func() {
-		t.Lock()
-		defer t.Unlock()
-		t.maxStreams = 0
 		for _, s := range t.streams {
 			s.Cancel()
 			delete(t.streams, s.id)
 		}
+		t.maxStreams = 0
 	})
 	return t.channel.Close()
 }

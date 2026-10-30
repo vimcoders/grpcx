@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/status"
@@ -68,7 +69,7 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // NewServer creates a new ttrpc server with the given options.
-func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opts ...CallOption) error {
+func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opts ...CallOption) (err error) {
 	options := defaultCallOptions
 	for _, opt := range opts {
 		opt.apply(&options)
@@ -128,6 +129,8 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	defer c.Close()
 	channel := newChannel(c)
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,10 +140,32 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 			if err != nil {
 				return err
 			}
-			if err := so.RoundTrip(ctx, &s, &s.CallOptions); err != nil {
-				code := int32(status.Code(err))
-				s.send(&api.Response{Code: code, Message: err.Error()})
-			}
+			wg.Add(1)
+			go func(ss serverStream) {
+				defer func() {
+					if x := recover(); x != nil {
+						// f panicked, which will be fatal because
+						// this is a new goroutine.
+						//
+						// Calling Done will unblock Wait in the main goroutine,
+						// allowing it to race with the fatal panic and
+						// possibly even exit the process (os.Exit(0))
+						// before the panic completes.
+						//
+						// This is almost certainly undesirable,
+						// so instead avoid calling Done and simply panic.
+						panic(x)
+					}
+
+					// f completed normally, or abruptly using goexit.
+					// Either way, decrement the semaphore.
+					wg.Done()
+				}()
+				if err := so.RoundTrip(ctx, &ss, &ss.CallOptions); err != nil {
+					code := int32(status.Code(err))
+					ss.send(&api.Response{Code: code, Message: err.Error()})
+				}
+			}(s)
 		}
 	}
 }

@@ -113,12 +113,12 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 	}
 	metadatas := metadata.Pairs(request.Metadatas...)
 	return serverStream{
-		b:         b,
 		s:         channel,
 		id:        streamID,
 		Codec:     so.Codec,
 		Metadatas: metadatas,
 		Method:    request.Method,
+		b:         request.Payload,
 		ctx:       metadata.WithMetadata(ctx, metadatas),
 		Timeout:   time.Duration(request.Timeout) * time.Millisecond,
 	}, nil

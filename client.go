@@ -32,7 +32,13 @@ func WithCodec(codec encoding.Codec) Option {
 // WithUnaryClientInterceptor sets the unary client interceptor for the ttrpc client.
 func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *client) {
-		c.interceptor = i
+		c.unaryClientInterceptor = i
+	}
+}
+
+func WithStreamClientInterceptor(i StreamClientInterceptor) Option {
+	return func(c *client) {
+		c.streamClientInterceptor = i
 	}
 }
 
@@ -54,20 +60,27 @@ func WithMaxStreams(n uint32) Option {
 type client struct {
 	balancer.Picker
 	encoding.Codec
-	interceptor UnaryClientInterceptor
-	grpc.UnaryClientInterceptor
-	opts []transport.Option
+	unaryClientInterceptor  UnaryClientInterceptor
+	streamClientInterceptor StreamClientInterceptor
+	opts                    []transport.Option
 }
 
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
 	c := client{
 		Codec: encoding.GetCodec(encoding.Name),
-		interceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
+		unaryClientInterceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
 			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
 			if err != nil {
 				return err
 			}
 			return rt.Invoke(ctx, method, req, reply, opts...)
+		},
+		streamClientInterceptor: func(ctx context.Context, desc *grpc.StreamDesc, balance balancer.Picker, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
+			if err != nil {
+				return nil, err
+			}
+			return rt.NewStream(ctx, desc, method, opts...)
 		},
 	}
 	for _, o := range opts {
@@ -87,7 +100,7 @@ func Dial(endpoint string, opts ...Option) (ClientConnInterface, error) {
 }
 
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	if err := c.interceptor(ctx, method, req, reply, c.Picker, opts...); err != nil {
+	if err := c.unaryClientInterceptor(ctx, method, req, reply, c.Picker, opts...); err != nil {
 		return err
 	}
 	return nil
@@ -108,14 +121,7 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 // specified service and method. If not a streaming client, the request object
 // may be provided.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	info := balancer.PickInfo{
-		FullMethodName: method,
-	}
-	rt, err := c.Pick(ctx, info)
-	if err != nil {
-		return nil, err
-	}
-	return rt.NewStream(ctx, desc, method, opts...)
+	return c.streamClientInterceptor(ctx, desc, c.Picker, method, opts...)
 }
 
 func (c *client) Close() error {

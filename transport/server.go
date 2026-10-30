@@ -23,23 +23,33 @@ type ServerOption func(c *ServerOptions)
 // ServerOptions is a struct that holds the options for a ttrpc server.
 type ServerOptions struct {
 	encoding.Codec
-	desc        *grpc.ServiceDesc
-	imp         any
-	interceptor grpc.UnaryServerInterceptor
+	desc                    *grpc.ServiceDesc
+	imp                     any
+	unaryServerInterceptor  grpc.UnaryServerInterceptor
+	streamServerInterceptor grpc.StreamServerInterceptor
 }
 
 // DefaultServerOptions is the default options for a ttrpc server.
 var DefaultServerOptions = ServerOptions{
 	Codec: encoding.GetCodec(encoding.Name),
-	interceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+	unaryServerInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
+	},
+	streamServerInterceptor: func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		return handler(srv, ss)
 	},
 }
 
 // NewServer creates a new ttrpc server with the given options.
 func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
 	return func(so *ServerOptions) {
-		so.interceptor = interceptor
+		so.unaryServerInterceptor = interceptor
+	}
+}
+
+func StreamServerInterceptor(interceptor grpc.StreamServerInterceptor) ServerOption {
+	return func(so *ServerOptions) {
+		so.streamServerInterceptor = interceptor
 	}
 }
 
@@ -69,7 +79,7 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opt
 		}
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), options.Timeout)
 		defer cancel()
-		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.interceptor)
+		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
 		if err != nil {
 			return err
 		}
@@ -79,7 +89,12 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opt
 		if options.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
-		if err := v.Handler(so.imp, s); err != nil {
+		info := &grpc.StreamServerInfo{
+			FullMethod:     v.StreamName,
+			IsClientStream: v.ClientStreams,
+			IsServerStream: v.ServerStreams,
+		}
+		if err := so.streamServerInterceptor(so.imp, s, info, v.Handler); err != nil {
 			return err
 		}
 	}

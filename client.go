@@ -73,7 +73,10 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 			if err != nil {
 				return err
 			}
-			return rt.Invoke(ctx, method, req, reply, opts...)
+			if err := rt.Invoke(ctx, method, req, reply, opts...); err != nil {
+				return err
+			}
+			return nil
 		},
 		streamClientInterceptor: func(ctx context.Context, desc *grpc.StreamDesc, balance balancer.Picker, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})

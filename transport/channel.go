@@ -36,21 +36,22 @@ type Sender interface {
 	Send(uint32, []byte) error
 }
 
-// messageHeader represents the fixed-length message header of 10 bytes sent
-// with every request.
-var buffers sync.Pool
-
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
 	net.Conn
-	br *bufio.Reader
+	br   *bufio.Reader
+	bw   *bufio.Writer
+	rbuf []byte
+	sync.Mutex
 }
 
 // NewChannel creates a new channel with the given net.Conn.
-func newChannel(conn net.Conn) *channel {
+func newChannel(c net.Conn) *channel {
 	return &channel{
-		Conn: conn,
-		br:   bufio.NewReader(conn),
+		Conn: c,
+		br:   bufio.NewReader(c),
+		bw:   bufio.NewWriter(c),
+		rbuf: make([]byte, messageLengthMax),
 	}
 }
 
@@ -61,14 +62,13 @@ func newChannel(conn net.Conn) *channel {
 // the correct consumer. The bytes on the underlying channel
 // will be discarded.
 func (ch *channel) Recv() (uint32, []byte, error) {
-	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
-	_, err := io.ReadFull(ch.br, hrbuf[:])
-	if err != nil {
+	rbuf := ch.rbuf[:messageHeaderLength]
+	if _, err := io.ReadFull(ch.br, rbuf[:]); err != nil {
 		return 0, nil, err
 	}
 
-	h := binary.BigEndian.Uint32(hrbuf[:4])
-	s := binary.BigEndian.Uint32(hrbuf[4:])
+	h := binary.BigEndian.Uint32(rbuf[:4])
+	s := binary.BigEndian.Uint32(rbuf[4:])
 
 	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {
@@ -78,51 +78,32 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 		return 0, nil, status.OutOfRange.Err()
 	}
 
-	var p []byte
 	if h > 0 {
-		p = ch.getmbuf(int(h))
+		p := ch.rbuf[:h]
 		if _, err := io.ReadFull(ch.br, p); err != nil {
 			return 0, nil, err
 		}
+		return s, p, nil
 	}
-
-	return s, p, nil
+	return s, nil, nil
 }
 
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
 func (ch *channel) Send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
-		return status.DataLoss.Err()
+		return status.OutOfRange.Err()
 	}
-	hwbuf := ch.getmbuf(messageHeaderLength + len(p))
-	defer ch.putmbuf(hwbuf)
-	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
-	binary.BigEndian.PutUint32(hwbuf[4:], streamID)
-	copy(hwbuf[messageHeaderLength:], p)
-
-	_, err := ch.Write(hwbuf)
-	if err != nil {
+	var bw [messageHeaderLength]byte
+	binary.BigEndian.PutUint32(bw[:4], uint32(len(p)))
+	binary.BigEndian.PutUint32(bw[4:], streamID)
+	ch.Lock()
+	defer ch.Unlock()
+	defer ch.bw.Flush()
+	if _, err := ch.bw.Write(bw[:]); err != nil {
+		return err
+	}
+	if _, err := ch.bw.Write(p); err != nil {
 		return err
 	}
 	return nil
-}
-
-// getmbuf returns a buffer from the pool. The buffer is guaranteed to be at least size bytes long.
-func (ch *channel) getmbuf(size int) []byte {
-	// we can't use the standard New method on pool because we want to allocate
-	// based on size.
-	b, ok := buffers.Get().(*[]byte)
-	if !ok || cap(*b) < size {
-		// TODO(stevvooe): It may be better to allocate these in fixed length
-		// buckets to reduce fragmentation but its not clear that would help
-		// with performance. An ilogb approach or similar would work well.
-		return make([]byte, size)
-	}
-	*b = (*b)[:size]
-	return *b
-}
-
-// putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
-func (ch *channel) putmbuf(p []byte) {
-	buffers.Put(&p)
 }

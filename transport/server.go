@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"path"
-	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/status"
@@ -107,7 +106,6 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 	if err != nil {
 		return serverStream{}, err
 	}
-	defer channel.putmbuf(b)
 	var request api.Request
 	if err := encoding.Unmarshal(b, &request); err != nil {
 		return serverStream{}, err
@@ -127,10 +125,8 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	defer c.Close()
 	channel := newChannel(c)
-	var wg sync.WaitGroup
-	defer wg.Wait()
+	defer channel.Close()
 	for {
 		select {
 		case <-ctx.Done():
@@ -140,32 +136,10 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 			if err != nil {
 				return err
 			}
-			wg.Add(1)
-			go func(ss serverStream) {
-				defer func() {
-					if x := recover(); x != nil {
-						// f panicked, which will be fatal because
-						// this is a new goroutine.
-						//
-						// Calling Done will unblock Wait in the main goroutine,
-						// allowing it to race with the fatal panic and
-						// possibly even exit the process (os.Exit(0))
-						// before the panic completes.
-						//
-						// This is almost certainly undesirable,
-						// so instead avoid calling Done and simply panic.
-						panic(x)
-					}
-
-					// f completed normally, or abruptly using goexit.
-					// Either way, decrement the semaphore.
-					wg.Done()
-				}()
-				if err := so.RoundTrip(ctx, &ss, &ss.CallOptions); err != nil {
-					code := int32(status.Code(err))
-					ss.send(&api.Response{Code: code, Message: err.Error()})
-				}
-			}(s)
+			if err := so.RoundTrip(ctx, &s, &s.CallOptions); err != nil {
+				code := int32(status.Code(err))
+				s.send(&api.Response{Code: code, Message: err.Error()})
+			}
 		}
 	}
 }

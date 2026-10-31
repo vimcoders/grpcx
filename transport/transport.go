@@ -134,7 +134,6 @@ func (t *transport) recv() error {
 	if err != nil {
 		return err
 	}
-	defer t.channel.putmbuf(b)
 	s := t.getStream(streamID)
 	if s == nil {
 		return nil
@@ -160,7 +159,7 @@ func (t *transport) createStream(ctx context.Context, opts ...CallOption) (*clie
 	t.Lock()
 	defer t.Unlock()
 	if t.maxStreams > 0 && len(t.streams) >= int(t.maxStreams) {
-		return nil, status.ResourceExhausted.Err()
+		return nil, status.Canceled.Err()
 	}
 	for i := uint32(1); i <= t.maxStreams; i++ {
 		select {
@@ -186,7 +185,7 @@ func (t *transport) createStream(ctx context.Context, opts ...CallOption) (*clie
 			return &s, nil
 		}
 	}
-	return nil, status.ResourceExhausted.Err()
+	return nil, status.Canceled.Err()
 }
 
 // NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.

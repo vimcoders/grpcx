@@ -128,6 +128,7 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	defer c.Close()
 	channel := newChannel(c)
+	go so.flush(ctx, channel)
 	for {
 		select {
 		case <-ctx.Done():
@@ -140,6 +141,21 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 			if err := so.RoundTrip(ctx, &s, &s.CallOptions); err != nil {
 				code := int32(status.Code(err))
 				s.send(&api.Response{Code: code, Message: err.Error()})
+			}
+		}
+	}
+}
+
+func (so *ServerOptions) flush(ctx context.Context, channel *channel) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Canceled.Err()
+		case <-ticker.C:
+			if err := channel.Flush(); err != nil {
+				return err
 			}
 		}
 	}

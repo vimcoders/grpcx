@@ -64,13 +64,16 @@ func putmbuf(p []byte) {
 type channel struct {
 	net.Conn
 	br *bufio.Reader
+	bw *bufio.Writer
+	sync.Mutex
 }
 
 // NewChannel creates a new channel with the given net.Conn.
-func newChannel(conn net.Conn) *channel {
+func newChannel(c net.Conn) *channel {
 	return &channel{
-		Conn: conn,
-		br:   bufio.NewReader(conn),
+		Conn: c,
+		br:   bufio.NewReader(c),
+		bw:   bufio.NewWriterSize(c, 16*1024), // 16KB write buffer
 	}
 }
 
@@ -119,9 +122,16 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
 	binary.BigEndian.PutUint32(hwbuf[4:], streamID)
 	copy(hwbuf[messageHeaderLength:], p)
-
-	if _, err := ch.Write(hwbuf); err != nil {
+	ch.Lock()
+	defer ch.Unlock()
+	if _, err := ch.bw.Write(hwbuf); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (ch *channel) Flush() error {
+	ch.Lock()
+	defer ch.Unlock()
+	return ch.bw.Flush()
 }

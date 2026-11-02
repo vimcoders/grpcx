@@ -20,7 +20,7 @@ const (
 	// defaultStep is the default step of round robin balancer.
 	defaultStep = 1
 	// defaultKeepalive is the default keepalive interval of round robin balancer.
-	defaultKeepalive = time.Minute
+	defaultKeepalive = time.Second * 10
 )
 
 // rrBuilder is the builder of round robin balancer.

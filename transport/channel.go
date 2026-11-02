@@ -40,6 +40,26 @@ type Sender interface {
 // with every request.
 var buffers sync.Pool
 
+// getmbuf returns a buffer from the pool. The buffer is guaranteed to be at least size bytes long.
+func getmbuf(size int) []byte {
+	// we can't use the standard New method on pool because we want to allocate
+	// based on size.
+	b, ok := buffers.Get().(*[]byte)
+	if !ok || cap(*b) < size {
+		// TODO(stevvooe): It may be better to allocate these in fixed length
+		// buckets to reduce fragmentation but its not clear that would help
+		// with performance. An ilogb approach or similar would work well.
+		return make([]byte, size)
+	}
+	*b = (*b)[:size]
+	return *b
+}
+
+// putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
+func putmbuf(p []byte) {
+	buffers.Put(&p)
+}
+
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
 	net.Conn
@@ -78,15 +98,15 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 		return 0, nil, status.OutOfRange.Err()
 	}
 
-	var p []byte
 	if h > 0 {
-		p = ch.getmbuf(int(h))
+		p := getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
 			return 0, nil, err
 		}
+		return s, p, nil
 	}
 
-	return s, p, nil
+	return s, nil, nil
 }
 
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
@@ -94,35 +114,14 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
 		return status.DataLoss.Err()
 	}
-	hwbuf := ch.getmbuf(messageHeaderLength + len(p))
-	defer ch.putmbuf(hwbuf)
+	hwbuf := getmbuf(messageHeaderLength + len(p))
+	defer putmbuf(hwbuf)
 	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
 	binary.BigEndian.PutUint32(hwbuf[4:], streamID)
 	copy(hwbuf[messageHeaderLength:], p)
 
-	_, err := ch.Write(hwbuf)
-	if err != nil {
+	if _, err := ch.Write(hwbuf); err != nil {
 		return err
 	}
 	return nil
-}
-
-// getmbuf returns a buffer from the pool. The buffer is guaranteed to be at least size bytes long.
-func (ch *channel) getmbuf(size int) []byte {
-	// we can't use the standard New method on pool because we want to allocate
-	// based on size.
-	b, ok := buffers.Get().(*[]byte)
-	if !ok || cap(*b) < size {
-		// TODO(stevvooe): It may be better to allocate these in fixed length
-		// buckets to reduce fragmentation but its not clear that would help
-		// with performance. An ilogb approach or similar would work well.
-		return make([]byte, size)
-	}
-	*b = (*b)[:size]
-	return *b
-}
-
-// putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
-func (ch *channel) putmbuf(p []byte) {
-	buffers.Put(&p)
 }

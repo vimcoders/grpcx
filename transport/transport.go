@@ -17,6 +17,7 @@ package transport
 
 import (
 	"context"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ import (
 
 const (
 	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
-	defaultMaxStreams = 250
+	defaultMaxStreams = math.MaxUint16
 	// DefaultTimeout is the default timeout for each request.
 	defaultTimeout = 3 * time.Second
 )
@@ -134,15 +135,25 @@ func (t *transport) recv() error {
 	if err != nil {
 		return err
 	}
-	defer t.channel.putmbuf(b)
+	defer putmbuf(b)
 	s := t.getStream(streamID)
 	if s == nil {
 		return nil
 	}
-	if err := s.process(b); err != nil {
+	var response api.Response
+	if err := encoding.Unmarshal(b, &response); err != nil {
 		return err
 	}
-	return nil
+	select {
+	case s.c <- &response:
+		return nil
+	case <-s.Context().Done():
+		return s.Close()
+	case <-t.ctx.Done():
+		return t.Close()
+	default:
+		return s.Close()
+	}
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.

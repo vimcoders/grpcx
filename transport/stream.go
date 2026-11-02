@@ -98,22 +98,6 @@ func (s *clientStream) send(req *api.Request) error {
 	return s.s.Send(s.id, b)
 }
 
-// receive receives a message from the stream. The message is received with a fixed-length header that includes the stream id. If the stream is closed, an error is returned.
-func (s *clientStream) process(b []byte) error {
-	var response api.Response
-	if err := encoding.Unmarshal(b, &response); err != nil {
-		return err
-	}
-	select {
-	case s.c <- &response:
-		return nil
-	case <-s.ctx.Done():
-		return s.Close()
-	default:
-		return s.Close()
-	}
-}
-
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {

@@ -106,7 +106,7 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 	if err != nil {
 		return serverStream{}, err
 	}
-	defer channel.putmbuf(b)
+	defer putmbuf(b)
 	var request api.Request
 	if err := encoding.Unmarshal(b, &request); err != nil {
 		return serverStream{}, err

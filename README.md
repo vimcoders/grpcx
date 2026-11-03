@@ -11,14 +11,6 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 - 健康检查
 - 元数据传递 mdtadata.MD
 
-## 性能测试
-
-测试环境：Intel i5-14600KF
-
-go version: go1.27.3
-
-执行命令：`go test -bench='Benchmark' -cpu='64,128,256' -benchtime=10s -benchmem ./bench/...`
-
 ## Performance
 
 Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.

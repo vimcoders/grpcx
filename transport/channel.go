@@ -121,14 +121,14 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	if len(p) > messageLengthMax {
 		return status.DataLoss.Err()
 	}
-	hwbuf := getmbuf(messageHeaderLength + len(p))
-	defer putmbuf(hwbuf)
-	binary.BigEndian.PutUint32(hwbuf[:4], uint32(len(p)))
-	binary.BigEndian.PutUint32(hwbuf[4:], streamID)
-	copy(hwbuf[messageHeaderLength:], p)
+	buf := getmbuf(messageHeaderLength + len(p))
+	defer putmbuf(buf)
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(p)))
+	binary.BigEndian.PutUint32(buf[4:], streamID)
+	copy(buf[messageHeaderLength:], p)
 	ch.Lock()
 	defer ch.Unlock()
-	if _, err := ch.bw.Write(hwbuf); err != nil {
+	if _, err := ch.bw.Write(buf); err != nil {
 		return err
 	}
 	if ch.bw.Buffered() == 0 {

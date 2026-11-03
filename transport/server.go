@@ -126,8 +126,8 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	defer c.Close()
 	channel := newChannel(c)
+	defer channel.Close()
 	for {
 		select {
 		case <-ctx.Done():

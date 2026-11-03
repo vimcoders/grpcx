@@ -30,7 +30,7 @@ import (
 const (
 	messageHeaderLength  = 8
 	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
-	defaultFlushInterval = 100 * time.Microsecond
+	defaultFlushInterval = time.Millisecond
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -77,13 +77,7 @@ func newChannel(c net.Conn) *channel {
 		Conn: c,
 		br:   bufio.NewReader(c),
 		bw:   bufio.NewWriterSize(c, 16*1024), // 16KB write buffer
-
 	}
-	x.push = time.AfterFunc(defaultFlushInterval, func() {
-		x.Lock()
-		defer x.Unlock()
-		_ = x.bw.Flush()
-	})
 	return x
 }
 
@@ -134,15 +128,30 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	copy(hwbuf[messageHeaderLength:], p)
 	ch.Lock()
 	defer ch.Unlock()
-	ch.push.Reset(defaultFlushInterval)
 	if _, err := ch.bw.Write(hwbuf); err != nil {
 		return err
 	}
+	if ch.bw.Buffered() == 0 {
+		return nil
+	}
+	if ch.push != nil && ch.push.Stop() {
+		ch.push.Reset(defaultFlushInterval)
+		return nil
+	}
+	ch.push = time.AfterFunc(defaultFlushInterval, func() {
+		ch.Lock()
+		defer ch.Unlock()
+		ch.bw.Flush()
+	})
 	return nil
 }
 
 func (ch *channel) Close() error {
-	defer ch.push.Stop()
+	ch.Lock()
+	defer ch.Unlock()
 	ch.bw.Flush()
+	if ch.push != nil {
+		ch.push.Stop()
+	}
 	return ch.Conn.Close()
 }

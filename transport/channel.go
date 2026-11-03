@@ -22,13 +22,15 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/vimcoders/grpcx/status"
 )
 
 const (
-	messageHeaderLength = 8
-	messageLengthMax    = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
+	messageHeaderLength  = 8
+	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
+	defaultFlushInterval = 100 * time.Microsecond
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -63,18 +65,26 @@ func putmbuf(p []byte) {
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
 	net.Conn
-	br *bufio.Reader
-	bw *bufio.Writer
+	br   *bufio.Reader
+	bw   *bufio.Writer
+	push *time.Timer
 	sync.Mutex
 }
 
 // NewChannel creates a new channel with the given net.Conn.
 func newChannel(c net.Conn) *channel {
-	return &channel{
+	x := &channel{
 		Conn: c,
 		br:   bufio.NewReader(c),
 		bw:   bufio.NewWriterSize(c, 16*1024), // 16KB write buffer
+
 	}
+	x.push = time.AfterFunc(defaultFlushInterval, func() {
+		x.Lock()
+		defer x.Unlock()
+		_ = x.bw.Flush()
+	})
+	return x
 }
 
 // recv a message from the channel. The returned buffer contains the message.
@@ -124,14 +134,14 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	copy(hwbuf[messageHeaderLength:], p)
 	ch.Lock()
 	defer ch.Unlock()
+	ch.push.Reset(defaultFlushInterval)
 	if _, err := ch.bw.Write(hwbuf); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (ch *channel) Flush() error {
-	ch.Lock()
-	defer ch.Unlock()
-	return ch.bw.Flush()
+func (ch *channel) Close() error {
+	defer ch.push.Stop()
+	return ch.Conn.Close()
 }

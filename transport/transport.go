@@ -112,7 +112,6 @@ func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripp
 		o(rt)
 	}
 	go rt.run(ctx)
-	go rt.flush(ctx)
 	return rt, nil
 }
 
@@ -125,22 +124,6 @@ func (t *transport) run(ctx context.Context) error {
 			return status.Canceled.Err()
 		default:
 			if err := t.recv(); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-func (t *transport) flush(ctx context.Context) error {
-	defer t.Close()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return status.Canceled.Err()
-		case <-ticker.C:
-			if err := t.channel.Flush(); err != nil {
 				return err
 			}
 		}
@@ -297,6 +280,7 @@ func (t *transport) Close() error {
 			delete(t.streams, s.id)
 		}
 		t.maxStreams = 0
+		t.channel.Close()
 	})
-	return t.channel.Close()
+	return nil
 }

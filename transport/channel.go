@@ -31,6 +31,7 @@ const (
 	messageHeaderLength  = 8
 	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
 	defaultFlushInterval = time.Millisecond
+	defaultBufSize       = 16 * 1024 // 16k 与linux内核发送缓冲区保持一致
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -76,7 +77,7 @@ func newChannel(c net.Conn) *channel {
 	x := &channel{
 		Conn: c,
 		br:   bufio.NewReader(c),
-		bw:   bufio.NewWriterSize(c, 16*1024), // 16KB write buffer
+		bw:   bufio.NewWriterSize(c, defaultBufSize),
 	}
 	return x
 }

@@ -21,30 +21,30 @@ go version: go1.27.3
 
 ## Performance
 
-Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. Client and server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.
+Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.
 
 ### Latency & Throughput
 
 | Payload | Concurrency | gRPC ns/op | grpcx ns/op | Speedup | gRPC QPS | grpcx QPS |
 |---------|-------------|------------|-------------|---------|----------|-----------|
-| 1KB     | 64          | 18,072     | 8,664       | 2.09x   | 55,334   | 115,421   |
-| 1KB     | 128         | 18,311     | 9,474       | 1.93x   | 54,612   | 105,552   |
-| 1KB     | 256         | 19,101     | 11,225      | 1.70x   | 52,353   | 89,087    |
-| 1KB     | 512         | 23,113     | 14,984      | 1.54x   | 43,266   | 66,738    |
-| 5KB     | 64          | 24,839     | 26,454      | 0.94x   | 40,259   | 37,802    |
-| 5KB     | 128         | 27,694     | 29,003      | 0.95x   | 36,109   | 34,479    |
-| 5KB     | 256         | 30,995     | 33,253      | 0.93x   | 32,263   | 30,072    |
-| 5KB     | 512         | 36,248     | 41,382      | 0.88x   | 27,588   | 24,165    |
-| 1MB     | 64          | 2,016,395  | 1,912,508   | 1.05x   | 496      | 523       |
-| 1MB     | 128         | 2,025,683  | 1,854,446   | 1.09x   | 494      | 539       |
-| 1MB     | 256         | 2,484,781  | 1,813,479   | 1.37x   | 402      | 551       |
-| 1MB     | 512         | 2,461,573  | 2,330,987   | 1.06x   | 406      | 429       |
+| 1KB     | 64          | 14,122     | 5,199       | 2.72x   | 70,811   | 192,344   |
+| 1KB     | 128         | 14,884     | 5,253       | 2.83x   | 67,186   | 190,363   |
+| 1KB     | 256         | 14,028     | 5,371       | 2.61x   | 71,286   | 186,186   |
+| 1KB     | 512         | 14,143     | 5,873       | 2.41x   | 70,706   | 170,270   |
+| 5KB     | 64          | 22,766     | 15,521      | 1.47x   | 43,925   | 64,429    |
+| 5KB     | 128         | 19,467     | 16,113      | 1.21x   | 51,369   | 62,062    |
+| 5KB     | 256         | 18,829     | 15,145      | 1.24x   | 53,110   | 66,028    |
+| 5KB     | 512         | 20,036     | 17,364      | 1.15x   | 49,910   | 57,590    |
+| 1MB     | 64          | 1,555,683  | 1,837,359   | 0.85x   | 643      | 544       |
+| 1MB     | 128         | 1,511,498  | 1,803,188   | 0.84x   | 662      | 555       |
+| 1MB     | 256         | 1,595,678  | 1,805,129   | 0.88x   | 627      | 554       |
+| 1MB     | 512         | 1,508,720  | 1,810,798   | 0.83x   | 663      | 552       |
 
 ### Summary
 
-- **1KB**: grpcx leads across all concurrency levels, speedup 1.54x~2.09x, peak QPS 115K.
-- **5KB**: roughly on par (0.88x~0.95x).
-- **1MB**: grpcx leads 1.05x~1.37x.
+- **1KB**: grpcx leads across all concurrency levels, speedup 2.41x~2.83x, peak QPS 192K.
+- **5KB**: grpcx leads 1.15x~1.47x.
+- **1MB**: gRPC leads 0.83x~0.88x (large-payload copy cost dominates).
 ## 架构设计：与标准 gRPC 分层对应
 grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计，完整保留 gRPC 经过验证的核心编程模型，仅替换标准化但沉重的 HTTP/2 传输栈，实现内网场景的极致性能。
 

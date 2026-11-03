@@ -43,7 +43,6 @@ services:
       start_period: 10s
   bench-1k:
     image: golang:1.27.3
-    cpus: "1"
     working_dir: /app
     volumes:
       - .:/app
@@ -60,7 +59,6 @@ services:
         go test -bench "^Benchmark1K$" -cpu="64,128,256,512" -benchtime=10s -benchmem -count=1 ./bench/grpcx
   bench-5k:
     image: golang:1.27.3
-    cpus: "1"
     working_dir: /app
     volumes:
       - .:/app
@@ -77,7 +75,6 @@ services:
         go test -bench "^Benchmark5K$" -cpu="64,128,256,512" -benchtime=10s -benchmem -count=1 ./bench/grpcx
   bench-1024k:
     image: golang:1.27.3
-    cpus: "1"
     working_dir: /app
     volumes:
       - .:/app

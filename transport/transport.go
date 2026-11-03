@@ -78,18 +78,18 @@ type transport struct {
 	sync.Once
 }
 
-// Dial creates a new ttrpc transport to the given target.
-func Dial(target string, opts ...Option) (RoundTripper, error) {
-	return DialContext(context.Background(), target, opts...)
+// Dial creates a new ttrpc transport to the given endpoint.
+func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
+	return DialContext(context.Background(), endpoint, opts...)
 }
 
-// DialContext creates a new ttrpc transport to the given target with the given context.
-func DialContext(ctx context.Context, target string, opts ...Option) (RoundTripper, error) {
+// DialContext creates a new ttrpc transport to the given endpoint with the given context.
+func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	dialContext := func(ctx context.Context) (net.Conn, error) {
 		d := net.Dialer{
 			KeepAlive: time.Minute,
 		}
-		cc, err := d.DialContext(ctx, "tcp", target)
+		cc, err := d.DialContext(ctx, "tcp", endpoint)
 		if err != nil {
 			return nil, err
 		}

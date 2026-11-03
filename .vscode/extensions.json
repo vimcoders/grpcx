@@ -5,6 +5,10 @@
     "appulate.filewatcher",
     // Go for Visual Studio Code
     "golang.go",
+    // Go Test Explorer
+    "moonshot-ai.kimi-code",
+    // Go Test Explorer
+    "kingleo.kimi-vscode"
   ],
   // 不推荐的扩展（可选）
   "unwantedRecommendations": []

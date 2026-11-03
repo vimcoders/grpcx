@@ -65,9 +65,9 @@ func putmbuf(p []byte) {
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
 	net.Conn
-	br   *bufio.Reader
-	bw   *bufio.Writer
-	push *time.Timer
+	br *bufio.Reader
+	bw *bufio.Writer
+	t  *time.Timer
 	sync.Mutex
 }
 
@@ -134,11 +134,11 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 	if ch.bw.Buffered() == 0 {
 		return nil
 	}
-	if ch.push != nil && ch.push.Stop() {
-		ch.push.Reset(defaultFlushInterval)
+	if ch.t != nil && ch.t.Stop() {
+		ch.t.Reset(defaultFlushInterval)
 		return nil
 	}
-	ch.push = time.AfterFunc(defaultFlushInterval, func() {
+	ch.t = time.AfterFunc(defaultFlushInterval, func() {
 		ch.Lock()
 		defer ch.Unlock()
 		ch.bw.Flush()
@@ -150,8 +150,8 @@ func (ch *channel) Close() error {
 	ch.Lock()
 	defer ch.Unlock()
 	ch.bw.Flush()
-	if ch.push != nil {
-		ch.push.Stop()
+	if ch.t != nil {
+		ch.t.Stop()
 	}
 	return ch.Conn.Close()
 }

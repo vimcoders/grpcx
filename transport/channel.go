@@ -143,5 +143,6 @@ func (ch *channel) Send(streamID uint32, p []byte) error {
 
 func (ch *channel) Close() error {
 	defer ch.push.Stop()
+	ch.bw.Flush()
 	return ch.Conn.Close()
 }

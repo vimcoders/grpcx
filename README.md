@@ -13,33 +13,33 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 
 ## Performance
 
-Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.
+Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. client benchmark container runs unconstrained, server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.
 
 ### Latency & Throughput
 
 | Payload | Concurrency | gRPC ns/op | grpcx ns/op | Speedup | gRPC QPS | grpcx QPS |
 |---------|-------------|------------|-------------|---------|----------|-----------|
-| 1KB     | 64          | 15,658     | 5,213       | 3.00x   | 63,865   | 191,828   |
-| 1KB     | 128         | 13,740     | 5,269       | 2.61x   | 72,780   | 189,790   |
-| 1KB     | 256         | 14,218     | 5,108       | 2.78x   | 70,333   | 195,771   |
-| 1KB     | 512         | 12,986     | 5,481       | 2.37x   | 77,006   | 182,448   |
-| 1KB     | 1024        | 14,063     | 6,225       | 2.26x   | 71,109   | 160,643   |
-| 5KB     | 64          | 21,060     | 15,370      | 1.37x   | 47,483   | 65,062    |
-| 5KB     | 128         | 18,049     | 15,503      | 1.16x   | 55,405   | 64,504    |
-| 5KB     | 256         | 19,791     | 16,139      | 1.23x   | 50,528   | 61,962    |
-| 5KB     | 512         | 21,061     | 15,285      | 1.38x   | 47,481   | 65,424    |
-| 5KB     | 1024        | 20,110     | 15,165      | 1.33x   | 49,727   | 65,941    |
-| 1MB     | 64          | 1,538,550  | 1,887,901   | 0.81x   | 650      | 530       |
-| 1MB     | 128         | 1,575,642  | 1,830,715   | 0.86x   | 635      | 546       |
-| 1MB     | 256         | 1,620,707  | 1,795,969   | 0.90x   | 617      | 557       |
-| 1MB     | 512         | 1,526,865  | 1,829,755   | 0.83x   | 655      | 547       |
-| 1MB     | 1024        | 1,579,061  | 1,801,204   | 0.88x   | 633      | 555       |
+| 1KB     | 64          | 14,994     | 5,024       | 2.98x   | 66,693   | 199,045   |
+| 1KB     | 128         | 13,610     | 5,037       | 2.70x   | 73,475   | 198,531   |
+| 1KB     | 256         | 13,351     | 4,904       | 2.72x   | 74,901   | 203,915   |
+| 1KB     | 512         | 13,350     | 5,472       | 2.44x   | 74,906   | 182,749   |
+| 1KB     | 1024        | 15,349     | 6,089       | 2.52x   | 65,151   | 164,231   |
+| 5KB     | 64          | 19,965     | 14,980      | 1.33x   | 50,088   | 66,756    |
+| 5KB     | 128         | 19,925     | 15,122      | 1.32x   | 50,188   | 66,129    |
+| 5KB     | 256         | 18,371     | 15,390      | 1.19x   | 54,434   | 64,977    |
+| 5KB     | 512         | 19,252     | 15,302      | 1.26x   | 51,943   | 65,351    |
+| 5KB     | 1024        | 21,974     | 15,106      | 1.45x   | 45,508   | 66,199    |
+| 1MB     | 64          | 1,491,110  | 1,656,198   | 0.90x   | 671      | 604       |
+| 1MB     | 128         | 1,757,503  | 1,625,905   | 1.08x   | 569      | 615       |
+| 1MB     | 256         | 1,528,851  | 1,607,528   | 0.95x   | 654      | 622       |
+| 1MB     | 512         | 1,658,307  | 1,572,543   | 1.05x   | 603      | 636       |
+| 1MB     | 1024        | 1,664,345  | 1,558,613   | 1.07x   | 601      | 642       |
 
 ### Summary
 
-- **1KB**: grpcx leads across all concurrency levels, speedup 2.26x~3.00x, peak QPS 195K.
-- **5KB**: grpcx leads 1.16x~1.38x.
-- **1MB**: gRPC leads 0.81x~0.90x (large-payload copy cost dominates).
+- **1KB**: grpcx leads across all concurrency levels, speedup 2.44x~2.98x, peak QPS 203K.
+- **5KB**: grpcx leads 1.19x~1.45x.
+- **1MB**: grpcx close to parity, 0.90x~1.08x; leads at 128/512/1024 concurrency (writev large-message path, ~12% faster than previous release).
 ## 架构设计：与标准 gRPC 分层对应
 grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计，完整保留 gRPC 经过验证的核心编程模型，仅替换标准化但沉重的 HTTP/2 传输栈，实现内网场景的极致性能。
 

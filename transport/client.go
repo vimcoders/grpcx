@@ -131,21 +131,24 @@ func (c *client) run(ctx context.Context) error {
 }
 
 func (c *client) recv() error {
-	streamID, b, err := c.channel.Recv()
+	streamID, h, p, err := c.channel.Recv()
 	if err != nil {
 		return err
 	}
-	defer putmbuf(b)
+	defer putmbuf(h)
 	s := c.getStream(streamID)
 	if s == nil {
 		return nil
 	}
-	var response api.Response
-	if err := encoding.Unmarshal(b, &response); err != nil {
+	var header api.Header
+	if err := encoding.Unmarshal(h, &header); err != nil {
 		return err
 	}
 	select {
-	case s.c <- &response:
+	case s.c <- &api.Response{
+		Header:  &header,
+		Payload: p,
+	}:
 		return nil
 	case <-s.Context().Done():
 		return s.Close()

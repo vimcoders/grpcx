@@ -21,20 +21,101 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Request struct {
+type Header struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Service       string                 `protobuf:"bytes,1,opt,name=Service,proto3" json:"Service,omitempty"`
 	Method        string                 `protobuf:"bytes,2,opt,name=Method,proto3" json:"Method,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,3,opt,name=Payload,proto3" json:"Payload,omitempty"`
-	Timeout       int64                  `protobuf:"varint,4,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
-	Metadatas     []string               `protobuf:"bytes,5,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
+	Timeout       int64                  `protobuf:"varint,3,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
+	Metadatas     []string               `protobuf:"bytes,4,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
+	Code          int32                  `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
+	Message       string                 `protobuf:"bytes,6,opt,name=Message,proto3" json:"Message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Header) Reset() {
+	*x = Header{}
+	mi := &file_api_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Header) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Header) ProtoMessage() {}
+
+func (x *Header) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Header.ProtoReflect.Descriptor instead.
+func (*Header) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Header) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *Header) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *Header) GetTimeout() int64 {
+	if x != nil {
+		return x.Timeout
+	}
+	return 0
+}
+
+func (x *Header) GetMetadatas() []string {
+	if x != nil {
+		return x.Metadatas
+	}
+	return nil
+}
+
+func (x *Header) GetCode() int32 {
+	if x != nil {
+		return x.Code
+	}
+	return 0
+}
+
+func (x *Header) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type Request struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Header        *Header                `protobuf:"bytes,1,opt,name=Header,proto3" json:"Header,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Request) Reset() {
 	*x = Request{}
-	mi := &file_api_proto_msgTypes[0]
+	mi := &file_api_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -46,7 +127,7 @@ func (x *Request) String() string {
 func (*Request) ProtoMessage() {}
 
 func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[0]
+	mi := &file_api_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -59,21 +140,14 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Request.ProtoReflect.Descriptor instead.
 func (*Request) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{0}
+	return file_api_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Request) GetService() string {
+func (x *Request) GetHeader() *Header {
 	if x != nil {
-		return x.Service
+		return x.Header
 	}
-	return ""
-}
-
-func (x *Request) GetMethod() string {
-	if x != nil {
-		return x.Method
-	}
-	return ""
+	return nil
 }
 
 func (x *Request) GetPayload() []byte {
@@ -83,32 +157,17 @@ func (x *Request) GetPayload() []byte {
 	return nil
 }
 
-func (x *Request) GetTimeout() int64 {
-	if x != nil {
-		return x.Timeout
-	}
-	return 0
-}
-
-func (x *Request) GetMetadatas() []string {
-	if x != nil {
-		return x.Metadatas
-	}
-	return nil
-}
-
 type Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          int32                  `protobuf:"varint,1,opt,name=Code,proto3" json:"Code,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=Message,proto3" json:"Message,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,3,opt,name=Payload,proto3" json:"Payload,omitempty"`
+	Header        *Header                `protobuf:"bytes,1,opt,name=Header,proto3" json:"Header,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Response) Reset() {
 	*x = Response{}
-	mi := &file_api_proto_msgTypes[1]
+	mi := &file_api_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -120,7 +179,7 @@ func (x *Response) String() string {
 func (*Response) ProtoMessage() {}
 
 func (x *Response) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[1]
+	mi := &file_api_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -133,21 +192,14 @@ func (x *Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Response.ProtoReflect.Descriptor instead.
 func (*Response) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{1}
+	return file_api_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *Response) GetCode() int32 {
+func (x *Response) GetHeader() *Header {
 	if x != nil {
-		return x.Code
+		return x.Header
 	}
-	return 0
-}
-
-func (x *Response) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
+	return nil
 }
 
 func (x *Response) GetPayload() []byte {
@@ -161,17 +213,20 @@ var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
-	"\tapi.proto\x12\x03api\"\x8d\x01\n" +
-	"\aRequest\x12\x18\n" +
+	"\tapi.proto\x12\x03api\"\xa0\x01\n" +
+	"\x06Header\x12\x18\n" +
 	"\aService\x18\x01 \x01(\tR\aService\x12\x16\n" +
 	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
-	"\aPayload\x18\x03 \x01(\fR\aPayload\x12\x18\n" +
-	"\aTimeout\x18\x04 \x01(\x03R\aTimeout\x12\x1c\n" +
-	"\tMetadatas\x18\x05 \x03(\tR\tMetadatas\"R\n" +
-	"\bResponse\x12\x12\n" +
-	"\x04Code\x18\x01 \x01(\x05R\x04Code\x12\x18\n" +
-	"\aMessage\x18\x02 \x01(\tR\aMessage\x12\x18\n" +
-	"\aPayload\x18\x03 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
+	"\aTimeout\x18\x03 \x01(\x03R\aTimeout\x12\x1c\n" +
+	"\tMetadatas\x18\x04 \x03(\tR\tMetadatas\x12\x12\n" +
+	"\x04Code\x18\x05 \x01(\x05R\x04Code\x12\x18\n" +
+	"\aMessage\x18\x06 \x01(\tR\aMessage\"H\n" +
+	"\aRequest\x12#\n" +
+	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
+	"\aPayload\x18\x02 \x01(\fR\aPayload\"I\n" +
+	"\bResponse\x12#\n" +
+	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
+	"\aPayload\x18\x02 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_api_proto_rawDescOnce sync.Once
@@ -185,17 +240,20 @@ func file_api_proto_rawDescGZIP() []byte {
 	return file_api_proto_rawDescData
 }
 
-var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_api_proto_goTypes = []any{
-	(*Request)(nil),  // 0: api.Request
-	(*Response)(nil), // 1: api.Response
+	(*Header)(nil),   // 0: api.Header
+	(*Request)(nil),  // 1: api.Request
+	(*Response)(nil), // 2: api.Response
 }
 var file_api_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: api.Request.Header:type_name -> api.Header
+	0, // 1: api.Response.Header:type_name -> api.Header
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_init() }
@@ -209,7 +267,7 @@ func file_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_rawDesc), len(file_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

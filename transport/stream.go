@@ -61,15 +61,17 @@ func (s *clientStream) SendMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	req := &api.Request{
+	header := &api.Header{
 		Method:  s.Method,
 		Timeout: s.Timeout.Milliseconds(),
-		Payload: b,
 	}
 	for k, v := range s.Metadatas {
-		req.Metadatas = append(req.Metadatas, k, v)
+		header.Metadatas = append(header.Metadatas, k, v)
 	}
-	return s.send(req)
+	return s.send(&api.Request{
+		Header:  header,
+		Payload: b,
+	})
 }
 
 func (s *clientStream) RecvMsg(m any) error {
@@ -77,9 +79,10 @@ func (s *clientStream) RecvMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	code := codes.Code(response.Code)
+	defer putmbuf(response.Payload)
+	code := codes.Code(response.Header.Code)
 	if code != codes.OK {
-		return status.Error(code, response.Message)
+		return status.Error(code, response.Header.Message)
 	}
 	if err := s.Unmarshal(response.Payload, m); err != nil {
 		return err
@@ -93,11 +96,11 @@ func (s *clientStream) Context() context.Context {
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
 func (s *clientStream) send(req *api.Request) error {
-	b, err := encoding.Marshal(req)
+	h, err := encoding.Marshal(req.Header)
 	if err != nil {
 		return err
 	}
-	return s.s.Send(s.id, b)
+	return s.s.Send(s.id, h, req.Payload)
 }
 
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
@@ -149,7 +152,7 @@ type serverStream struct {
 	ctx context.Context
 	id  uint32
 	s   Sender
-	b   []byte
+	p   []byte
 	CallOptions
 }
 
@@ -158,11 +161,11 @@ func (s *serverStream) Context() context.Context {
 }
 
 func (s *serverStream) send(resp *api.Response) error {
-	b, err := encoding.Marshal(resp)
+	h, err := encoding.Marshal(resp.Header)
 	if err != nil {
 		return err
 	}
-	return s.s.Send(s.id, b)
+	return s.s.Send(s.id, h, resp.Payload)
 }
 
 func (s *serverStream) SendMsg(m any) error {
@@ -171,18 +174,15 @@ func (s *serverStream) SendMsg(m any) error {
 		return err
 	}
 	resp := &api.Response{
-		Code:    int32(codes.OK),
-		Message: codes.OK.String(),
+		Header: &api.Header{
+			Code: int32(codes.OK),
+		},
 		Payload: b,
 	}
 	return s.send(resp)
 }
 
 func (s *serverStream) RecvMsg(m any) error {
-	return s.Unmarshal(s.b, m)
-}
-
-// close closes the stream and releases any resources associated with it.
-func (s *serverStream) Close() error {
-	return nil
+	defer putmbuf(s.p)
+	return s.Unmarshal(s.p, m)
 }

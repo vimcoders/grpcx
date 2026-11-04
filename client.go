@@ -108,7 +108,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	info := balancer.PickInfo{
-		FullMethodName: req.Method,
+		FullMethodName: req.Header.Method,
 	}
 	rt, err := c.Pick(ctx, info)
 	if err != nil {

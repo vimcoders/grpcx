@@ -3,16 +3,21 @@ package api;
 
 option go_package = "./;api";
 
-message Request {
+message Header {
   string Service = 1;
   string Method = 2;
-  bytes Payload = 3;
-  int64 Timeout = 4;
-  repeated string Metadatas = 5;
+  int64 Timeout = 3;
+  repeated string Metadatas = 4;
+  int32 Code = 5;
+  string Message = 6;
+}
+
+message Request {
+  Header Header = 1;
+  bytes Payload = 2;
 }
 
 message Response {
-  int32 Code = 1;
-  string Message = 2;
-  bytes Payload = 3;
+  Header Header = 1;
+  bytes Payload = 2;
 }

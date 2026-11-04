@@ -131,7 +131,7 @@ func (c *client) run(ctx context.Context) error {
 }
 
 func (c *client) recv() error {
-	streamID, h, p, err := c.channel.Recv()
+	streamID, h, err := c.channel.Recv()
 	if err != nil {
 		return err
 	}
@@ -144,11 +144,16 @@ func (c *client) recv() error {
 	if err := encoding.Unmarshal(h, &header); err != nil {
 		return err
 	}
-	select {
-	case s.c <- &api.Response{
+	_, p, err := c.channel.Recv()
+	if err != nil {
+		return err
+	}
+	response := &api.Response{
 		Header:  &header,
 		Payload: p,
-	}:
+	}
+	select {
+	case s.c <- response:
 		return nil
 	case <-s.Context().Done():
 		return s.Close()

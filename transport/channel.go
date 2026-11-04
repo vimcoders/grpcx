@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	messageHeaderLength  = 12
+	messageHeaderLength  = 8
 	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
 	defaultFlushInterval = time.Millisecond
 	defaultBufSize       = 16 * 1024 // 16k 与linux内核发送缓冲区保持一致
@@ -36,7 +36,7 @@ const (
 
 // Sender is the interface for sending messages to a channel.
 type Sender interface {
-	Send(uint32, []byte, []byte) error
+	Send(uint32, ...[]byte) error
 }
 
 // messageHeader represents the fixed-length message header of 10 bytes sent
@@ -88,48 +88,52 @@ func newChannel(c net.Conn) *channel {
 // returned will be valid and caller should send that along to
 // the correct consumer. The bytes on the underlying channel
 // will be discarded.
-func (ch *channel) Recv() (uint32, []byte, []byte, error) {
+func (ch *channel) Recv() (uint32, []byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 	_, err := io.ReadFull(ch.br, hrbuf[:])
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 
 	s := binary.BigEndian.Uint32(hrbuf[:4])
-	h := binary.BigEndian.Uint32(hrbuf[4:8])
-	p := binary.BigEndian.Uint32(hrbuf[8:messageHeaderLength])
+	h := binary.BigEndian.Uint32(hrbuf[4:messageHeaderLength])
 
-	if h > uint32(messageLengthMax) || p > uint32(messageLengthMax) {
+	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 
-		return 0, nil, nil, status.OutOfRange.Err()
+		return 0, nil, status.OutOfRange.Err()
 	}
 
-	header, payload := getmbuf(int(h)), getmbuf(int(p))
-	if _, err := io.ReadFull(ch.br, header); err != nil {
-		return 0, nil, nil, err
-	}
-	if _, err := io.ReadFull(ch.br, payload); err != nil {
-		return 0, nil, nil, err
+	if h > 0 {
+		payload := getmbuf(int(h))
+		if _, err := io.ReadFull(ch.br, payload); err != nil {
+			return 0, nil, err
+		}
+		return s, payload, nil
 	}
 
-	return s, header, payload, nil
+	return s, nil, nil
 }
 
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
-func (ch *channel) Send(streamID uint32, h, p []byte) error {
-	if len(p) > messageLengthMax {
-		return status.DataLoss.Err()
+func (ch *channel) Send(streamID uint32, p ...[]byte) error {
+	for _, b := range p {
+		if len(b) > messageLengthMax {
+			return status.OutOfRange.Err()
+		}
 	}
-	var hwbuf [messageHeaderLength]byte // avoid alloc when writing header
-	binary.BigEndian.PutUint32(hwbuf[:4], streamID)
-	binary.BigEndian.PutUint32(hwbuf[4:8], uint32(len(h)))
-	binary.BigEndian.PutUint32(hwbuf[8:messageHeaderLength], uint32(len(p)))
+
 	ch.Lock()
 	defer ch.Unlock()
-	for _, b := range [][]byte{hwbuf[:], h, p} {
+	for _, b := range p {
+		var hwbuf [messageHeaderLength]byte // avoid alloc when writing header
+		binary.BigEndian.PutUint32(hwbuf[:4], streamID)
+		binary.BigEndian.PutUint32(hwbuf[4:messageHeaderLength], uint32(len(b)))
+		if _, err := ch.bw.Write(hwbuf[:]); err != nil {
+			return err
+		}
 		if _, err := ch.bw.Write(b); err != nil {
 			return err
 		}

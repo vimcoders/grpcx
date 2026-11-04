@@ -68,7 +68,8 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // NewServer creates a new ttrpc server with the given options.
-func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opts ...CallOption) error {
+func (so *ServerOptions) RoundTrip(ctx context.Context, s ServerStream, opts ...CallOption) error {
+	defer s.Close()
 	options := defaultCallOptions
 	for _, opt := range opts {
 		opt.apply(&options)
@@ -102,13 +103,17 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s grpc.ServerStream, opt
 }
 
 func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (serverStream, error) {
-	streamID, h, p, err := channel.Recv()
+	streamID, h, err := channel.Recv()
 	if err != nil {
 		return serverStream{}, err
 	}
 	defer putmbuf(h)
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
+		return serverStream{}, err
+	}
+	_, p, err := channel.Recv()
+	if err != nil {
 		return serverStream{}, err
 	}
 	metadatas := metadata.Pairs(header.Metadatas...)

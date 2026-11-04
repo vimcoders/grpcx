@@ -18,6 +18,7 @@ package transport
 
 import (
 	"context"
+	"io"
 	"sync"
 	"time"
 
@@ -173,16 +174,34 @@ func (s *serverStream) SendMsg(m any) error {
 	if err != nil {
 		return err
 	}
+	header := &api.Header{
+		Code:    int32(codes.OK),
+		Timeout: s.Timeout.Milliseconds(),
+		Method:  s.Method,
+	}
+	for k, v := range s.Metadatas {
+		header.Metadatas = append(header.Metadatas, k, v)
+	}
 	resp := &api.Response{
-		Header: &api.Header{
-			Code: int32(codes.OK),
-		},
+		Header:  header,
 		Payload: b,
 	}
 	return s.send(resp)
 }
 
 func (s *serverStream) RecvMsg(m any) error {
+	if err := s.Unmarshal(s.p, m); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *serverStream) Close() error {
 	defer putmbuf(s.p)
-	return s.Unmarshal(s.p, m)
+	return nil
+}
+
+type ServerStream interface {
+	grpc.ServerStream
+	io.Closer
 }

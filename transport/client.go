@@ -173,31 +173,24 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 	if c.maxStreams > 0 && len(c.streams) >= int(c.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}
-	for i := uint32(1); i <= c.maxStreams; i++ {
-		select {
-		case <-ctx.Done():
-			return nil, status.Canceled.Err()
-		default:
-			streamID := c.streamID + i
-			if _, ok := c.streams[streamID]; ok {
-				return nil, status.ResourceExhausted.Err()
-			}
-			cancelCtx, cancel := context.WithCancel(ctx)
-			s := clientStream{
-				ctx:          cancelCtx,
-				id:           streamID,
-				s:            c.channel,
-				CallOptions:  options,
-				Cancel:       cancel,
-				deleteStream: c.deleteStream,
-				c:            make(chan *api.Response, 1),
-			}
-			c.streams[s.id] = &s
-			c.streamID = streamID
-			return &s, nil
-		}
+
+	streamID := c.streamID + 1
+	if _, ok := c.streams[streamID]; ok {
+		return nil, status.ResourceExhausted.Err()
 	}
-	return nil, status.ResourceExhausted.Err()
+	cancelCtx, cancel := context.WithCancel(ctx)
+	s := clientStream{
+		ctx:          cancelCtx,
+		id:           streamID,
+		s:            c.channel,
+		CallOptions:  options,
+		Cancel:       cancel,
+		deleteStream: c.deleteStream,
+		c:            make(chan *api.Response, 1),
+	}
+	c.streams[s.id] = &s
+	c.streamID = streamID
+	return &s, nil
 }
 
 // NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.

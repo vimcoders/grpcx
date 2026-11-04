@@ -33,18 +33,20 @@ import (
 type clientStream struct {
 	grpc.ClientStream
 	CallOptions
-	ctx    context.Context
-	id     uint32
-	s      Sender
-	c      chan *api.Response
-	Cancel context.CancelFunc
-	t      *transport
+	ctx          context.Context
+	id           uint32
+	s            Sender
+	c            chan *api.Response
+	Cancel       context.CancelFunc
+	deleteStream func(id uint32)
 	sync.Once
 }
 
 func (s *clientStream) CloseSend() error {
 	s.Once.Do(func() {
-		s.t.deleteStream(s.id)
+		if s.deleteStream != nil {
+			s.deleteStream(s.id)
+		}
 	})
 	return s.Close()
 }

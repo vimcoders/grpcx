@@ -40,31 +40,31 @@ const (
 )
 
 // RoundTripper is the interface for sending and receiving messages over a transport.
-type Option func(*transport)
+type Option func(*client)
 
 // WithCodec sets the codec for the ttrpc transport.
 func WithMaxStreams(n uint32) Option {
-	return func(t *transport) {
+	return func(t *client) {
 		t.maxStreams = n
 	}
 }
 
 // WithCodec sets the codec for the ttrpc transport.
 func WithTimeout(d time.Duration) Option {
-	return func(t *transport) {
+	return func(t *client) {
 		t.timeout = d
 	}
 }
 
 // WithCodec sets the codec for the ttrpc transport.
 func WithCodec(c encoding.Codec) Option {
-	return func(t *transport) {
+	return func(t *client) {
 		t.Codec = c
 	}
 }
 
 // Transport is the implementation of RoundTripper for ttrpc.
-type transport struct {
+type client struct {
 	RoundTripper
 	sync.RWMutex
 	encoding.Codec
@@ -99,7 +99,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
-	rt := &transport{
+	rt := &client{
 		channel:     newChannel(cc),
 		maxStreams:  defaultMaxStreams,
 		ctx:         ctx,
@@ -116,27 +116,27 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 }
 
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
-func (t *transport) run(ctx context.Context) error {
-	defer t.Close()
+func (c *client) run(ctx context.Context) error {
+	defer c.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := t.recv(); err != nil {
+			if err := c.recv(); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (t *transport) recv() error {
-	streamID, b, err := t.channel.Recv()
+func (c *client) recv() error {
+	streamID, b, err := c.channel.Recv()
 	if err != nil {
 		return err
 	}
 	defer putmbuf(b)
-	s := t.getStream(streamID)
+	s := c.getStream(streamID)
 	if s == nil {
 		return nil
 	}
@@ -149,15 +149,15 @@ func (t *transport) recv() error {
 		return nil
 	case <-s.Context().Done():
 		return s.Close()
-	case <-t.ctx.Done():
-		return t.Close()
+	case <-c.ctx.Done():
+		return c.Close()
 	default:
 		return s.Close()
 	}
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
-func (t *transport) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
+func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
 	options := defaultCallOptions
 	for _, opt := range opts {
 		opt.apply(&options)
@@ -168,32 +168,32 @@ func (t *transport) createStream(ctx context.Context, opts ...CallOption) (*clie
 		}
 		opt.apply(&options)
 	}
-	t.Lock()
-	defer t.Unlock()
-	if t.maxStreams > 0 && len(t.streams) >= int(t.maxStreams) {
+	c.Lock()
+	defer c.Unlock()
+	if c.maxStreams > 0 && len(c.streams) >= int(c.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}
-	for i := uint32(1); i <= t.maxStreams; i++ {
+	for i := uint32(1); i <= c.maxStreams; i++ {
 		select {
 		case <-ctx.Done():
 			return nil, status.Canceled.Err()
 		default:
-			streamID := t.streamID + i
-			if _, ok := t.streams[streamID]; ok {
-				continue
+			streamID := c.streamID + i
+			if _, ok := c.streams[streamID]; ok {
+				return nil, status.ResourceExhausted.Err()
 			}
 			cancelCtx, cancel := context.WithCancel(ctx)
 			s := clientStream{
-				ctx:         cancelCtx,
-				id:          streamID,
-				s:           t.channel,
-				c:           make(chan *api.Response, 1),
-				CallOptions: options,
-				Cancel:      cancel,
-				t:           t,
+				ctx:          cancelCtx,
+				id:           streamID,
+				s:            c.channel,
+				CallOptions:  options,
+				Cancel:       cancel,
+				deleteStream: c.deleteStream,
+				c:            make(chan *api.Response, 1),
 			}
-			t.streams[s.id] = &s
-			t.streamID = streamID
+			c.streams[s.id] = &s
+			c.streamID = streamID
 			return &s, nil
 		}
 	}
@@ -201,40 +201,40 @@ func (t *transport) createStream(ctx context.Context, opts ...CallOption) (*clie
 }
 
 // NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
-func (t *transport) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	info := CallOptions{
 		Method:  method,
-		Timeout: t.timeout,
-		Codec:   t.Codec,
+		Timeout: c.timeout,
+		Codec:   c.Codec,
 	}
-	return t.createStream(ctx, &info)
+	return c.createStream(ctx, &info)
 }
 
 // deleteStream deletes the given stream from the transport. It closes the stream and removes it from the map of streams.
-func (t *transport) deleteStream(id uint32) {
-	t.Lock()
-	defer t.Unlock()
-	delete(t.streams, id)
+func (c *client) deleteStream(id uint32) {
+	c.Lock()
+	defer c.Unlock()
+	delete(c.streams, id)
 }
 
 // getStream returns the stream with the given stream ID. It returns nil if the stream does not exist.
-func (t *transport) getStream(sid uint32) *clientStream {
-	t.RLock()
-	defer t.RUnlock()
-	return t.streams[sid]
+func (c *client) getStream(sid uint32) *clientStream {
+	c.RLock()
+	defer c.RUnlock()
+	return c.streams[sid]
 }
 
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
-func (t *transport) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
+func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
 	info := CallOptions{
 		Method:  method,
-		Timeout: t.timeout,
-		Codec:   t.Codec,
+		Timeout: c.timeout,
+		Codec:   c.Codec,
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		info.Metadatas = medatas
 	}
-	s, err := t.createStream(ctx, &info)
+	s, err := c.createStream(ctx, &info)
 	if err != nil {
 		return err
 	}
@@ -249,8 +249,8 @@ func (t *transport) Invoke(ctx context.Context, method string, req any, reply an
 }
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
-func (t *transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	s, err := t.createStream(ctx, &CallOptions{})
+func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	s, err := c.createStream(ctx, &CallOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -261,26 +261,26 @@ func (t *transport) RoundTrip(ctx context.Context, req *api.Request) (*api.Respo
 	return s.recv()
 }
 
-func (t *transport) Ping(ctx context.Context) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, t.timeout)
+func (c *client) Ping(ctx context.Context) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if _, err := t.RoundTrip(timeoutCtx, &api.Request{}); err != nil {
+	if _, err := c.RoundTrip(timeoutCtx, &api.Request{}); err != nil {
 		return err
 	}
 	return nil
 }
 
 // Close closes the ttrpc connection and underlying connection
-func (t *transport) Close() error {
-	t.Lock()
-	defer t.Unlock()
-	t.Do(func() {
-		for _, s := range t.streams {
+func (c *client) Close() error {
+	c.Lock()
+	defer c.Unlock()
+	c.Do(func() {
+		for _, s := range c.streams {
 			s.Cancel()
-			delete(t.streams, s.id)
+			delete(c.streams, s.id)
 		}
-		t.maxStreams = 0
-		t.channel.Close()
+		c.maxStreams = 0
+		c.channel.Close()
 	})
 	return nil
 }

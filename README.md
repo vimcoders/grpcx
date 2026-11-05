@@ -17,9 +17,9 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 |-------------|-----------|-----------------|
 | 4B StreamID | 4B Length |     Payload     |
 
-发送侧：channel.Send(streamID, h, payload) 逐段写 8B 头 + 内容，每段独立成帧。
-接收侧：第一次 Recv 得 header 段采用默认的解析器 Unmarshal 出 api.Header，第二次 Recv 得 payload 段采用自定义的解析器得Req。
-Header 很小（几十字节），payload 可以到 4MB（messageLengthMax），两者编解码互不影响。
+- **发送侧**：channel.Send(streamID, h, payload) 逐段写 8B 头 + 内容，每段独立成帧。
+- **接收侧**：第一次 Recv 得 header 段采用默认的解析器 Unmarshal 出 api.Header，第二次 Recv 得 payload 段采用自定义的解析器得Req。
+- **Header**: 很小（几十字节），payload 可以到 4MB（messageLengthMax），两者编解码互不影响。
 
 ## Performance
 

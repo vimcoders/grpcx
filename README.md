@@ -11,6 +11,16 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 - 健康检查
 - 元数据传递 mdtadata.MD
 
+### 帧格式
+
+| 4B StreamID | 4B Length | protobuf Header |
+|-------------|-----------|-----------------|
+| 4B StreamID | 4B Length |     Payload     |
+
+发送侧：channel.Send(streamID, h, payload) 逐段写 8B 头 + 内容，每段独立成帧。
+接收侧：第一次 Recv 得 header 段采用默认的解析器 Unmarshal 出 api.Header，第二次 Recv 得 payload 段采用自定义的解析器得Req。
+Header 很小（几十字节），payload 可以到 4MB（messageLengthMax），两者编解码互不影响。
+
 ## Performance
 
 Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. client benchmark container runs unconstrained, server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.
@@ -59,6 +69,14 @@ grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计�
 | **网络IO层** | 基于 Go 标准库 `net/http2`<br>底层 TCP 传输 | 基于 Go 原生 `net.Conn`<br>底层 TCP 传输 | 均基于 TCP 传输，grpcx 绕过 HTTP/2 栈直接操作裸连接 |
 
 > 设计本质：grpcx 不是 gRPC 的分支或魔改版本，而是一套完整独立的 RPC 实现。它保留了 gRPC 成熟的核心语义与编程模型，只替换了为通用性而设计的重型传输层，从而在 K8s 内网场景下获得极致的性能表现。
+
+### 帧格式
+
+|-------------|-----------|-----------------|
+| 4B StreamID | 4B Length | protobuf Header |
+|-------------|-----------|-----------------|
+| 4B StreamID | 4B Length |     Payload     |
+|-------------|-----------|-----------------|
 
 ## 安装
 

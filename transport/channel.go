@@ -101,10 +101,6 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 	h := binary.BigEndian.Uint32(hrbuf[4:])
 
 	if h > uint32(messageLengthMax) {
-		if _, err := ch.br.Discard(int(h)); err != nil {
-			return 0, nil, err
-		}
-
 		return 0, nil, status.OutOfRange.Err()
 	}
 

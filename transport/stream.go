@@ -165,12 +165,12 @@ func (s *serverStream) Context() context.Context {
 }
 
 func (s *serverStream) send(resp *api.Response) error {
+	if len(resp.Payload) > messageLengthMax {
+		return status.OutOfRange.Err()
+	}
 	h, err := encoding.Marshal(resp.Header)
 	if err != nil {
 		return err
-	}
-	if len(resp.Payload) > messageLengthMax {
-		return status.OutOfRange.Err()
 	}
 	return s.Sender.Send(s.id, h, resp.Payload)
 }

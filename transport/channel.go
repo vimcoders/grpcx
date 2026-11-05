@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -31,7 +32,7 @@ const (
 	messageHeaderLength  = 8
 	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
 	defaultFlushInterval = time.Millisecond
-	defaultBufSize       = 16 * 1024 // 16k 与linux内核发送缓冲区保持一致
+	defaultBufSize       = math.MaxInt8
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -70,7 +71,7 @@ func putmbuf(p []byte) {
 type channel struct {
 	net.Conn
 	br *bufio.Reader
-	bw *bufio.Writer
+	bw net.Buffers
 	t  *time.Timer
 	sync.Mutex
 }
@@ -80,7 +81,6 @@ func newChannel(c net.Conn) *channel {
 	x := &channel{
 		Conn: c,
 		br:   bufio.NewReader(c),
-		bw:   bufio.NewWriterSize(c, defaultBufSize),
 	}
 	return x
 }
@@ -122,31 +122,37 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
 func (ch *channel) Send(streamID uint32, p ...[]byte) error {
-	buffers := make(Buffers, 0, len(p)*2)
+	var bw net.Buffers
 	for _, b := range p {
 		var hwbuf [messageHeaderLength]byte
 		binary.BigEndian.PutUint32(hwbuf[:4], streamID)
 		binary.BigEndian.PutUint32(hwbuf[4:], uint32(len(b)))
-		buffers = append(buffers, hwbuf[:], b)
+		bw = append(bw, hwbuf[:], b)
 	}
 
 	ch.Lock()
 	defer ch.Unlock()
-	if _, err := buffers.WriteTo(ch.bw); err != nil {
-		return err
+	ch.bw = append(ch.bw, bw...)
+
+	if len(ch.bw) > defaultBufSize {
+		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
+			return err
+		}
 	}
 
-	if ch.bw.Buffered() == 0 {
+	if len(ch.bw) == 0 {
 		return nil
 	}
-	if ch.t != nil && ch.t.Stop() {
+
+	if ch.t != nil {
+		ch.t.Stop()
 		ch.t.Reset(defaultFlushInterval)
 		return nil
 	}
 	ch.t = time.AfterFunc(defaultFlushInterval, func() {
 		ch.Lock()
 		defer ch.Unlock()
-		ch.bw.Flush()
+		ch.bw.WriteTo(ch.Conn)
 	})
 	return nil
 }
@@ -154,22 +160,11 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 func (ch *channel) Close() error {
 	ch.Lock()
 	defer ch.Unlock()
-	ch.bw.Flush()
+	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
+		return err
+	}
 	if ch.t != nil {
 		ch.t.Stop()
 	}
 	return ch.Conn.Close()
-}
-
-type Buffers [][]byte
-
-func (v Buffers) WriteTo(w io.Writer) (n int64, err error) {
-	for _, b := range v {
-		nb, err := w.Write(b)
-		if err != nil {
-			return n, err
-		}
-		n += int64(nb)
-	}
-	return n, nil
 }

@@ -136,16 +136,16 @@ func (c *client) recv() error {
 		return err
 	}
 	defer putmbuf(h)
+	_, p, err := c.channel.Recv()
+	if err != nil {
+		return err
+	}
 	s := c.getStream(streamID)
 	if s == nil {
 		return nil
 	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
-		return err
-	}
-	_, p, err := c.channel.Recv()
-	if err != nil {
 		return err
 	}
 	response := &api.Response{
@@ -156,10 +156,13 @@ func (c *client) recv() error {
 	case s.c <- response:
 		return nil
 	case <-s.Context().Done():
+		putmbuf(p)
 		return s.Close()
 	case <-c.ctx.Done():
+		putmbuf(p)
 		return c.Close()
 	default:
+		putmbuf(p)
 		return s.Close()
 	}
 }

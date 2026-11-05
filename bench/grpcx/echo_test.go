@@ -2,6 +2,7 @@ package grpcx_test
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,7 +29,12 @@ var (
 )
 
 func Benchmark1K(b *testing.B) {
-	c, err := grpcx.Dial(ttAddr)
+	// linux tcp内核缓冲区默认是16k 高并发才建议开启
+	var opts []grpcx.Option
+	if runtime.GOMAXPROCS(0) >= 16 {
+		opts = append(opts, grpcx.WithBufSize(grpcx.DfaultBufSize))
+	}
+	c, err := grpcx.Dial(ttAddr, opts...)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -48,7 +54,12 @@ func Benchmark1K(b *testing.B) {
 }
 
 func Benchmark5K(b *testing.B) {
-	c, err := grpcx.Dial(ttAddr)
+	// linux tcp内核缓冲区默认是16k 高并发才建议开启
+	var opts []grpcx.Option
+	if runtime.GOMAXPROCS(0) >= 16 {
+		opts = append(opts, grpcx.WithBufSize(grpcx.DfaultBufSize))
+	}
+	c, err := grpcx.Dial(ttAddr, opts...)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -68,7 +79,12 @@ func Benchmark5K(b *testing.B) {
 }
 
 func Benchmark1024K(b *testing.B) {
-	c, err := grpcx.Dial(ttAddr)
+	// linux tcp内核缓冲区默认是16k 高并发才建议开启
+	var opts []grpcx.Option
+	if runtime.GOMAXPROCS(0) >= 16 {
+		opts = append(opts, grpcx.WithBufSize(grpcx.DfaultBufSize))
+	}
+	c, err := grpcx.Dial(ttAddr, opts...)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return

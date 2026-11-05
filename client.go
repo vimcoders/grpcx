@@ -56,6 +56,12 @@ func WithMaxStreams(n uint32) Option {
 	}
 }
 
+func WithBufSize(n int) Option {
+	return func(c *client) {
+		c.opts = append(c.opts, transport.WithBufSize(n))
+	}
+}
+
 // Client is a ttrpc client that handles outgoing requests and dispatches them to the appropriate transport.
 type client struct {
 	balancer.Picker

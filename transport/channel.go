@@ -31,12 +31,12 @@ const (
 	messageHeaderLength  = 8
 	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
 	defaultFlushInterval = time.Millisecond
-	defaultBufSize       = 16 * 1024
 )
 
 // Sender is the interface for sending messages to a channel.
 type Sender interface {
 	Send(uint32, ...[]byte) error
+	io.Closer
 }
 
 // messageHeader represents the fixed-length message header of 10 bytes sent
@@ -68,6 +68,7 @@ func putmbuf(p []byte) {
 
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
+	bufsize int
 	net.Conn
 	br *bufio.Reader
 	bw net.Buffers
@@ -80,6 +81,15 @@ func newChannel(c net.Conn) *channel {
 	x := &channel{
 		Conn: c,
 		br:   bufio.NewReader(c),
+	}
+	return x
+}
+
+func newChannelSize(c net.Conn, bufsize int) *channel {
+	x := &channel{
+		Conn:    c,
+		br:      bufio.NewReader(c),
+		bufsize: bufsize,
 	}
 	return x
 }
@@ -133,7 +143,7 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		n += len(b)
 	}
 
-	if n >= defaultBufSize {
+	if n >= ch.bufsize {
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}

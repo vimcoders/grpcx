@@ -27,6 +27,7 @@ type ServerOptions struct {
 	imp                     any
 	unaryServerInterceptor  grpc.UnaryServerInterceptor
 	streamServerInterceptor grpc.StreamServerInterceptor
+	bufsize                 int
 }
 
 // DefaultServerOptions is the default options for a ttrpc server.
@@ -131,7 +132,7 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (*s
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	channel := newChannel(c)
+	channel := newChannelSize(c, so.bufsize)
 	defer channel.Close()
 	for {
 		select {

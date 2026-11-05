@@ -63,18 +63,25 @@ func WithCodec(c encoding.Codec) Option {
 	}
 }
 
+func WithBufSize(n int) Option {
+	return func(c *client) {
+		c.bufsize = n
+	}
+}
+
 // Transport is the implementation of RoundTripper for ttrpc.
 type client struct {
 	RoundTripper
 	sync.RWMutex
 	encoding.Codec
-	channel     *channel
+	Sender
 	streams     map[uint32]*clientStream
 	streamID    uint32
 	maxStreams  uint32
 	ctx         context.Context
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
+	bufsize     int
 	sync.Once
 }
 
@@ -100,43 +107,44 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		return nil, err
 	}
 	rt := &client{
-		channel:     newChannel(cc),
-		maxStreams:  defaultMaxStreams,
 		ctx:         ctx,
-		streams:     make(map[uint32]*clientStream),
-		Codec:       encoding.GetCodec(encoding.Name),
 		dialContext: dialContext,
 		timeout:     defaultTimeout,
+		maxStreams:  defaultMaxStreams,
+		streams:     make(map[uint32]*clientStream),
+		Codec:       encoding.GetCodec(encoding.Name),
 	}
 	for _, o := range opts {
 		o(rt)
 	}
-	go rt.run(ctx)
+	rt.Sender = newChannelSize(cc, rt.bufsize)
+	go rt.Handle(ctx, cc)
 	return rt, nil
 }
 
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
-func (c *client) run(ctx context.Context) error {
-	defer c.Close()
+func (c *client) Handle(ctx context.Context, cc net.Conn) error {
+	channel := newChannel(cc)
+	defer channel.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := c.recv(); err != nil {
+			if err := c.recv(channel); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (c *client) recv() error {
-	streamID, h, err := c.channel.Recv()
+func (c *client) recv(channel *channel) error {
+	streamID, h, err := channel.Recv()
 	if err != nil {
 		return err
 	}
 	defer putmbuf(h)
-	_, p, err := c.channel.Recv()
+	_, p, err := channel.Recv()
 	if err != nil {
 		return err
 	}
@@ -194,7 +202,7 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 	s := clientStream{
 		ctx:          cancelCtx,
 		id:           streamID,
-		Sender:       c.channel,
+		Sender:       c.Sender,
 		CallOptions:  options,
 		Cancel:       cancel,
 		deleteStream: c.deleteStream,
@@ -285,7 +293,7 @@ func (c *client) Close() error {
 			delete(c.streams, s.id)
 		}
 		c.maxStreams = 0
-		c.channel.Close()
+		c.Sender.Close()
 	})
 	return nil
 }

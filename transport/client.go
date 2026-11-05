@@ -19,6 +19,7 @@ import (
 	"context"
 	"math"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 
@@ -65,7 +66,7 @@ func WithCodec(c encoding.Codec) Option {
 
 func WithBufSize(n int) Option {
 	return func(c *client) {
-		c.bufsize = n
+		c.bufsize = min(n, defaultMaxBufSize)
 	}
 }
 
@@ -106,6 +107,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
+	numProcs := runtime.GOMAXPROCS(0)
 	rt := &client{
 		ctx:         ctx,
 		dialContext: dialContext,
@@ -113,6 +115,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		maxStreams:  defaultMaxStreams,
 		streams:     make(map[uint32]*clientStream),
 		Codec:       encoding.GetCodec(encoding.Name),
+		bufsize:     min(numProcs*dfaultBufSize, defaultMaxBufSize),
 	}
 	for _, o := range opts {
 		o(rt)

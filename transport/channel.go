@@ -28,9 +28,15 @@ import (
 )
 
 const (
-	messageHeaderLength  = 8
-	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
+	messageHeaderLength = 8
+	// 4MB 与标准 gRPC 默认值对齐
+	messageLengthMax = 4 * 1024 * 1024
+	// Go 1.27.3 采用的时间轮算法最小时间是1毫秒
 	defaultFlushInterval = time.Millisecond
+	// bw
+	dfaultBufSize = 1024
+	// linux内核tcp发送缓冲区的默认值是16k
+	defaultMaxBufSize = 16 * dfaultBufSize
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -68,7 +74,8 @@ func putmbuf(p []byte) {
 
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
-	bufsize int
+	bufsize  int
+	interval time.Duration
 	net.Conn
 	br *bufio.Reader
 	bw net.Buffers
@@ -78,18 +85,15 @@ type channel struct {
 
 // NewChannel creates a new channel with the given net.Conn.
 func newChannel(c net.Conn) *channel {
-	x := &channel{
-		Conn: c,
-		br:   bufio.NewReader(c),
-	}
-	return x
+	return newChannelSize(c, dfaultBufSize)
 }
 
 func newChannelSize(c net.Conn, bufsize int) *channel {
 	x := &channel{
-		Conn:    c,
-		br:      bufio.NewReader(c),
-		bufsize: bufsize,
+		Conn:     c,
+		bufsize:  bufsize,
+		br:       bufio.NewReader(c),
+		interval: defaultFlushInterval,
 	}
 	return x
 }
@@ -150,21 +154,28 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	}
 
 	if len(ch.bw) == 0 {
+		if ch.t != nil {
+			ch.t.Stop()
+		}
 		return nil
 	}
 
 	if ch.t != nil {
 		ch.t.Stop()
-		ch.t.Reset(defaultFlushInterval)
+		ch.t.Reset(ch.interval)
 		return nil
 	}
-	ch.t = time.AfterFunc(defaultFlushInterval, func() {
+	ch.t = time.AfterFunc(ch.interval, func() {
 		ch.Lock()
 		defer ch.Unlock()
+		if len(ch.bw) == 0 {
+			return
+		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			_ = ch.Conn.Close()
 		}
 	})
+
 	return nil
 }
 

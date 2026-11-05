@@ -8,7 +8,5 @@ import (
 	"google.golang.org/grpc"
 )
 
-const DfaultBufSize = 16 * 1024
-
 type UnaryClientInterceptor func(ctx context.Context, method string, req any, reply any, balance balancer.Picker, opts ...grpc.CallOption) error
 type StreamClientInterceptor func(ctx context.Context, desc *grpc.StreamDesc, balance balancer.Picker, method string, opts ...grpc.CallOption) (grpc.ClientStream, error)

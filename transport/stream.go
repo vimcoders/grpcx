@@ -58,7 +58,7 @@ func (s *clientStream) Close() error {
 }
 
 func (s *clientStream) SendMsg(m any) error {
-	b, err := s.Marshal(m)
+	p, err := s.Marshal(m)
 	if err != nil {
 		return err
 	}
@@ -71,7 +71,7 @@ func (s *clientStream) SendMsg(m any) error {
 	}
 	return s.send(&api.Request{
 		Header:  header,
-		Payload: b,
+		Payload: p,
 	})
 }
 
@@ -103,6 +103,9 @@ func (s *clientStream) send(req *api.Request) error {
 	h, err := encoding.Marshal(req.Header)
 	if err != nil {
 		return err
+	}
+	if len(h) > messageLengthMax {
+		return status.OutOfRange.Err()
 	}
 	return s.Sender.Send(s.id, h, req.Payload)
 }

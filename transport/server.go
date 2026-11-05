@@ -102,22 +102,22 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s ServerStream, opts ...
 	return status.Unimplemented.Err()
 }
 
-func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (serverStream, error) {
+func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (*serverStream, error) {
 	streamID, h, err := channel.Recv()
 	if err != nil {
-		return serverStream{}, err
+		return nil, err
 	}
 	defer putmbuf(h)
 	_, p, err := channel.Recv()
 	if err != nil {
-		return serverStream{}, err
+		return nil, err
 	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
-		return serverStream{}, err
+		return nil, err
 	}
 	metadatas := metadata.Pairs(header.Metadatas...)
-	return serverStream{
+	return &serverStream{
 		Sender:    channel,
 		id:        streamID,
 		Codec:     so.Codec,
@@ -142,7 +142,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 			if err != nil {
 				return err
 			}
-			if err := so.RoundTrip(ctx, &s, &s.CallOptions); err != nil {
+			if err := so.RoundTrip(ctx, s, &s.CallOptions); err != nil {
 				code := int32(status.Code(err))
 				s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
 			}

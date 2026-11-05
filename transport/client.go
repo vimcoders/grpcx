@@ -147,7 +147,6 @@ func (c *client) recv() error {
 	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
-		putmbuf(p)
 		return err
 	}
 	response := &api.Response{

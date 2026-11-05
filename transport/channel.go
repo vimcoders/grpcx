@@ -20,7 +20,6 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
-	"math"
 	"net"
 	"sync"
 	"time"
@@ -32,7 +31,7 @@ const (
 	messageHeaderLength  = 8
 	messageLengthMax     = 4 * 1024 * 1024 // 4MB 与标准 gRPC 默认值对齐
 	defaultFlushInterval = time.Millisecond
-	defaultBufSize       = math.MaxInt8
+	defaultBufSize       = 16 * 1024
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -132,9 +131,13 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 
 	ch.Lock()
 	defer ch.Unlock()
+	var n int
 	ch.bw = append(ch.bw, bw...)
+	for _, b := range ch.bw {
+		n += len(b)
+	}
 
-	if len(ch.bw) > defaultBufSize {
+	if n >= defaultBufSize {
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}

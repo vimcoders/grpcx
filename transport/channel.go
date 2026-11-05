@@ -163,11 +163,12 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 func (ch *channel) Close() error {
 	ch.Lock()
 	defer ch.Unlock()
-	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return err
-	}
+	defer ch.Conn.Close()
 	if ch.t != nil {
 		ch.t.Stop()
 	}
-	return ch.Conn.Close()
+	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
+		return err
+	}
+	return nil
 }

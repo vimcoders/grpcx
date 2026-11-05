@@ -108,12 +108,12 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (se
 		return serverStream{}, err
 	}
 	defer putmbuf(h)
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
-		return serverStream{}, err
-	}
 	_, p, err := channel.Recv()
 	if err != nil {
+		return serverStream{}, err
+	}
+	var header api.Header
+	if err := encoding.Unmarshal(h, &header); err != nil {
 		return serverStream{}, err
 	}
 	metadatas := metadata.Pairs(header.Metadatas...)

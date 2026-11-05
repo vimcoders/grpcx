@@ -142,10 +142,12 @@ func (c *client) recv() error {
 	}
 	s := c.getStream(streamID)
 	if s == nil {
+		putmbuf(p)
 		return nil
 	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
+		putmbuf(p)
 		return err
 	}
 	response := &api.Response{

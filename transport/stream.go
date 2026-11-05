@@ -169,6 +169,9 @@ func (s *serverStream) send(resp *api.Response) error {
 	if err != nil {
 		return err
 	}
+	if len(resp.Payload) > messageLengthMax {
+		return status.OutOfRange.Err()
+	}
 	return s.Sender.Send(s.id, h, resp.Payload)
 }
 

@@ -190,7 +190,7 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 	s := clientStream{
 		ctx:          cancelCtx,
 		id:           streamID,
-		s:            c.channel,
+		Sender:       c.channel,
 		CallOptions:  options,
 		Cancel:       cancel,
 		deleteStream: c.deleteStream,

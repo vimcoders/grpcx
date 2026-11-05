@@ -32,11 +32,11 @@ import (
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type clientStream struct {
+	Sender
 	grpc.ClientStream
 	CallOptions
 	ctx          context.Context
 	id           uint32
-	s            Sender
 	c            chan *api.Response
 	Cancel       context.CancelFunc
 	deleteStream func(id uint32)
@@ -97,11 +97,14 @@ func (s *clientStream) Context() context.Context {
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
 func (s *clientStream) send(req *api.Request) error {
+	if len(req.Payload) > messageLengthMax {
+		return status.OutOfRange.Err()
+	}
 	h, err := encoding.Marshal(req.Header)
 	if err != nil {
 		return err
 	}
-	return s.s.Send(s.id, h, req.Payload)
+	return s.Sender.Send(s.id, h, req.Payload)
 }
 
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
@@ -149,10 +152,10 @@ func (c CallOptions) apply(opts *CallOptions) {
 }
 
 type serverStream struct {
+	Sender
 	grpc.ServerStream
 	ctx context.Context
 	id  uint32
-	s   Sender
 	p   []byte
 	CallOptions
 }
@@ -166,7 +169,7 @@ func (s *serverStream) send(resp *api.Response) error {
 	if err != nil {
 		return err
 	}
-	return s.s.Send(s.id, h, resp.Payload)
+	return s.Sender.Send(s.id, h, resp.Payload)
 }
 
 func (s *serverStream) SendMsg(m any) error {

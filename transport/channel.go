@@ -60,6 +60,9 @@ func getmbuf(size int) []byte {
 
 // putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
 func putmbuf(p []byte) {
+	if len(p) == 0 {
+		return
+	}
 	buffers.Put(&p)
 }
 
@@ -96,7 +99,7 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 	}
 
 	s := binary.BigEndian.Uint32(hrbuf[:4])
-	h := binary.BigEndian.Uint32(hrbuf[4:messageHeaderLength])
+	h := binary.BigEndian.Uint32(hrbuf[4:])
 
 	if h > uint32(messageLengthMax) {
 		if _, err := ch.br.Discard(int(h)); err != nil {
@@ -119,24 +122,18 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
 func (ch *channel) Send(streamID uint32, p ...[]byte) error {
+	buffers := make(Buffers, 0, len(p)*2)
 	for _, b := range p {
-		if len(b) > messageLengthMax {
-			return status.OutOfRange.Err()
-		}
+		var hwbuf [messageHeaderLength]byte
+		binary.BigEndian.PutUint32(hwbuf[:4], streamID)
+		binary.BigEndian.PutUint32(hwbuf[4:], uint32(len(b)))
+		buffers = append(buffers, hwbuf[:], b)
 	}
 
 	ch.Lock()
 	defer ch.Unlock()
-	for _, b := range p {
-		var hwbuf [messageHeaderLength]byte // avoid alloc when writing header
-		binary.BigEndian.PutUint32(hwbuf[:4], streamID)
-		binary.BigEndian.PutUint32(hwbuf[4:messageHeaderLength], uint32(len(b)))
-		if _, err := ch.bw.Write(hwbuf[:]); err != nil {
-			return err
-		}
-		if _, err := ch.bw.Write(b); err != nil {
-			return err
-		}
+	if _, err := buffers.WriteTo(ch.bw); err != nil {
+		return err
 	}
 
 	if ch.bw.Buffered() == 0 {
@@ -162,4 +159,17 @@ func (ch *channel) Close() error {
 		ch.t.Stop()
 	}
 	return ch.Conn.Close()
+}
+
+type Buffers [][]byte
+
+func (v Buffers) WriteTo(w io.Writer) (n int64, err error) {
+	for _, b := range v {
+		nb, err := w.Write(b)
+		if err != nil {
+			return n, err
+		}
+		n += int64(nb)
+	}
+	return n, nil
 }

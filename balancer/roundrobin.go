@@ -17,9 +17,10 @@ const (
 	// RoundRobinName is the name of round robin balancer.
 	RoundRobinName = "round_robin"
 	// defaultStep is the default step of round robin balancer.
-	defaultStep = 1
+	defaultStep    = 1
+	defaultTimeout = 3 * time.Second
 	// defaultKeepalive is the default keepalive interval of round robin balancer.
-	defaultKeepalive = time.Second * 10
+	defaultKeepalive = 3 * defaultTimeout
 )
 
 // rrBuilder is the builder of round robin balancer.

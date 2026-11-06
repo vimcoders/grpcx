@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/vimcoders/grpcx/status"
+	"google.golang.org/grpc/mem"
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -33,30 +34,18 @@ type Sender interface {
 	io.Closer
 }
 
-// messageHeader represents the fixed-length message header of 10 bytes sent
 // with every request.
-var buffers sync.Pool
+var buffers = mem.DefaultBufferPool()
 
 // getmbuf returns a buffer from the pool. The buffer is guaranteed to be at least size bytes long.
 func getmbuf(size int) []byte {
 	// we can't use the standard New method on pool because we want to allocate
 	// based on size.
-	b, ok := buffers.Get().(*[]byte)
-	if !ok || cap(*b) < size {
-		// TODO(stevvooe): It may be better to allocate these in fixed length
-		// buckets to reduce fragmentation but its not clear that would help
-		// with performance. An ilogb approach or similar would work well.
-		return make([]byte, size)
-	}
-	*b = (*b)[:size]
-	return *b
+	return *buffers.Get(size)
 }
 
 // putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
 func putmbuf(p []byte) {
-	if len(p) == 0 {
-		return
-	}
 	buffers.Put(&p)
 }
 

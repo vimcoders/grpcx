@@ -17,7 +17,6 @@ package transport
 
 import (
 	"context"
-	"math"
 	"net"
 	"sync"
 	"time"
@@ -30,13 +29,6 @@ import (
 	"github.com/vimcoders/grpcx/encoding"
 
 	"google.golang.org/grpc"
-)
-
-const (
-	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
-	defaultMaxStreams = math.MaxUint16
-	// DefaultTimeout is the default timeout for each request.
-	defaultTimeout = 3 * time.Second
 )
 
 // RoundTripper is the interface for sending and receiving messages over a transport.

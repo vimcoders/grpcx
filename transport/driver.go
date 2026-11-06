@@ -3,6 +3,8 @@ package transport
 import (
 	"context"
 	"io"
+	"math"
+	"time"
 
 	"github.com/vimcoders/grpcx/generated/api"
 
@@ -44,3 +46,19 @@ type RoundTripper interface {
 	Ping(ctx context.Context) error
 	io.Closer
 }
+
+const (
+	messageHeaderLength = 8
+	// 4MB 与标准 gRPC 默认值对齐
+	messageLengthMax = 4 * 1024 * 1024
+	// Go 1.27.3 采用的时间轮算法最小时间是1毫秒
+	defaultFlushInterval = time.Millisecond
+	// bw
+	defaultBufSize = 1024
+	// linux内核tcp发送缓冲区的默认值是16k
+	defaultMaxBufSize = 16 * defaultBufSize
+	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
+	defaultMaxStreams = math.MaxUint16
+	// DefaultTimeout is the default timeout for each request.
+	defaultTimeout = 3 * time.Second
+)

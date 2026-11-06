@@ -27,18 +27,6 @@ import (
 	"github.com/vimcoders/grpcx/status"
 )
 
-const (
-	messageHeaderLength = 8
-	// 4MB 与标准 gRPC 默认值对齐
-	messageLengthMax = 4 * 1024 * 1024
-	// Go 1.27.3 采用的时间轮算法最小时间是1毫秒
-	defaultFlushInterval = time.Millisecond
-	// bw
-	defaultBufSize = 1024
-	// linux内核tcp发送缓冲区的默认值是16k
-	defaultMaxBufSize = 16 * defaultBufSize
-)
-
 // Sender is the interface for sending messages to a channel.
 type Sender interface {
 	Send(uint32, ...[]byte) error
@@ -76,6 +64,7 @@ func putmbuf(p []byte) {
 type channel struct {
 	bufsize  int
 	interval time.Duration
+	timeout  time.Duration
 	net.Conn
 	br *bufio.Reader
 	bw net.Buffers
@@ -89,6 +78,7 @@ func newChannel(c net.Conn) *channel {
 		Conn:     c,
 		br:       bufio.NewReader(c),
 		interval: defaultFlushInterval,
+		timeout:  defaultTimeout,
 	}
 	return x
 }
@@ -146,6 +136,9 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	}
 
 	if ch.bufsize <= 0 {
+		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.timeout)); err != nil {
+			return err
+		}
 		if _, err := bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}
@@ -161,6 +154,9 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	}
 
 	if n >= ch.bufsize {
+		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.timeout)); err != nil {
+			return err
+		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}
@@ -181,6 +177,10 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		if len(ch.bw) == 0 {
 			return
 		}
+		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.timeout)); err != nil {
+			_ = ch.Conn.Close()
+			return
+		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			_ = ch.Conn.Close()
 		}
@@ -190,11 +190,14 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 }
 
 func (ch *channel) Close() error {
+	defer ch.Conn.Close()
 	ch.Lock()
 	defer ch.Unlock()
-	defer ch.Conn.Close()
 	if ch.t != nil {
 		ch.t.Stop()
+	}
+	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.timeout)); err != nil {
+		return err
 	}
 	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 		return err

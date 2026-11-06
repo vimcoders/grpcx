@@ -241,6 +241,7 @@ func readCall(channel *channel) (uint32, *api.Header, []byte, error) {
 	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
+		putmbuf(p)
 		return 0, nil, nil, err
 	}
 	return streamID, &header, p, nil

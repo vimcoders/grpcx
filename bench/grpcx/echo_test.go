@@ -29,6 +29,7 @@ var (
 )
 
 func Benchmark1K(b *testing.B) {
+	// WithBufSize 高并发下开启批量发送，默认不开启
 	numProcs := runtime.GOMAXPROCS(0)
 	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
 	if err != nil {
@@ -50,6 +51,7 @@ func Benchmark1K(b *testing.B) {
 }
 
 func Benchmark5K(b *testing.B) {
+	// WithBufSize 高并发下开启批量发送，默认不开启
 	numProcs := runtime.GOMAXPROCS(0)
 	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
 	if err != nil {
@@ -71,6 +73,7 @@ func Benchmark5K(b *testing.B) {
 }
 
 func Benchmark1024K(b *testing.B) {
+	// WithBufSize 高并发下开启批量发送，默认不开启
 	numProcs := runtime.GOMAXPROCS(0)
 	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
 	if err != nil {

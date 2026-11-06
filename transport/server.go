@@ -102,33 +102,6 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s ServerStream, opts ...
 	return status.Unimplemented.Err()
 }
 
-func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (*serverStream, error) {
-	streamID, h, err := channel.Recv()
-	if err != nil {
-		return nil, err
-	}
-	defer putmbuf(h)
-	_, p, err := channel.Recv()
-	if err != nil {
-		return nil, err
-	}
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
-		return nil, err
-	}
-	metadatas := metadata.Pairs(header.Metadatas...)
-	return &serverStream{
-		Sender:    channel,
-		id:        streamID,
-		Codec:     so.Codec,
-		Metadatas: metadatas,
-		Method:    header.Method,
-		p:         p,
-		ctx:       metadata.WithMetadata(ctx, metadatas),
-		Timeout:   time.Duration(header.Timeout) * time.Millisecond,
-	}, nil
-}
-
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	channel := newChannel(c)
@@ -138,14 +111,32 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			s, err := so.createStream(ctx, channel)
-			if err != nil {
+			if err := so.recv(ctx, channel); err != nil {
 				return err
-			}
-			if err := so.RoundTrip(ctx, s, &s.CallOptions); err != nil {
-				code := int32(status.Code(err))
-				s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
 			}
 		}
 	}
+}
+
+func (so *ServerOptions) recv(ctx context.Context, channel *channel) error {
+	streamID, h, p, err := recv(channel)
+	if err != nil {
+		return err
+	}
+	metadatas := metadata.Pairs(h.Metadatas...)
+	s := &serverStream{
+		p:         p,
+		Sender:    channel,
+		id:        streamID,
+		Codec:     so.Codec,
+		Metadatas: metadatas,
+		Method:    h.Method,
+		ctx:       metadata.WithMetadata(ctx, metadatas),
+		Timeout:   time.Duration(h.Timeout) * time.Millisecond,
+	}
+	if err := so.RoundTrip(ctx, s, &s.CallOptions); err != nil {
+		code := int32(status.Code(err))
+		return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
+	}
+	return nil
 }

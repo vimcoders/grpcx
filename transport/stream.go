@@ -114,6 +114,16 @@ func (s *clientStream) send(req *api.Request) error {
 	return s.Sender.Send(s.id, h, req.Payload)
 }
 
+func (s *clientStream) put(header *api.Header, p []byte) error {
+	select {
+	case s.c <- &api.Response{Header: header, Payload: p}:
+		return nil
+	default:
+		defer putmbuf(p)
+		return s.CloseSend()
+	}
+}
+
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {

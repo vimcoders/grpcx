@@ -137,31 +137,16 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 }
 
 func (c *client) recv(channel *channel) error {
-	streamID, h, err := channel.Recv()
-	if err != nil {
-		return err
-	}
-	defer putmbuf(h)
-	_, p, err := channel.Recv()
+	streamID, h, p, err := recv(channel)
 	if err != nil {
 		return err
 	}
 	s := c.getStream(streamID)
-	if s == nil {
-		putmbuf(p)
-		return nil
+	if s != nil {
+		return s.put(h, p)
 	}
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
-		return err
-	}
-	select {
-	case s.c <- &api.Response{Header: &header, Payload: p}:
-		return nil
-	default:
-		defer putmbuf(p)
-		return s.CloseSend()
-	}
+	defer putmbuf(p)
+	return nil
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.

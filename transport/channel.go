@@ -24,8 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vimcoders/grpcx/encoding"
-	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 )
 
@@ -201,22 +199,4 @@ func (ch *channel) Close() error {
 		return err
 	}
 	return nil
-}
-
-func recv(channel *channel) (uint32, *api.Header, []byte, error) {
-	streamID, h, err := channel.Recv()
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer putmbuf(h)
-	_, p, err := channel.Recv()
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
-		return 0, nil, nil, err
-	}
-	return streamID, &header, p, nil
-
 }

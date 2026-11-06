@@ -111,15 +111,15 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := so.recv(ctx, channel); err != nil {
+			if err := so.readCall(ctx, channel); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (so *ServerOptions) recv(ctx context.Context, channel *channel) error {
-	streamID, h, p, err := recv(channel)
+func (so *ServerOptions) readCall(ctx context.Context, channel *channel) error {
+	streamID, h, p, err := readCall(channel)
 	if err != nil {
 		return err
 	}

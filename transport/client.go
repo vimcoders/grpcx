@@ -129,15 +129,15 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := c.recv(channel); err != nil {
+			if err := c.readCall(channel); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (c *client) recv(channel *channel) error {
-	streamID, h, p, err := recv(channel)
+func (c *client) readCall(channel *channel) error {
+	streamID, h, p, err := readCall(channel)
 	if err != nil {
 		return err
 	}

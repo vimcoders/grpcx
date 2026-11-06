@@ -125,7 +125,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
 func (c *client) Handle(ctx context.Context, channel *channel) error {
-	defer channel.Close()
+	defer c.Close()
 	for {
 		select {
 		case <-ctx.Done():

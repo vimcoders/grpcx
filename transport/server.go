@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"net"
 	"path"
@@ -77,6 +78,9 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
+			if so.desc == nil {
+				return status.Unimplemented.Err()
+			}
 			if err := so.roundtrip(ctx, channel); err != nil {
 				return err
 			}
@@ -101,14 +105,12 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 		ctx:       metadata.WithMetadata(ctx, metadatas),
 		Timeout:   time.Duration(h.Timeout) * time.Millisecond,
 	}
-	if so.desc == nil {
-		return status.Unimplemented.Err()
-	}
 	for _, v := range so.desc.Methods {
 		if s.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeoutCtx, cancel := context.WithTimeout(s.Context(), s.Timeout)
+		timeout := cmp.Or(s.Timeout, defaultTimeout)
+		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
 		if err != nil {

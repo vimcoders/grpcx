@@ -82,6 +82,7 @@ type client struct {
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
 	bufsize     int
+	sync.Once
 }
 
 // Dial creates a new ttrpc transport to the given endpoint.
@@ -274,12 +275,14 @@ func (c *client) Ping(ctx context.Context) error {
 
 // Close closes the ttrpc connection and underlying connection
 func (c *client) Close() error {
-	c.Lock()
-	defer c.Unlock()
-	for _, s := range c.streams {
-		s.Close()
-	}
-	clear(c.streams)
-	c.maxStreams = 0
+	c.Once.Do(func() {
+		c.Lock()
+		defer c.Unlock()
+		for _, s := range c.streams {
+			s.Close()
+		}
+		clear(c.streams)
+		c.maxStreams = 0
+	})
 	return c.Sender.Close()
 }

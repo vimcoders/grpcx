@@ -74,6 +74,9 @@ func (so *ServerOptions) RoundTrip(ctx context.Context, s ServerStream, opts ...
 	for _, opt := range opts {
 		opt.apply(&options)
 	}
+	if so.desc == nil {
+		return status.Unimplemented.Err()
+	}
 	for _, v := range so.desc.Methods {
 		if options.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue

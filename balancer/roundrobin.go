@@ -2,7 +2,6 @@ package balancer
 
 import (
 	"context"
-	"math/rand"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -59,10 +58,6 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 		}
 		x.rts = append(x.rts, rt)
 	}
-	// Randomly select the next round tripper to use.
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	count := uint32(rng.Intn(len(x.rts)))
-	x.count.Store(count)
 	go x.Keepalive(childCtx)
 	// Return the round robin balancer.
 	return &x, nil

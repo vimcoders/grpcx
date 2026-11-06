@@ -69,7 +69,6 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 
 // NewServer creates a new ttrpc server with the given options.
 func (so *ServerOptions) RoundTrip(ctx context.Context, s ServerStream, opts ...CallOption) error {
-	defer s.Close()
 	options := defaultCallOptions
 	for _, opt := range opts {
 		opt.apply(&options)
@@ -137,6 +136,7 @@ func (so *ServerOptions) call(ctx context.Context, channel *channel) error {
 		ctx:       metadata.WithMetadata(ctx, metadatas),
 		Timeout:   time.Duration(h.Timeout) * time.Millisecond,
 	}
+	defer s.Close()
 	if err := so.RoundTrip(ctx, s, &s.CallOptions); err != nil {
 		code := int32(status.Code(err))
 		return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})

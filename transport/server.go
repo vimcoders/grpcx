@@ -22,6 +22,7 @@ type ServerOption func(c *ServerOptions)
 
 // ServerOptions is a struct that holds the options for a ttrpc server.
 type ServerOptions struct {
+	bufsize int
 	encoding.Codec
 	desc                    *grpc.ServiceDesc
 	imp                     any
@@ -131,7 +132,7 @@ func (so *ServerOptions) createStream(ctx context.Context, channel *channel) (*s
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	channel := newChannel(c)
+	channel := newChannel(c, so.bufsize)
 	defer channel.Close()
 	for {
 		select {

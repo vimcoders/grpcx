@@ -65,7 +65,7 @@ func WithCodec(c encoding.Codec) Option {
 
 func WithBufSize(n int) Option {
 	return func(c *client) {
-		c.bufsize = min(n*dfaultBufSize, defaultMaxBufSize)
+		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
 	}
 }
 
@@ -117,7 +117,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(rt)
 	}
-	channel := newChannelSize(cc, rt.bufsize)
+	channel := newChannel(cc, rt.bufsize)
 	rt.Sender = channel
 	go rt.Handle(ctx, channel)
 	return rt, nil

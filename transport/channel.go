@@ -34,9 +34,9 @@ const (
 	// Go 1.27.3 采用的时间轮算法最小时间是1毫秒
 	defaultFlushInterval = time.Millisecond
 	// bw
-	dfaultBufSize = 1024
+	defaultBufSize = 1024
 	// linux内核tcp发送缓冲区的默认值是16k
-	defaultMaxBufSize = 16 * dfaultBufSize
+	defaultMaxBufSize = 16 * defaultBufSize
 )
 
 // Sender is the interface for sending messages to a channel.
@@ -84,11 +84,7 @@ type channel struct {
 }
 
 // NewChannel creates a new channel with the given net.Conn.
-func newChannel(c net.Conn) *channel {
-	return newChannelSize(c, dfaultBufSize)
-}
-
-func newChannelSize(c net.Conn, bufsize int) *channel {
+func newChannel(c net.Conn, bufsize int) *channel {
 	x := &channel{
 		Conn:     c,
 		bufsize:  bufsize,

@@ -61,6 +61,6 @@ const (
 	defaultMaxStreams = math.MaxUint16
 	// DefaultTimeout is the default timeout for each request.
 	defaultTimeout      = 3 * time.Second
-	defaultReadTimeout  = 3 * defaultTimeout
+	defaultReadTimeout  = 10 * defaultTimeout
 	defaultWriteTimeout = defaultTimeout
 )

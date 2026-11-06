@@ -78,7 +78,6 @@ type client struct {
 	streams     map[uint32]*clientStream
 	streamID    uint32
 	maxStreams  uint32
-	ctx         context.Context
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
 	bufsize     int
@@ -107,7 +106,6 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		return nil, err
 	}
 	rt := &client{
-		ctx:         ctx,
 		dialContext: dialContext,
 		timeout:     defaultTimeout,
 		maxStreams:  defaultMaxStreams,

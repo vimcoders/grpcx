@@ -54,7 +54,8 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	for range podCount {
 		rt, err := x.dialContext(childCtx)
 		if err != nil {
-			return nil, x.Close()
+			x.Close()
+			return nil, err
 		}
 		x.rts = append(x.rts, rt)
 	}

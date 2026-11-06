@@ -79,11 +79,9 @@ type client struct {
 	streamID    uint32
 	maxStreams  uint32
 	ctx         context.Context
-	cancel      context.CancelFunc
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
 	bufsize     int
-	sync.Once
 }
 
 // Dial creates a new ttrpc transport to the given endpoint.
@@ -107,10 +105,8 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
-	childCtx, cancel := context.WithCancel(ctx)
 	rt := &client{
-		ctx:         childCtx,
-		cancel:      cancel,
+		ctx:         ctx,
 		dialContext: dialContext,
 		timeout:     defaultTimeout,
 		maxStreams:  defaultMaxStreams,
@@ -278,8 +274,12 @@ func (c *client) Ping(ctx context.Context) error {
 
 // Close closes the ttrpc connection and underlying connection
 func (c *client) Close() error {
-	if c.cancel != nil {
-		c.cancel()
+	c.Lock()
+	defer c.Unlock()
+	for _, s := range c.streams {
+		s.Close()
 	}
-	return nil
+	clear(c.streams)
+	c.maxStreams = 0
+	return c.Sender.Close()
 }

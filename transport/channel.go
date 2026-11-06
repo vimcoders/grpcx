@@ -147,7 +147,7 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		n += len(b)
 	}
 
-	if n >= ch.bufsize {
+	if ch.bufsize <= 0 || n >= ch.bufsize {
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}

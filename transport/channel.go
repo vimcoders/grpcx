@@ -139,6 +139,13 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		bw = append(bw, hwbuf[:], b)
 	}
 
+	if ch.bufsize <= 0 {
+		if _, err := bw.WriteTo(ch.Conn); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	ch.Lock()
 	defer ch.Unlock()
 	var n int
@@ -147,7 +154,7 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		n += len(b)
 	}
 
-	if ch.bufsize <= 0 || n >= ch.bufsize {
+	if n >= ch.bufsize {
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}

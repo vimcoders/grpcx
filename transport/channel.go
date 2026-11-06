@@ -84,7 +84,16 @@ type channel struct {
 }
 
 // NewChannel creates a new channel with the given net.Conn.
-func newChannel(c net.Conn, bufsize int) *channel {
+func newChannel(c net.Conn) *channel {
+	x := &channel{
+		Conn:     c,
+		br:       bufio.NewReader(c),
+		interval: defaultFlushInterval,
+	}
+	return x
+}
+
+func newChannelSize(c net.Conn, bufsize int) *channel {
 	x := &channel{
 		Conn:     c,
 		bufsize:  bufsize,

@@ -117,7 +117,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(rt)
 	}
-	channel := newChannel(cc, rt.bufsize)
+	channel := newChannelSize(cc, rt.bufsize)
 	rt.Sender = channel
 	go rt.Handle(ctx, channel)
 	return rt, nil

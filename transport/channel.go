@@ -84,12 +84,8 @@ func newChannel(c net.Conn) *channel {
 }
 
 func newChannelSize(c net.Conn, bufsize int) *channel {
-	x := &channel{
-		Conn:     c,
-		bufsize:  bufsize,
-		br:       bufio.NewReader(c),
-		interval: defaultFlushInterval,
-	}
+	x := newChannel(c)
+	x.bufsize = bufsize
 	return x
 }
 
@@ -101,8 +97,12 @@ func newChannelSize(c net.Conn, bufsize int) *channel {
 // will be discarded.
 func (ch *channel) Recv() (uint32, []byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
-	_, err := io.ReadFull(ch.br, hrbuf[:])
-	if err != nil {
+
+	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.timeout)); err != nil {
+		return 0, nil, err
+	}
+
+	if _, err := io.ReadFull(ch.br, hrbuf[:]); err != nil {
 		return 0, nil, err
 	}
 

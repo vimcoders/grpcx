@@ -38,22 +38,26 @@ type clientStream struct {
 	ctx          context.Context
 	id           uint32
 	c            chan *api.Response
-	Cancel       context.CancelFunc
+	cancel       context.CancelFunc
 	deleteStream func(id uint32)
 	sync.Once
 }
 
 func (s *clientStream) CloseSend() error {
 	s.Once.Do(func() {
+		defer s.Close()
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)
 		}
 	})
-	return s.Close()
+	return nil
 }
 
 // close closes the stream and releases any resources associated with it.
 func (s *clientStream) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	return nil
 }
 

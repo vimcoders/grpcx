@@ -43,19 +43,18 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 			}
 			return len(address), nil
 		},
-		cancelFunc: cancel,
+		cancel: cancel,
 	}
 	// Resolve the endpoint to get the addresses.
-	podCount, err := x.resolveContext(ctx)
+	podCount, err := x.resolveContext(childCtx)
 	if err != nil {
 		return nil, err
 	}
 	// Dial to each address and create a round tripper for each.
 	for range podCount {
-		rt, err := x.dialContext(ctx)
+		rt, err := x.dialContext(childCtx)
 		if err != nil {
-			x.Close()
-			return nil, err
+			return nil, x.Close()
 		}
 		x.rts = append(x.rts, rt)
 	}
@@ -74,7 +73,7 @@ type RoundRobin struct {
 	count          atomic.Uint32
 	dialContext    func(ctx context.Context) (transport.RoundTripper, error)
 	resolveContext func(ctx context.Context) (int, error)
-	cancelFunc     context.CancelFunc
+	cancel         context.CancelFunc
 	sync.RWMutex
 }
 
@@ -158,12 +157,8 @@ func (rr *RoundRobin) clone() []transport.RoundTripper {
 // Close closes the round robin balancer.
 func (rr *RoundRobin) Close() error {
 	// Cancel the context to stop the keepalive goroutine.
-	if rr.cancelFunc != nil {
-		rr.cancelFunc()
-	}
-	// 	Close all the round trippers.
-	for _, rt := range rr.clone() {
-		_ = rt.Close()
+	if rr.cancel != nil {
+		rr.cancel()
 	}
 	return nil
 }

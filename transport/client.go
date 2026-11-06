@@ -79,6 +79,7 @@ type client struct {
 	streamID    uint32
 	maxStreams  uint32
 	ctx         context.Context
+	cancel      context.CancelFunc
 	dialContext func(ctx context.Context) (net.Conn, error)
 	timeout     time.Duration
 	bufsize     int
@@ -106,8 +107,10 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
+	childCtx, cancel := context.WithCancel(ctx)
 	rt := &client{
-		ctx:         ctx,
+		ctx:         childCtx,
+		cancel:      cancel,
 		dialContext: dialContext,
 		timeout:     defaultTimeout,
 		maxStreams:  defaultMaxStreams,
@@ -157,22 +160,12 @@ func (c *client) recv(channel *channel) error {
 	if err := encoding.Unmarshal(h, &header); err != nil {
 		return err
 	}
-	response := &api.Response{
-		Header:  &header,
-		Payload: p,
-	}
 	select {
-	case s.c <- response:
+	case s.c <- &api.Response{Header: &header, Payload: p}:
 		return nil
-	case <-s.Context().Done():
-		putmbuf(p)
-		return s.Close()
-	case <-c.ctx.Done():
-		putmbuf(p)
-		return c.Close()
 	default:
-		putmbuf(p)
-		return s.Close()
+		defer putmbuf(p)
+		return s.CloseSend()
 	}
 }
 
@@ -198,13 +191,13 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 	if _, ok := c.streams[streamID]; ok {
 		return nil, status.ResourceExhausted.Err()
 	}
-	cancelCtx, cancel := context.WithCancel(ctx)
+	childCtx, cancel := context.WithCancel(ctx)
 	s := clientStream{
-		ctx:          cancelCtx,
+		ctx:          childCtx,
 		id:           streamID,
 		Sender:       c.Sender,
 		CallOptions:  options,
-		Cancel:       cancel,
+		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
 	}
@@ -285,15 +278,8 @@ func (c *client) Ping(ctx context.Context) error {
 
 // Close closes the ttrpc connection and underlying connection
 func (c *client) Close() error {
-	c.Lock()
-	defer c.Unlock()
-	c.Do(func() {
-		for _, s := range c.streams {
-			s.Cancel()
-			delete(c.streams, s.id)
-		}
-		c.maxStreams = 0
-		c.Sender.Close()
-	})
+	if c.cancel != nil {
+		c.cancel()
+	}
 	return nil
 }

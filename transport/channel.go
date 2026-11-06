@@ -151,9 +151,6 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			return err
 		}
-	}
-
-	if len(ch.bw) == 0 {
 		if ch.t != nil {
 			ch.t.Stop()
 		}

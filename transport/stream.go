@@ -220,7 +220,6 @@ func (s *serverStream) RecvMsg(m any) error {
 }
 
 func (s *serverStream) Close() error {
-	defer putmbuf(s.p)
 	return nil
 }
 

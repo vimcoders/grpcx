@@ -125,6 +125,7 @@ func (so *ServerOptions) call(ctx context.Context, channel *channel) error {
 	if err != nil {
 		return err
 	}
+	defer putmbuf(p)
 	metadatas := metadata.Pairs(h.Metadatas...)
 	s := &serverStream{
 		p:         p,

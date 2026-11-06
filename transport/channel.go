@@ -62,10 +62,10 @@ func putmbuf(p []byte) {
 
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
-	bufsize int
-	rt      time.Duration
-	wt      time.Duration
-	flush   time.Duration
+	bufsize       int
+	flushInterval time.Duration
+	writeTimeout  time.Duration
+	readTimeout   time.Duration
 	net.Conn
 	br *bufio.Reader
 	bw net.Buffers
@@ -76,11 +76,11 @@ type channel struct {
 // NewChannel creates a new channel with the given net.Conn.
 func newChannel(c net.Conn) *channel {
 	x := &channel{
-		Conn:  c,
-		br:    bufio.NewReader(c),
-		flush: defaultFlushInterval,
-		rt:    defaultReadTimeout,
-		wt:    defaultWriteTimeout,
+		Conn:          c,
+		br:            bufio.NewReader(c),
+		flushInterval: defaultFlushInterval,
+		readTimeout:   defaultReadTimeout,
+		writeTimeout:  defaultWriteTimeout,
 	}
 	return x
 }
@@ -100,7 +100,7 @@ func newChannelSize(c net.Conn, bufsize int) *channel {
 func (ch *channel) Recv() (uint32, []byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
-	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.rt)); err != nil {
+	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
 		return 0, nil, err
 	}
 
@@ -138,7 +138,7 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	}
 
 	if ch.bufsize <= 0 {
-		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.wt)); err != nil {
+		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 			return err
 		}
 		if _, err := bw.WriteTo(ch.Conn); err != nil {
@@ -156,7 +156,7 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	}
 
 	if n >= ch.bufsize {
-		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.wt)); err != nil {
+		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 			return err
 		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
@@ -170,16 +170,16 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 
 	if ch.t != nil {
 		ch.t.Stop()
-		ch.t.Reset(ch.flush)
+		ch.t.Reset(ch.flushInterval)
 		return nil
 	}
-	ch.t = time.AfterFunc(ch.flush, func() {
+	ch.t = time.AfterFunc(ch.flushInterval, func() {
 		ch.Lock()
 		defer ch.Unlock()
 		if len(ch.bw) == 0 {
 			return
 		}
-		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.wt)); err != nil {
+		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 			_ = ch.Conn.Close()
 			return
 		}
@@ -198,7 +198,7 @@ func (ch *channel) Close() error {
 	if ch.t != nil {
 		ch.t.Stop()
 	}
-	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.wt)); err != nil {
+	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 		return err
 	}
 	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {

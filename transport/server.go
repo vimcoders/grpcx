@@ -78,9 +78,6 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if so.desc == nil {
-				return status.Unimplemented.Err()
-			}
 			if err := so.roundtrip(ctx, channel); err != nil {
 				return err
 			}
@@ -105,6 +102,14 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 		ctx:       metadata.WithMetadata(ctx, metadatas),
 		Timeout:   time.Duration(h.Timeout) * time.Millisecond,
 	}
+	if so.desc == nil {
+		return s.send(&api.Response{
+			Header: &api.Header{
+				Code:    int32(codes.Unimplemented),
+				Message: "Unimplemented",
+			},
+		})
+	}
 	for _, v := range so.desc.Methods {
 		if s.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
@@ -114,8 +119,12 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
 		if err != nil {
-			code := int32(status.Code(err))
-			return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
+			return s.send(&api.Response{
+				Header: &api.Header{
+					Code:    int32(status.Code(err)),
+					Message: err.Error(),
+				},
+			})
 		}
 		return s.SendMsg(reply)
 	}
@@ -129,9 +138,18 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 			IsServerStream: v.ServerStreams,
 		}
 		if err := so.streamServerInterceptor(so.imp, s, info, v.Handler); err != nil {
-			code := int32(status.Code(err))
-			return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
+			return s.send(&api.Response{
+				Header: &api.Header{
+					Code:    int32(status.Code(err)),
+					Message: err.Error(),
+				},
+			})
 		}
 	}
-	return s.send(&api.Response{Header: &api.Header{Code: int32(codes.Unimplemented), Message: "Unimplemented"}})
+	return s.send(&api.Response{
+		Header: &api.Header{
+			Code:    int32(codes.Unimplemented),
+			Message: "Unimplemented",
+		},
+	})
 }

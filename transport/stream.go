@@ -230,19 +230,23 @@ type ServerStream interface {
 }
 
 func readCall(channel *channel) (uint32, *api.Header, []byte, error) {
-	streamID, h, err := channel.Recv()
+	hdrID, h, err := channel.Recv()
 	if err != nil {
 		return 0, nil, nil, err
 	}
 	defer putmbuf(h)
-	_, p, err := channel.Recv()
+	payloadID, p, err := channel.Recv()
 	if err != nil {
 		return 0, nil, nil, err
+	}
+	if payloadID != hdrID {
+		putmbuf(p)
+		return 0, nil, nil, status.DataLoss.Err()
 	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
 		putmbuf(p)
 		return 0, nil, nil, err
 	}
-	return streamID, &header, p, nil
+	return hdrID, &header, p, nil
 }

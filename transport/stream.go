@@ -18,7 +18,6 @@ package transport
 
 import (
 	"context"
-	"io"
 	"sync"
 	"time"
 
@@ -219,13 +218,8 @@ func (s *serverStream) RecvMsg(m any) error {
 	return nil
 }
 
-func (s *serverStream) Close() error {
-	return nil
-}
-
 type ServerStream interface {
 	grpc.ServerStream
-	io.Closer
 }
 
 func readCall(channel *channel) (uint32, *api.Header, []byte, error) {

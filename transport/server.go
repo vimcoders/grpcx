@@ -15,6 +15,7 @@ import (
 	"github.com/vimcoders/grpcx/metadata"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 // Server is a ttrpc server that handles incoming requests and dispatches them to the appropriate service method.
@@ -67,43 +68,6 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 	}
 }
 
-// NewServer creates a new ttrpc server with the given options.
-func (so *ServerOptions) RoundTrip(ctx context.Context, s ServerStream, opts ...CallOption) error {
-	options := defaultCallOptions
-	for _, opt := range opts {
-		opt.apply(&options)
-	}
-	if so.desc == nil {
-		return status.Unimplemented.Err()
-	}
-	for _, v := range so.desc.Methods {
-		if options.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
-			continue
-		}
-		timeoutCtx, cancel := context.WithTimeout(s.Context(), options.Timeout)
-		defer cancel()
-		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
-		if err != nil {
-			return err
-		}
-		return s.SendMsg(reply)
-	}
-	for _, v := range so.desc.Streams {
-		if options.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
-			continue
-		}
-		info := &grpc.StreamServerInfo{
-			FullMethod:     v.StreamName,
-			IsClientStream: v.ClientStreams,
-			IsServerStream: v.ServerStreams,
-		}
-		if err := so.streamServerInterceptor(so.imp, s, info, v.Handler); err != nil {
-			return err
-		}
-	}
-	return status.Unimplemented.Err()
-}
-
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	channel := newChannel(c)
@@ -113,14 +77,14 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := so.call(ctx, channel); err != nil {
+			if err := so.roundtrip(ctx, channel); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (so *ServerOptions) call(ctx context.Context, channel *channel) error {
+func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error {
 	streamID, h, p, err := readCall(channel)
 	if err != nil {
 		return err
@@ -137,10 +101,35 @@ func (so *ServerOptions) call(ctx context.Context, channel *channel) error {
 		ctx:       metadata.WithMetadata(ctx, metadatas),
 		Timeout:   time.Duration(h.Timeout) * time.Millisecond,
 	}
-	defer s.Close()
-	if err := so.RoundTrip(ctx, s, &s.CallOptions); err != nil {
-		code := int32(status.Code(err))
-		return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
+	if so.desc == nil {
+		return status.Unimplemented.Err()
 	}
-	return nil
+	for _, v := range so.desc.Methods {
+		if s.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+			continue
+		}
+		timeoutCtx, cancel := context.WithTimeout(s.Context(), s.Timeout)
+		defer cancel()
+		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
+		if err != nil {
+			code := int32(status.Code(err))
+			return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
+		}
+		return s.SendMsg(reply)
+	}
+	for _, v := range so.desc.Streams {
+		if s.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
+			continue
+		}
+		info := &grpc.StreamServerInfo{
+			FullMethod:     v.StreamName,
+			IsClientStream: v.ClientStreams,
+			IsServerStream: v.ServerStreams,
+		}
+		if err := so.streamServerInterceptor(so.imp, s, info, v.Handler); err != nil {
+			code := int32(status.Code(err))
+			return s.send(&api.Response{Header: &api.Header{Code: code, Message: err.Error()}})
+		}
+	}
+	return s.send(&api.Response{Header: &api.Header{Code: int32(codes.Unimplemented), Message: "Unimplemented"}})
 }

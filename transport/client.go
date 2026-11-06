@@ -65,7 +65,7 @@ func WithCodec(c encoding.Codec) Option {
 
 func WithBufSize(n int) Option {
 	return func(c *client) {
-		c.bufsize = min(n, defaultMaxBufSize)
+		c.bufsize = min(n*dfaultBufSize, defaultMaxBufSize)
 	}
 }
 
@@ -117,14 +117,14 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(rt)
 	}
-	rt.Sender = newChannelSize(cc, rt.bufsize)
-	go rt.Handle(ctx, cc)
+	channel := newChannelSize(cc, rt.bufsize)
+	rt.Sender = channel
+	go rt.Handle(ctx, channel)
 	return rt, nil
 }
 
 // run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
-func (c *client) Handle(ctx context.Context, cc net.Conn) error {
-	channel := newChannel(cc)
+func (c *client) Handle(ctx context.Context, channel *channel) error {
 	defer channel.Close()
 	for {
 		select {

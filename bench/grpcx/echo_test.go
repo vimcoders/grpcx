@@ -30,7 +30,7 @@ var (
 
 func Benchmark1K(b *testing.B) {
 	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
+	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -51,7 +51,7 @@ func Benchmark1K(b *testing.B) {
 
 func Benchmark5K(b *testing.B) {
 	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
+	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -72,7 +72,7 @@ func Benchmark5K(b *testing.B) {
 
 func Benchmark1024K(b *testing.B) {
 	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
+	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return

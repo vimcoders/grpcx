@@ -49,6 +49,9 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	if err != nil {
 		return nil, err
 	}
+	if podCount == 0 {
+		return nil, status.Unavailable.Err()
+	}
 	// Dial to each address and create a round tripper for each.
 	for range podCount {
 		rt, err := x.dialContext(childCtx)

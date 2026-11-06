@@ -60,5 +60,7 @@ const (
 	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
 	defaultMaxStreams = math.MaxUint16
 	// DefaultTimeout is the default timeout for each request.
-	defaultTimeout = 3 * time.Second
+	defaultTimeout      = 3 * time.Second
+	defaultReadTimeout  = 3 * defaultTimeout
+	defaultWriteTimeout = defaultTimeout
 )

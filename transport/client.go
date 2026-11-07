@@ -71,8 +71,12 @@ type Options struct {
 
 func (o Options) Keepalive() time.Duration {
 	return defaultKeepalive * defaultTimeout
-
 }
+
+func (o Options) Timeout() time.Duration {
+	return o.timeout
+}
+
 func DefaultOptions() Options {
 	return Options{
 		timeout:    defaultTimeout,

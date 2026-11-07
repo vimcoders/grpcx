@@ -79,6 +79,12 @@ func WithServerBufSize(n int) ServerOption {
 	}
 }
 
+func StreamServerInterceptor(interceptor grpc.StreamServerInterceptor) ServerOption {
+	return func(so *ServerOptions) {
+		so.streamServerInterceptor = interceptor
+	}
+}
+
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	channel := newChannel(c)

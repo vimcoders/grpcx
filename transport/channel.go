@@ -165,9 +165,6 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	ch.t = time.AfterFunc(ch.flushInterval, func() {
 		ch.Lock()
 		defer ch.Unlock()
-		if len(ch.bw) == 0 {
-			return
-		}
 		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 			_ = ch.Conn.Close()
 			return

@@ -168,7 +168,9 @@ func (c *client) dispatch(channel *channel) error {
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
-	options := api.Header{}
+	options := api.Header{
+		Timeout: cmp.Or(c.timeout.Milliseconds(), defaultTimeout.Milliseconds()),
+	}
 	for _, opt := range opts {
 		opt.apply(&options)
 	}

@@ -51,10 +51,7 @@ func putmbuf(p []byte) {
 
 // channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
 type channel struct {
-	bufsize       int
-	flushInterval time.Duration
-	writeTimeout  time.Duration
-	readTimeout   time.Duration
+	Options
 	net.Conn
 	br *bufio.Reader
 	bw net.Buffers
@@ -63,20 +60,16 @@ type channel struct {
 }
 
 // NewChannel creates a new channel with the given net.Conn.
-func newChannel(c net.Conn) *channel {
-	x := &channel{
-		Conn:          c,
-		br:            bufio.NewReader(c),
-		flushInterval: defaultFlushInterval,
-		readTimeout:   defaultReadTimeout,
-		writeTimeout:  defaultWriteTimeout,
+func newChannel(c net.Conn, opts ...Option) *channel {
+	defaultOptions := DefaultOptions()
+	for _, opt := range opts {
+		opt(&defaultOptions)
 	}
-	return x
-}
-
-func newChannelSize(c net.Conn, bufsize int) *channel {
-	x := newChannel(c)
-	x.bufsize = bufsize
+	x := &channel{
+		Conn:    c,
+		br:      bufio.NewReader(c),
+		Options: defaultOptions,
+	}
 	return x
 }
 

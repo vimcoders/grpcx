@@ -63,8 +63,11 @@ func WithBufSize(n int) Option {
 }
 
 type Options struct {
-	maxStreams uint32
-	timeout    time.Duration
+	maxStreams    uint32
+	timeout       time.Duration
+	readTimeout   time.Duration
+	writeTimeout  time.Duration
+	flushInterval time.Duration
 	encoding.Codec
 	bufsize int
 }
@@ -79,9 +82,12 @@ func (o Options) Timeout() time.Duration {
 
 func DefaultOptions() Options {
 	return Options{
-		timeout:    defaultTimeout,
-		maxStreams: defaultMaxStreams,
-		Codec:      encoding.GetCodec(encoding.Name),
+		timeout:       defaultTimeout,
+		maxStreams:    defaultMaxStreams,
+		Codec:         encoding.GetCodec(encoding.Name),
+		readTimeout:   defaultReadTimeout,
+		writeTimeout:  defaultWriteTimeout,
+		flushInterval: defaultFlushInterval,
 	}
 }
 
@@ -126,7 +132,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(&rt.Options)
 	}
-	channel := newChannelSize(cc, rt.bufsize)
+	channel := newChannel(cc, opts...)
 	rt.Sender = channel
 	go rt.Handle(ctx, channel)
 	return rt, nil

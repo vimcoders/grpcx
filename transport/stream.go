@@ -17,13 +17,13 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"sync"
 	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
-	"github.com/vimcoders/grpcx/metadata"
 	"github.com/vimcoders/grpcx/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -61,19 +61,12 @@ func (s *clientStream) Close() error {
 }
 
 func (s *clientStream) SendMsg(m any) error {
-	p, err := s.Marshal(m)
+	p, err := s.codec.Marshal(m)
 	if err != nil {
 		return err
 	}
-	header := &api.Header{
-		Method:  s.Method,
-		Timeout: s.Timeout.Milliseconds(),
-	}
-	for k, v := range s.Metadatas {
-		header.Metadatas = append(header.Metadatas, k, v)
-	}
 	return s.send(&api.Request{
-		Header:  header,
+		Header:  s.header,
 		Payload: p,
 	})
 }
@@ -88,7 +81,7 @@ func (s *clientStream) RecvMsg(m any) error {
 	if code != codes.OK {
 		return status.Error(code, response.Header.Message)
 	}
-	if err := s.Unmarshal(response.Payload, m); err != nil {
+	if err := s.codec.Unmarshal(response.Payload, m); err != nil {
 		return err
 	}
 	return nil
@@ -141,30 +134,42 @@ type CallOption interface {
 }
 
 var defaultCallOptions = CallOptions{
-	Timeout: defaultTimeout,
-	Codec:   encoding.GetCodec(encoding.Name),
+	header: &api.Header{
+		Timeout: defaultTimeout.Milliseconds(),
+	},
+	codec: encoding.GetCodec(encoding.Name),
 }
 
 type CallOptions struct {
-	Method    string
-	Timeout   time.Duration
-	Metadatas metadata.MD
-	encoding.Codec
+	header *api.Header
+	codec  encoding.Codec
 }
 
 func (c CallOptions) apply(opts *CallOptions) {
-	if c.Codec != nil {
-		opts.Codec = c.Codec
+	if c.codec != nil {
+		opts.codec = c.codec
 	}
-	if len(c.Method) > 0 {
-		opts.Method = c.Method
+	if c.header == nil || opts.header == nil {
+		return
 	}
-	if c.Timeout > 0 && c.Timeout < opts.Timeout {
-		opts.Timeout = c.Timeout
+	opts.header.Timeout = cmp.Or(c.header.Timeout, opts.header.Timeout)
+	opts.header.Method = cmp.Or(c.header.Method, opts.header.Method)
+	opts.header.Service = cmp.Or(c.header.Service, opts.header.Service)
+	opts.header.Metadatas = append(opts.header.Metadatas, c.header.Metadatas...)
+}
+
+func (opt CallOptions) Timeout() time.Duration {
+	if opt.header == nil {
+		return 0
 	}
-	if len(c.Metadatas) > 0 {
-		opts.Metadatas = c.Metadatas
+	return time.Millisecond * time.Duration(opt.header.Timeout)
+}
+
+func (opt CallOptions) Method() string {
+	if opt.header == nil {
+		return ""
 	}
+	return opt.header.Method
 }
 
 type serverStream struct {
@@ -180,6 +185,16 @@ func (s *serverStream) Context() context.Context {
 	return s.ctx
 }
 
+func (s *serverStream) senderr(code codes.Code, message string) error {
+	header := s.header
+	header.Code = uint32(code)
+	header.Message = message
+	resp := &api.Response{
+		Header: header,
+	}
+	return s.send(resp)
+}
+
 func (s *serverStream) send(resp *api.Response) error {
 	if len(resp.Payload) > messageLengthMax {
 		return status.OutOfRange.Err()
@@ -192,18 +207,12 @@ func (s *serverStream) send(resp *api.Response) error {
 }
 
 func (s *serverStream) SendMsg(m any) error {
-	b, err := s.Marshal(m)
+	b, err := s.codec.Marshal(m)
 	if err != nil {
 		return err
 	}
-	header := &api.Header{
-		Code:    int32(codes.OK),
-		Timeout: s.Timeout.Milliseconds(),
-		Method:  s.Method,
-	}
-	for k, v := range s.Metadatas {
-		header.Metadatas = append(header.Metadatas, k, v)
-	}
+	header := s.header
+	header.Code = uint32(codes.OK)
 	resp := &api.Response{
 		Header:  header,
 		Payload: b,
@@ -212,7 +221,7 @@ func (s *serverStream) SendMsg(m any) error {
 }
 
 func (s *serverStream) RecvMsg(m any) error {
-	if err := s.Unmarshal(s.p, m); err != nil {
+	if err := s.codec.Unmarshal(s.p, m); err != nil {
 		return err
 	}
 	return nil

@@ -27,7 +27,7 @@ type Header struct {
 	Method        string                 `protobuf:"bytes,2,opt,name=Method,proto3" json:"Method,omitempty"`
 	Timeout       int64                  `protobuf:"varint,3,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
 	Metadatas     []string               `protobuf:"bytes,4,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
-	Code          int32                  `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
+	Code          uint32                 `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
 	Message       string                 `protobuf:"bytes,6,opt,name=Message,proto3" json:"Message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -91,7 +91,7 @@ func (x *Header) GetMetadatas() []string {
 	return nil
 }
 
-func (x *Header) GetCode() int32 {
+func (x *Header) GetCode() uint32 {
 	if x != nil {
 		return x.Code
 	}
@@ -219,7 +219,7 @@ const file_api_proto_rawDesc = "" +
 	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
 	"\aTimeout\x18\x03 \x01(\x03R\aTimeout\x12\x1c\n" +
 	"\tMetadatas\x18\x04 \x03(\tR\tMetadatas\x12\x12\n" +
-	"\x04Code\x18\x05 \x01(\x05R\x04Code\x12\x18\n" +
+	"\x04Code\x18\x05 \x01(\rR\x04Code\x12\x18\n" +
 	"\aMessage\x18\x06 \x01(\tR\aMessage\"H\n" +
 	"\aRequest\x12#\n" +
 	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +

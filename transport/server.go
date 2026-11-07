@@ -110,10 +110,10 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return s.senderr(codes.Unimplemented, "grpc.ServiceDesc zero")
 	}
 	for _, v := range so.desc.Methods {
-		if s.Method() != path.Join("/", so.desc.ServiceName, v.MethodName) {
+		if h.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeout := cmp.Or(s.Timeout(), so.Timeout())
+		timeout := cmp.Or(time.Duration(h.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
@@ -123,7 +123,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return s.SendMsg(reply)
 	}
 	for _, v := range so.desc.Streams {
-		if s.Method() != path.Join("/", so.desc.ServiceName, v.StreamName) {
+		if h.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
 		return v.Handler(so.imp, s)

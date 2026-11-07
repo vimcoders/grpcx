@@ -20,7 +20,6 @@ import (
 	"cmp"
 	"context"
 	"sync"
-	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
@@ -199,20 +198,6 @@ func (s *serverStream) RecvMsg(m any) error {
 		return err
 	}
 	return nil
-}
-
-func (s *serverStream) Timeout() time.Duration {
-	if s.header == nil {
-		return 0
-	}
-	return time.Millisecond * time.Duration(s.header.Timeout)
-}
-
-func (s *serverStream) Method() string {
-	if s.header == nil {
-		return ""
-	}
-	return s.header.Method
 }
 
 type ServerStream interface {

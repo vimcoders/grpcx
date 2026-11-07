@@ -52,7 +52,7 @@ func WithTimeout(d time.Duration) Option {
 // WithCodec sets the codec for the ttrpc transport.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
-		t.Codec = c
+		t.codec = c
 	}
 }
 
@@ -68,8 +68,8 @@ type Options struct {
 	readTimeout   time.Duration
 	writeTimeout  time.Duration
 	flushInterval time.Duration
-	encoding.Codec
-	bufsize int
+	codec         encoding.Codec
+	bufsize       int
 }
 
 func (o Options) Keepalive() time.Duration {
@@ -84,7 +84,7 @@ func DefaultOptions() Options {
 	return Options{
 		timeout:       defaultTimeout,
 		maxStreams:    defaultMaxStreams,
-		Codec:         encoding.GetCodec(encoding.Name),
+		codec:         encoding.GetCodec(encoding.Name),
 		readTimeout:   defaultReadTimeout,
 		writeTimeout:  defaultWriteTimeout,
 		flushInterval: defaultFlushInterval,
@@ -199,7 +199,7 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
-		codec:        c.Codec,
+		codec:        c.codec,
 	}
 	c.streams[s.id] = &s
 	c.streamID = streamID

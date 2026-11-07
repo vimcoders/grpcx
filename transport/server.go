@@ -23,9 +23,10 @@ type ServerOption func(c *ServerOptions)
 // ServerOptions is a struct that holds the options for a ttrpc server.
 type ServerOptions struct {
 	Options
-	desc                   *grpc.ServiceDesc
-	imp                    any
-	unaryServerInterceptor grpc.UnaryServerInterceptor
+	desc                    *grpc.ServiceDesc
+	imp                     any
+	unaryServerInterceptor  grpc.UnaryServerInterceptor
+	streamServerInterceptor grpc.StreamServerInterceptor
 }
 
 // DefaultServerOptions is the default options for a ttrpc server.
@@ -33,6 +34,9 @@ var DefaultServerOptions = ServerOptions{
 	Options: DefaultOptions(),
 	unaryServerInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
+	},
+	streamServerInterceptor: func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		return handler(srv, ss)
 	},
 }
 
@@ -53,7 +57,7 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return func(so *ServerOptions) {
-		so.Codec = codec
+		so.codec = codec
 	}
 }
 
@@ -103,7 +107,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		header: h,
 		Sender: channel,
 		id:     streamID,
-		codec:  so.Codec,
+		codec:  so.codec,
 		ctx:    metadata.WithMetadata(ctx, metadatas),
 	}
 	if so.desc == nil {
@@ -126,7 +130,12 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		if h.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
-		return v.Handler(so.imp, s)
+		info := &grpc.StreamServerInfo{
+			FullMethod:     h.Method,
+			IsClientStream: v.ClientStreams,
+			IsServerStream: v.ServerStreams,
+		}
+		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
 	return s.senderr(codes.Unimplemented, codes.NotFound.String())
 }

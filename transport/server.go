@@ -81,7 +81,7 @@ func WithServerWriteTimeout(d time.Duration) ServerOption {
 
 func WithServerBufSize(n int) ServerOption {
 	return func(so *ServerOptions) {
-		so.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
+		so.bufsize = min(n, defaultMaxBufSize/defaultBufSize)
 	}
 }
 
@@ -93,7 +93,7 @@ func StreamServerInterceptor(interceptor grpc.StreamServerInterceptor) ServerOpt
 
 // Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	channel := newChannel(c)
+	channel := newChannel(c, WithBufSize(so.bufsize))
 	defer channel.Close()
 	for {
 		select {

@@ -153,7 +153,7 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 	}
 }
 
-func (c *client) dispatch(channel *channel) (err error) {
+func (c *client) dispatch(channel *channel) error {
 	hdrID, h, err := channel.Recv()
 	if err != nil {
 		return err
@@ -179,7 +179,7 @@ func (c *client) dispatch(channel *channel) (err error) {
 	}
 	if err := s.put(&header, p); err != nil {
 		putmbuf(p)
-		return s.CloseSend()
+		return s.Close()
 	}
 	return nil
 }

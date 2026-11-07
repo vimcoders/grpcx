@@ -33,12 +33,13 @@ import (
 type clientStream struct {
 	Sender
 	grpc.ClientStream
-	CallOptions
+	header       *api.Header
 	ctx          context.Context
 	id           uint32
 	c            chan *api.Response
 	cancel       context.CancelFunc
 	deleteStream func(id uint32)
+	codec        encoding.Codec
 	sync.Once
 }
 
@@ -130,55 +131,26 @@ func (s *clientStream) recv() (*api.Response, error) {
 }
 
 type CallOption interface {
-	apply(*CallOptions)
+	apply(*api.Header)
 }
 
-var defaultCallOptions = CallOptions{
-	header: &api.Header{
-		Timeout: defaultTimeout.Milliseconds(),
-	},
-	codec: encoding.GetCodec(encoding.Name),
-}
+type CallOptions api.Header
 
-type CallOptions struct {
-	header *api.Header
-	codec  encoding.Codec
-}
-
-func (c CallOptions) apply(opts *CallOptions) {
-	if c.codec != nil {
-		opts.codec = c.codec
-	}
-	if c.header == nil || opts.header == nil {
-		return
-	}
-	opts.header.Timeout = cmp.Or(c.header.Timeout, opts.header.Timeout)
-	opts.header.Method = cmp.Or(c.header.Method, opts.header.Method)
-	opts.header.Service = cmp.Or(c.header.Service, opts.header.Service)
-	opts.header.Metadatas = append(opts.header.Metadatas, c.header.Metadatas...)
-}
-
-func (opt CallOptions) Timeout() time.Duration {
-	if opt.header == nil {
-		return 0
-	}
-	return time.Millisecond * time.Duration(opt.header.Timeout)
-}
-
-func (opt CallOptions) Method() string {
-	if opt.header == nil {
-		return ""
-	}
-	return opt.header.Method
+func (c *CallOptions) apply(opts *api.Header) {
+	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
+	opts.Method = cmp.Or(c.Method, opts.Method)
+	opts.Service = cmp.Or(c.Service, opts.Service)
+	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
 }
 
 type serverStream struct {
 	Sender
 	grpc.ServerStream
-	ctx context.Context
-	id  uint32
-	p   []byte
-	CallOptions
+	ctx    context.Context
+	id     uint32
+	p      []byte
+	header *api.Header
+	codec  encoding.Codec
 }
 
 func (s *serverStream) Context() context.Context {
@@ -225,6 +197,20 @@ func (s *serverStream) RecvMsg(m any) error {
 		return err
 	}
 	return nil
+}
+
+func (s *serverStream) Timeout() time.Duration {
+	if s.header == nil {
+		return 0
+	}
+	return time.Millisecond * time.Duration(s.header.Timeout)
+}
+
+func (s *serverStream) Method() string {
+	if s.header == nil {
+		return ""
+	}
+	return s.header.Method
 }
 
 type ServerStream interface {

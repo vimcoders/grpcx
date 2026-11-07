@@ -168,15 +168,13 @@ func (c *client) dispatch(channel *channel) error {
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
-	options := defaultCallOptions
+	options := api.Header{}
 	for _, opt := range opts {
 		opt.apply(&options)
 	}
-	if dl, ok := ctx.Deadline(); ok && options.Timeout() > time.Until(dl) {
+	if dl, ok := ctx.Deadline(); ok {
 		opt := CallOptions{
-			header: &api.Header{
-				Timeout: time.Until(dl).Milliseconds(),
-			},
+			Timeout: time.Until(dl).Milliseconds(),
 		}
 		opt.apply(&options)
 	}
@@ -195,10 +193,11 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 		ctx:          childCtx,
 		id:           streamID,
 		Sender:       c.Sender,
-		CallOptions:  options,
+		header:       &options,
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
+		codec:        c.Codec,
 	}
 	c.streams[s.id] = &s
 	c.streamID = streamID
@@ -207,13 +206,9 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 
 // NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	h := &api.Header{
+	info := CallOptions{
 		Method:  method,
 		Timeout: c.timeout.Milliseconds(),
-	}
-	info := CallOptions{
-		header: h,
-		codec:  c.Codec,
 	}
 	return c.createStream(ctx, &info)
 }
@@ -234,18 +229,14 @@ func (c *client) getStream(sid uint32) *clientStream {
 
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	h := &api.Header{
+	info := CallOptions{
 		Method:  method,
 		Timeout: c.timeout.Milliseconds(),
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		for k, v := range medatas {
-			h.Metadatas = append(h.Metadatas, k, v)
+			info.Metadatas = append(info.Metadatas, k, v)
 		}
-	}
-	info := CallOptions{
-		header: h,
-		codec:  c.Codec,
 	}
 	s, err := c.createStream(ctx, &info)
 	if err != nil {

@@ -114,7 +114,7 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 		if s.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeout := cmp.Or(s.Timeout, defaultTimeout)
+		timeout := cmp.Or(s.Timeout, so.Timeout())
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)

@@ -106,7 +106,7 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 		return s.send(&api.Response{
 			Header: &api.Header{
 				Code:    int32(codes.Unimplemented),
-				Message: "Unimplemented",
+				Message: "grpc.ServiceDesc zero",
 			},
 		})
 	}

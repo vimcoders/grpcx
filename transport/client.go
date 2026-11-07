@@ -16,6 +16,7 @@ limitations under the License.
 package transport
 
 import (
+	"cmp"
 	"context"
 	"net"
 	"sync"
@@ -32,47 +33,63 @@ import (
 )
 
 // RoundTripper is the interface for sending and receiving messages over a transport.
-type Option func(*client)
+type Option func(*Options)
 
 // WithCodec sets the codec for the ttrpc transport.
 func WithMaxStreams(n uint32) Option {
-	return func(t *client) {
-		t.maxStreams = n
+	return func(t *Options) {
+		t.maxStreams = cmp.Or(n, uint32(defaultMaxStreams))
 	}
 }
 
 // WithCodec sets the codec for the ttrpc transport.
 func WithTimeout(d time.Duration) Option {
-	return func(t *client) {
-		t.timeout = d
+	return func(t *Options) {
+		t.timeout = cmp.Or(d, defaultTimeout)
 	}
 }
 
 // WithCodec sets the codec for the ttrpc transport.
 func WithCodec(c encoding.Codec) Option {
-	return func(t *client) {
+	return func(t *Options) {
 		t.Codec = c
 	}
 }
 
 func WithBufSize(n int) Option {
-	return func(c *client) {
+	return func(c *Options) {
 		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
+	}
+}
+
+type Options struct {
+	maxStreams uint32
+	timeout    time.Duration
+	encoding.Codec
+	bufsize int
+}
+
+func (o Options) Timeout() time.Duration {
+	return o.timeout
+}
+
+func DefaultOptions() Options {
+	return Options{
+		timeout:    defaultTimeout,
+		maxStreams: defaultMaxStreams,
+		Codec:      encoding.GetCodec(encoding.Name),
 	}
 }
 
 // Transport is the implementation of RoundTripper for ttrpc.
 type client struct {
+	Options
 	RoundTripper
 	sync.RWMutex
-	encoding.Codec
 	Sender
 	streams     map[uint32]*clientStream
 	streamID    uint32
-	maxStreams  uint32
 	dialContext func(ctx context.Context) (net.Conn, error)
-	timeout     time.Duration
-	bufsize     int
 	sync.Once
 }
 
@@ -98,14 +115,12 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		return nil, err
 	}
 	rt := &client{
+		Options:     DefaultOptions(),
 		dialContext: dialContext,
-		timeout:     defaultTimeout,
-		maxStreams:  defaultMaxStreams,
 		streams:     make(map[uint32]*clientStream),
-		Codec:       encoding.GetCodec(encoding.Name),
 	}
 	for _, o := range opts {
-		o(rt)
+		o(&rt.Options)
 	}
 	channel := newChannelSize(cc, rt.bufsize)
 	rt.Sender = channel

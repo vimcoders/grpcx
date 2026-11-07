@@ -17,10 +17,9 @@ const (
 	// RoundRobinName is the name of round robin balancer.
 	RoundRobinName = "round_robin"
 	// defaultStep is the default step of round robin balancer.
-	defaultStep    = 1
-	defaultTimeout = 3 * time.Second
+	defaultStep = 1
 	// defaultKeepalive is the default keepalive interval of round robin balancer.
-	defaultKeepalive = 3 * defaultTimeout
+	defaultKeepalive = 3
 )
 
 // rrBuilder is the builder of round robin balancer.
@@ -62,7 +61,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 		}
 		x.rts = append(x.rts, rt)
 	}
-	go x.Keepalive(childCtx)
+	go x.Keepalive(childCtx, opts...)
 	// Return the round robin balancer.
 	return &x, nil
 }
@@ -100,8 +99,12 @@ func DialContext(ctx context.Context, endpoint string, opts ...transport.Option)
 }
 
 // Keepalive keeps the round robin balancer alive.
-func (rr *RoundRobin) Keepalive(ctx context.Context) error {
-	ticker := time.NewTicker(defaultKeepalive)
+func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) error {
+	defaultOptions := transport.DefaultOptions()
+	for _, opt := range opts {
+		opt(&defaultOptions)
+	}
+	ticker := time.NewTicker(defaultKeepalive * defaultOptions.Timeout())
 	defer ticker.Stop()
 	for {
 		select {

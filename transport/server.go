@@ -65,7 +65,7 @@ func WithServerReadTimeout(d time.Duration) ServerOption {
 
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
-		so.readTimeout = d
+		so.writeTimeout = d
 	}
 }
 
@@ -118,7 +118,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
 		if err != nil {
-			return s.senderr(codes.Internal, err.Error())
+			return s.senderr(status.Code(err), err.Error())
 		}
 		return s.SendMsg(reply)
 	}

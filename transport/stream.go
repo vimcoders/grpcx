@@ -147,7 +147,6 @@ type serverStream struct {
 	grpc.ServerStream
 	ctx     context.Context
 	id      uint32
-	header  *api.Header
 	codec   encoding.Codec
 	channel *channel
 }
@@ -157,13 +156,9 @@ func (s *serverStream) Context() context.Context {
 }
 
 func (s *serverStream) senderr(code codes.Code, message string) error {
-	header := s.header
-	header.Code = uint32(code)
-	header.Message = message
-	resp := &api.Response{
-		Header: header,
-	}
-	return s.send(resp)
+	return s.send(&api.Response{
+		Header: &api.Header{Code: uint32(code), Message: message},
+	})
 }
 
 func (s *serverStream) send(resp *api.Response) error {
@@ -182,13 +177,10 @@ func (s *serverStream) SendMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	header := s.header
-	header.Code = uint32(codes.OK)
-	resp := &api.Response{
-		Header:  header,
+	return s.send(&api.Response{
+		Header:  &api.Header{Code: uint32(codes.OK)},
 		Payload: b,
-	}
-	return s.send(resp)
+	})
 }
 
 func (s *serverStream) RecvMsg(m any) error {

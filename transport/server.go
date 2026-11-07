@@ -119,7 +119,6 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 	}
 	metadatas := metadata.Pairs(header.Metadatas...)
 	s := &serverStream{
-		header:  &header,
 		channel: channel,
 		id:      streamID,
 		codec:   so.codec,

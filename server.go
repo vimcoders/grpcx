@@ -2,6 +2,7 @@ package grpcx
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -64,7 +65,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...transpo
 			return err
 		}
 		s.wg.Go(func() {
-			_ = s.Handle(cancelCtx, conn)
+			if err := s.Handle(cancelCtx, conn); err != nil {
+				slog.Error("ListenAndServe", "exited", err.Error())
+			}
 		})
 	}
 }

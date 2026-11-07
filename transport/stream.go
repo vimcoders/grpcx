@@ -106,13 +106,12 @@ func (s *clientStream) send(req *api.Request) error {
 	return s.Sender.Send(s.id, h, req.Payload)
 }
 
-func (s *clientStream) put(header *api.Header, p []byte) error {
+func (s *clientStream) put(h *api.Header, p []byte) error {
 	select {
-	case s.c <- &api.Response{Header: header, Payload: p}:
+	case s.c <- &api.Response{Header: h, Payload: p}:
 		return nil
 	default:
-		defer putmbuf(p)
-		return s.CloseSend()
+		return status.Aborted.Err()
 	}
 }
 
@@ -145,13 +144,12 @@ func (c *CallOptions) apply(opts *api.Header) {
 }
 
 type serverStream struct {
-	Sender
 	grpc.ServerStream
-	ctx    context.Context
-	id     uint32
-	p      []byte
-	header *api.Header
-	codec  encoding.Codec
+	ctx     context.Context
+	id      uint32
+	header  *api.Header
+	codec   encoding.Codec
+	channel *channel
 }
 
 func (s *serverStream) Context() context.Context {
@@ -176,7 +174,7 @@ func (s *serverStream) send(resp *api.Response) error {
 	if err != nil {
 		return err
 	}
-	return s.Sender.Send(s.id, h, resp.Payload)
+	return s.channel.Send(s.id, h, resp.Payload)
 }
 
 func (s *serverStream) SendMsg(m any) error {
@@ -194,7 +192,15 @@ func (s *serverStream) SendMsg(m any) error {
 }
 
 func (s *serverStream) RecvMsg(m any) error {
-	if err := s.codec.Unmarshal(s.p, m); err != nil {
+	streamID, p, err := s.channel.Recv()
+	if err != nil {
+		return err
+	}
+	defer putmbuf(p)
+	if s.id != streamID {
+		return status.DataLoss.Err()
+	}
+	if err := s.codec.Unmarshal(p, m); err != nil {
 		return err
 	}
 	return nil
@@ -202,26 +208,4 @@ func (s *serverStream) RecvMsg(m any) error {
 
 type ServerStream interface {
 	grpc.ServerStream
-}
-
-func readCall(channel *channel) (uint32, *api.Header, []byte, error) {
-	hdrID, h, err := channel.Recv()
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer putmbuf(h)
-	payloadID, p, err := channel.Recv()
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	if payloadID != hdrID {
-		putmbuf(p)
-		return 0, nil, nil, status.DataLoss.Err()
-	}
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
-		putmbuf(p)
-		return 0, nil, nil, err
-	}
-	return hdrID, &header, p, nil
 }

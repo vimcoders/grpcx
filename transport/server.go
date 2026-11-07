@@ -7,6 +7,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 
 	"github.com/vimcoders/grpcx/encoding"
@@ -38,6 +39,7 @@ var DefaultServerOptions = ServerOptions{
 	streamServerInterceptor: func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		return handler(srv, ss)
 	},
+	desc: &grpc.ServiceDesc{},
 }
 
 // NewServer creates a new ttrpc server with the given options.
@@ -50,8 +52,12 @@ func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOptio
 // Codec sets the codec for the ttrpc server.
 func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	return func(so *ServerOptions) {
-		so.desc = sd
-		so.imp = ss
+		if sd != nil {
+			so.desc = sd
+		}
+		if ss != nil {
+			so.imp = ss
+		}
 	}
 }
 
@@ -102,28 +108,28 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 }
 
 func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) error {
-	streamID, h, p, err := readCall(channel)
+	streamID, h, err := channel.Recv()
 	if err != nil {
 		return err
 	}
-	defer putmbuf(p)
-	metadatas := metadata.Pairs(h.Metadatas...)
-	s := &serverStream{
-		p:      p,
-		header: h,
-		Sender: channel,
-		id:     streamID,
-		codec:  so.codec,
-		ctx:    metadata.WithMetadata(ctx, metadatas),
+	defer putmbuf(h)
+	var header api.Header
+	if err := encoding.Unmarshal(h, &header); err != nil {
+		return err
 	}
-	if so.desc == nil {
-		return s.senderr(codes.Unimplemented, "grpc.ServiceDesc zero")
+	metadatas := metadata.Pairs(header.Metadatas...)
+	s := &serverStream{
+		header:  &header,
+		channel: channel,
+		id:      streamID,
+		codec:   so.codec,
+		ctx:     metadata.WithMetadata(ctx, metadatas),
 	}
 	for _, v := range so.desc.Methods {
-		if h.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+		if header.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeout := cmp.Or(time.Duration(h.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
+		timeout := cmp.Or(time.Duration(header.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
@@ -133,15 +139,20 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return s.SendMsg(reply)
 	}
 	for _, v := range so.desc.Streams {
-		if h.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
+		if header.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
 		info := &grpc.StreamServerInfo{
-			FullMethod:     h.Method,
+			FullMethod:     header.Method,
 			IsClientStream: v.ClientStreams,
 			IsServerStream: v.ServerStreams,
 		}
 		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
-	return s.senderr(codes.Unimplemented, codes.NotFound.String())
+	_, p, err := channel.Recv()
+	if err != nil {
+		return err
+	}
+	defer putmbuf(p)
+	return s.senderr(codes.Unimplemented, header.Method)
 }

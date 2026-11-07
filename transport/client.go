@@ -153,16 +153,34 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 	}
 }
 
-func (c *client) dispatch(channel *channel) error {
-	streamID, h, p, err := readCall(channel)
+func (c *client) dispatch(channel *channel) (err error) {
+	hdrID, h, err := channel.Recv()
 	if err != nil {
 		return err
 	}
-	s := c.getStream(streamID)
-	if s != nil {
-		return s.put(h, p)
+	defer putmbuf(h)
+	payloadID, p, err := channel.Recv()
+	if err != nil {
+		return err
 	}
-	defer putmbuf(p)
+	if hdrID != payloadID {
+		putmbuf(p)
+		return status.DataLoss.Err()
+	}
+	var header api.Header
+	if err := encoding.Unmarshal(h, &header); err != nil {
+		putmbuf(p)
+		return err
+	}
+	s := c.getStream(hdrID)
+	if s == nil {
+		putmbuf(p)
+		return nil
+	}
+	if err := s.put(&header, p); err != nil {
+		putmbuf(p)
+		return s.CloseSend()
+	}
 	return nil
 }
 

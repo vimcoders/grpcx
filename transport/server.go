@@ -24,7 +24,7 @@ type ServerOption func(c *ServerOptions)
 
 // ServerOptions is a struct that holds the options for a ttrpc server.
 type ServerOptions struct {
-	encoding.Codec
+	Options
 	desc                    *grpc.ServiceDesc
 	imp                     any
 	unaryServerInterceptor  grpc.UnaryServerInterceptor
@@ -33,7 +33,7 @@ type ServerOptions struct {
 
 // DefaultServerOptions is the default options for a ttrpc server.
 var DefaultServerOptions = ServerOptions{
-	Codec: encoding.GetCodec(encoding.Name),
+	Options: DefaultOptions(),
 	unaryServerInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
 	},
@@ -137,14 +137,7 @@ func (so *ServerOptions) roundtrip(ctx context.Context, channel *channel) error 
 			IsClientStream: v.ClientStreams,
 			IsServerStream: v.ServerStreams,
 		}
-		if err := so.streamServerInterceptor(so.imp, s, info, v.Handler); err != nil {
-			return s.send(&api.Response{
-				Header: &api.Header{
-					Code:    int32(status.Code(err)),
-					Message: err.Error(),
-				},
-			})
-		}
+		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
 	return s.send(&api.Response{
 		Header: &api.Header{

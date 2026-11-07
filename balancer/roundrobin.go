@@ -104,7 +104,7 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 	for _, opt := range opts {
 		opt(&defaultOptions)
 	}
-	ticker := time.NewTicker(defaultKeepalive * defaultOptions.Timeout())
+	ticker := time.NewTicker(defaultKeepalive * defaultOptions.ReadTimeout())
 	defer ticker.Stop()
 	for {
 		select {

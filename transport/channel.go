@@ -182,8 +182,6 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 
 func (ch *channel) Close() error {
 	defer ch.Conn.Close()
-	ch.Lock()
-	defer ch.Unlock()
 	if ch.t != nil {
 		ch.t.Stop()
 	}

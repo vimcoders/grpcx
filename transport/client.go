@@ -63,26 +63,21 @@ func WithBufSize(n int) Option {
 }
 
 type Options struct {
-	maxStreams  uint32
-	timeout     time.Duration
-	readTimeout time.Duration
+	maxStreams uint32
+	timeout    time.Duration
 	encoding.Codec
 	bufsize int
 }
 
-func (o Options) Timeout() time.Duration {
-	return o.timeout
-}
+func (o Options) Keepalive() time.Duration {
+	return defaultKeepalive * defaultTimeout
 
-func (o Options) ReadTimeout() time.Duration {
-	return o.readTimeout
 }
 func DefaultOptions() Options {
 	return Options{
-		timeout:     defaultTimeout,
-		maxStreams:  defaultMaxStreams,
-		Codec:       encoding.GetCodec(encoding.Name),
-		readTimeout: defaultReadTimeout,
+		timeout:    defaultTimeout,
+		maxStreams: defaultMaxStreams,
+		Codec:      encoding.GetCodec(encoding.Name),
 	}
 }
 

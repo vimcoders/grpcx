@@ -63,4 +63,6 @@ const (
 	defaultTimeout      = 3 * time.Second
 	defaultReadTimeout  = 10 * defaultTimeout
 	defaultWriteTimeout = defaultTimeout
+	// defaultKeepalive is the default keepalive interval of round robin balancer.
+	defaultKeepalive = 3
 )

@@ -18,8 +18,6 @@ const (
 	RoundRobinName = "round_robin"
 	// defaultStep is the default step of round robin balancer.
 	defaultStep = 1
-	// defaultKeepalive is the default keepalive interval of round robin balancer.
-	defaultKeepalive = 3
 )
 
 // rrBuilder is the builder of round robin balancer.
@@ -104,7 +102,7 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 	for _, opt := range opts {
 		opt(&defaultOptions)
 	}
-	ticker := time.NewTicker(defaultKeepalive * defaultOptions.ReadTimeout())
+	ticker := time.NewTicker(defaultOptions.Keepalive())
 	defer ticker.Stop()
 	for {
 		select {

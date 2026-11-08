@@ -66,10 +66,7 @@ func (s *clientStream) SendMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	return s.send(&api.Request{
-		Header:  s.header,
-		Payload: p,
-	})
+	return s.send(s.header, p)
 }
 
 func (s *clientStream) RecvMsg(m any) error {
@@ -80,7 +77,7 @@ func (s *clientStream) RecvMsg(m any) error {
 	defer putmbuf(response.Payload)
 	code := codes.Code(response.Header.Code)
 	if code != codes.OK {
-		return status.Error(code, response.Header.Message)
+		return status.Error(code, response.Header.Desc)
 	}
 	if err := s.codec.Unmarshal(response.Payload, m); err != nil {
 		return err
@@ -93,18 +90,18 @@ func (s *clientStream) Context() context.Context {
 }
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
-func (s *clientStream) send(req *api.Request) error {
-	if len(req.Payload) > messageLengthMax {
+func (s *clientStream) send(header *api.Header, b []byte) error {
+	if len(b) > messageLengthMax {
 		return status.OutOfRange.Err()
 	}
-	h, err := encoding.Marshal(req.Header)
+	h, err := encoding.Marshal(header)
 	if err != nil {
 		return err
 	}
 	if len(h) > messageLengthMax {
 		return status.OutOfRange.Err()
 	}
-	return s.Sender.Send(s.id, h, req.Payload)
+	return s.Sender.Send(s.id, h, b)
 }
 
 func (s *clientStream) put(h *api.Header, p []byte) error {
@@ -160,21 +157,15 @@ func (s *serverStream) Context() context.Context {
 	return s.ctx
 }
 
-func (s *serverStream) senderr(code codes.Code, message string) error {
-	return s.send(&api.Response{
-		Header: &api.Header{Code: uint32(code), Message: message},
-	})
-}
-
-func (s *serverStream) send(resp *api.Response) error {
-	if len(resp.Payload) > messageLengthMax {
+func (s *serverStream) send(header *api.Header, p []byte) error {
+	if len(p) > messageLengthMax {
 		return status.OutOfRange.Err()
 	}
-	h, err := encoding.Marshal(resp.Header)
+	h, err := encoding.Marshal(header)
 	if err != nil {
 		return err
 	}
-	return s.channel.Send(s.id, h, resp.Payload)
+	return s.channel.Send(s.id, h, p)
 }
 
 func (s *serverStream) SendMsg(m any) error {
@@ -182,10 +173,7 @@ func (s *serverStream) SendMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	return s.send(&api.Response{
-		Header:  &api.Header{Code: uint32(codes.OK)},
-		Payload: b,
-	})
+	return s.send(&api.Header{Code: uint32(codes.OK)}, b)
 }
 
 func (s *serverStream) RecvMsg(m any) error {

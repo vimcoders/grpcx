@@ -135,7 +135,8 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
 		if err != nil {
-			return s.senderr(status.Code(err), err.Error())
+			code, desc := uint32(status.Code(err)), err.Error()
+			return s.send(&api.Header{Code: code, Desc: desc}, nil)
 		}
 		return s.SendMsg(reply)
 	}
@@ -150,5 +151,6 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		}
 		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
-	return s.senderr(codes.Unimplemented, header.Method)
+	code, desc := uint32(codes.Unimplemented), header.Method
+	return s.send(&api.Header{Code: code, Desc: desc}, nil)
 }

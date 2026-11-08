@@ -9,7 +9,7 @@ message Header {
   int64 Timeout = 3;
   repeated string Metadatas = 4;
   uint32 Code = 5;
-  string Message = 6;
+  string Desc = 6;
   uint32 Length = 7;
   string Authority = 8;
 }

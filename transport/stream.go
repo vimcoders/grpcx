@@ -20,6 +20,7 @@ import (
 	"cmp"
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
@@ -140,6 +141,8 @@ func (c *CallOptions) apply(opts *api.Header) {
 	}
 	opts.Method = cmp.Or(c.Method, opts.Method)
 	opts.Service = cmp.Or(c.Service, opts.Service)
+	opts.Length = cmp.Or(c.Length, opts.Length)
+	opts.Authority = cmp.Or(c.Authority, opts.Authority)
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
 }
 
@@ -149,6 +152,8 @@ type serverStream struct {
 	id      uint32
 	codec   encoding.Codec
 	channel *channel
+	length  uint32
+	count   atomic.Uint32
 }
 
 func (s *serverStream) Context() context.Context {
@@ -184,20 +189,27 @@ func (s *serverStream) SendMsg(m any) error {
 }
 
 func (s *serverStream) RecvMsg(m any) error {
-	streamID, p, err := s.channel.Recv()
+	if s.count.Add(1) > s.length {
+		return status.OutOfRange.Err()
+	}
+	_, p, err := s.channel.Recv()
 	if err != nil {
 		return err
 	}
 	defer putmbuf(p)
-	if s.id != streamID {
-		return status.DataLoss.Err()
-	}
 	if err := s.codec.Unmarshal(p, m); err != nil {
 		return err
 	}
 	return nil
 }
 
-type ServerStream interface {
-	grpc.ServerStream
+func (s *serverStream) Close() error {
+	for n := s.count.Load(); n < s.length; n++ {
+		_, p, err := s.channel.Recv()
+		if err != nil {
+			return err
+		}
+		putmbuf(p)
+	}
+	return nil
 }

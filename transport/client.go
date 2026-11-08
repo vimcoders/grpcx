@@ -187,6 +187,7 @@ func (c *client) dispatch(channel *channel) error {
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
 	options := api.Header{
+		Length:  defaultLength,
 		Timeout: cmp.Or(c.timeout.Milliseconds(), defaultTimeout.Milliseconds()),
 	}
 	for _, opt := range opts {
@@ -229,6 +230,7 @@ func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 	info := CallOptions{
 		Method:  method,
 		Timeout: c.timeout.Milliseconds(),
+		Length:  defaultLength,
 	}
 	return c.createStream(ctx, &info)
 }
@@ -252,6 +254,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	info := CallOptions{
 		Method:  method,
 		Timeout: c.timeout.Milliseconds(),
+		Length:  defaultLength,
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		for k, v := range medatas {
@@ -274,12 +277,22 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	s, err := c.createStream(ctx, &CallOptions{})
+	info := &CallOptions{
+		Length:  defaultLength,
+		Timeout: c.timeout.Milliseconds(),
+	}
+	if req.Header != nil {
+		info.Method = req.Header.Method
+		info.Timeout = req.Header.Timeout
+		info.Service = req.Header.Service
+		info.Authority = req.Header.Authority
+	}
+	s, err := c.createStream(ctx, info)
 	if err != nil {
 		return nil, err
 	}
 	defer s.CloseSend()
-	if err := s.send(req); err != nil {
+	if err := s.send(&api.Request{Header: s.header, Payload: req.Payload}); err != nil {
 		return nil, err
 	}
 	return s.recv()

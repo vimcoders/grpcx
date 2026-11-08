@@ -123,7 +123,9 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		id:      streamID,
 		codec:   so.codec,
 		ctx:     metadata.WithMetadata(ctx, metadatas),
+		length:  header.Length,
 	}
+	defer s.Close()
 	for _, v := range so.desc.Methods {
 		if header.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
@@ -148,10 +150,5 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		}
 		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
-	_, p, err := channel.Recv()
-	if err != nil {
-		return err
-	}
-	defer putmbuf(p)
 	return s.senderr(codes.Unimplemented, header.Method)
 }

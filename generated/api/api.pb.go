@@ -32,7 +32,6 @@ type Header struct {
 	Capacity      uint32                 `protobuf:"varint,7,opt,name=Capacity,proto3" json:"Capacity,omitempty"`
 	Authority     string                 `protobuf:"bytes,8,opt,name=Authority,proto3" json:"Authority,omitempty"`
 	Closed        bool                   `protobuf:"varint,9,opt,name=Closed,proto3" json:"Closed,omitempty"`
-	Ping          bool                   `protobuf:"varint,10,opt,name=Ping,proto3" json:"Ping,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,13 +125,6 @@ func (x *Header) GetAuthority() string {
 func (x *Header) GetClosed() bool {
 	if x != nil {
 		return x.Closed
-	}
-	return false
-}
-
-func (x *Header) GetPing() bool {
-	if x != nil {
-		return x.Ping
 	}
 	return false
 }
@@ -245,7 +237,7 @@ var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
-	"\tapi.proto\x12\x03api\"\x80\x02\n" +
+	"\tapi.proto\x12\x03api\"\xec\x01\n" +
 	"\x06Header\x12\x18\n" +
 	"\aService\x18\x01 \x01(\tR\aService\x12\x16\n" +
 	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
@@ -255,9 +247,7 @@ const file_api_proto_rawDesc = "" +
 	"\x04Desc\x18\x06 \x01(\tR\x04Desc\x12\x1a\n" +
 	"\bCapacity\x18\a \x01(\rR\bCapacity\x12\x1c\n" +
 	"\tAuthority\x18\b \x01(\tR\tAuthority\x12\x16\n" +
-	"\x06Closed\x18\t \x01(\bR\x06Closed\x12\x12\n" +
-	"\x04Ping\x18\n" +
-	" \x01(\bR\x04Ping\"H\n" +
+	"\x06Closed\x18\t \x01(\bR\x06Closed\"H\n" +
 	"\aRequest\x12#\n" +
 	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
 	"\aPayload\x18\x02 \x01(\fR\aPayload\"I\n" +

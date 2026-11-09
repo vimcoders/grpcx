@@ -276,10 +276,7 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 func (c *client) Ping(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	info := &CallOptions{
-		Ping: true,
-	}
-	s, err := c.createStream(timeoutCtx, info)
+	s, err := c.createStream(timeoutCtx)
 	if err != nil {
 		return err
 	}

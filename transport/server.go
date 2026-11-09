@@ -129,8 +129,6 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 	switch {
 	case header.Closed:
 		return nil
-	case header.Ping:
-		return s.send(&CallOptions{Ping: true})
 	}
 	for _, v := range so.desc.Methods {
 		if header.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {

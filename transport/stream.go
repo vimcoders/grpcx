@@ -174,7 +174,6 @@ func (c *CallOptions) apply(opts *api.Header) {
 	opts.Capacity = cmp.Or(c.Capacity, opts.Capacity)
 	opts.Authority = cmp.Or(c.Authority, opts.Authority)
 	opts.Closed = cmp.Or(c.Closed, opts.Closed)
-	opts.Ping = cmp.Or(c.Ping, opts.Ping)
 	opts.Code = cmp.Or(c.Code, opts.Code)
 	opts.Desc = cmp.Or(c.Desc, opts.Desc)
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)

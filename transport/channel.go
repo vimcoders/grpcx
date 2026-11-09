@@ -109,15 +109,29 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 	return s, nil, nil
 }
 
-func (ch *channel) Discard(n uint32) error {
-	for range n {
-		_, p, err := ch.Recv()
-		if err != nil {
-			return err
-		}
-		putmbuf(p)
+func (ch *channel) discard() (int, error) {
+	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
+
+	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
+		return 0, err
 	}
-	return nil
+
+	if _, err := io.ReadFull(ch.br, hrbuf[:]); err != nil {
+		return 0, err
+	}
+
+	// s := binary.BigEndian.Uint32(hrbuf[:4])
+	h := binary.BigEndian.Uint32(hrbuf[4:])
+
+	if h > uint32(messageLengthMax) {
+		return 0, status.OutOfRange.Err()
+	}
+
+	if h > 0 {
+		return ch.br.Discard(int(h))
+	}
+
+	return 0, nil
 }
 
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
@@ -132,7 +146,6 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 		binary.BigEndian.PutUint32(hwbuf[4:], uint32(len(b)))
 		bw = append(bw, hwbuf[:], b)
 	}
-
 	if ch.bufsize <= 0 {
 		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 			return err

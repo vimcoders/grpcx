@@ -65,5 +65,5 @@ const (
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the default keepalive interval of round robin balancer.
 	defaultKeepalive = 3
-	defaultCapacity  = 1
+	defaultLength    = 1
 )

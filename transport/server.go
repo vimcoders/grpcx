@@ -123,7 +123,6 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		id:      streamID,
 		codec:   so.codec,
 		ctx:     metadata.WithMetadata(ctx, metadatas),
-		length:  opts.Length,
 	}
 	defer s.Close()
 	for _, v := range so.desc.Methods {
@@ -133,20 +132,16 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		timeout := cmp.Or(time.Duration(opts.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
 		defer cancel()
-		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
+		reply, err := v.Handler(so.imp, timeoutCtx, s.Recv, so.unaryServerInterceptor)
 		if err != nil {
 			code, desc := uint32(status.Code(err)), err.Error()
-			return s.send(&CallOptions{Code: code, Desc: desc})
+			return s.Send(&api.Empty{}, &CallOptions{Code: code, Desc: desc})
 		}
-		return s.SendMsg(reply)
+		return s.Send(reply, &CallOptions{Code: uint32(codes.OK)})
 	}
 	for _, v := range so.desc.Streams {
 		if opts.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
-		}
-		switch {
-		case opts.Closed:
-			return nil
 		}
 		info := &grpc.StreamServerInfo{
 			FullMethod:     opts.Method,
@@ -156,5 +151,5 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
 	code, desc := uint32(codes.Unimplemented), opts.Method
-	return s.send(&CallOptions{Code: code, Desc: desc})
+	return s.Send(&api.Empty{}, &CallOptions{Code: code, Desc: desc})
 }

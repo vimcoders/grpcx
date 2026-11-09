@@ -145,32 +145,39 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := c.dispatch(channel); err != nil {
+			if err := c.dispatch(ctx, channel); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (c *client) dispatch(channel *channel) error {
-	streamID, h, err := channel.Recv()
+func (c *client) dispatch(ctx context.Context, channel *channel) error {
+	hdrID, h, err := channel.Recv()
 	if err != nil {
 		return err
 	}
 	defer putmbuf(h)
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
+	var opts api.Header
+	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}
-	s := c.getStream(streamID)
+	s := c.getStream(hdrID)
 	if s == nil {
-		return c.channel.Discard(header.Length)
+		if _, err := channel.discard(); err != nil {
+			return err
+		}
+		return nil
 	}
-	return s.put(&header)
+	opt := &CallOptions{
+		Code: opts.Code,
+		Desc: opts.Desc,
+	}
+	return s.invoke(ctx, opt)
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
-func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
+func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
 	if c.maxStreams > 0 && len(c.streams) >= int(c.maxStreams) {
@@ -185,18 +192,10 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 		ctx:          childCtx,
 		id:           streamID,
 		channel:      c.channel,
-		opts:         opts,
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
 		codec:        c.codec,
-	}
-	s.opts = append(s.opts, &CallOptions{Timeout: c.timeout.Milliseconds()})
-	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
-			Timeout: time.Until(dl).Milliseconds(),
-		}
-		s.opts = append(s.opts, &opt)
 	}
 	c.streams[s.id] = &s
 	c.streamID = streamID
@@ -227,7 +226,7 @@ func (c *client) getStream(sid uint32) *clientStream {
 }
 
 // Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
-func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
+func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
 	info := CallOptions{
 		Method:  method,
 		Timeout: c.timeout.Milliseconds(),
@@ -237,15 +236,22 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 			info.Metadatas = append(info.Metadatas, k, v)
 		}
 	}
-	s, err := c.createStream(ctx, &info)
+	opts := []CallOption{&info}
+	if dl, ok := ctx.Deadline(); ok {
+		opt := CallOptions{
+			Timeout: time.Until(dl).Milliseconds(),
+		}
+		opts = append(opts, &opt)
+	}
+	s, err := c.createStream(ctx)
 	if err != nil {
 		return err
 	}
 	defer s.CloseSend()
-	if err := s.SendMsg(req); err != nil {
+	if err := s.Send(req, opts...); err != nil {
 		return err
 	}
-	if err := s.RecvMsg(reply); err != nil {
+	if err := s.Recv(reply); err != nil {
 		return err
 	}
 	return nil
@@ -253,21 +259,27 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 
 // RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	info := &CallOptions{
+	header := cmp.Or(req.Header, &api.Header{})
+	if dl, ok := ctx.Deadline(); ok {
+		opt := CallOptions{
+			Timeout: time.Until(dl).Milliseconds(),
+		}
+		opt.apply(header)
+	}
+	info := CallOptions{
 		Timeout: c.timeout.Milliseconds(),
 	}
-	if req.Header != nil {
-		info.Method = req.Header.Method
-		info.Timeout = req.Header.Timeout
-		info.Service = req.Header.Service
-		info.Authority = req.Header.Authority
+	info.apply(header)
+	h, err := encoding.Marshal(header)
+	if err != nil {
+		return nil, err
 	}
-	s, err := c.createStream(ctx, info)
+	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.CloseSend()
-	if err := s.send(req.Payload); err != nil {
+	if err := s.send(s.id, h, req.Payload); err != nil {
 		return nil, err
 	}
 	return s.recv()
@@ -276,15 +288,7 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 func (c *client) Ping(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	s, err := c.createStream(timeoutCtx)
-	if err != nil {
-		return err
-	}
-	defer s.CloseSend()
-	if err := s.send(); err != nil {
-		return err
-	}
-	if _, err := s.recv(); err != nil {
+	if _, err := c.RoundTrip(timeoutCtx, &api.Request{}); err != nil {
 		return err
 	}
 	return nil

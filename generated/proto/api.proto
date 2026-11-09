@@ -24,3 +24,5 @@ message Response {
   Header Header = 1;
   bytes Payload = 2;
 }
+
+message Empty {}

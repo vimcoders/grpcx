@@ -233,6 +233,42 @@ func (x *Response) GetPayload() []byte {
 	return nil
 }
 
+type Empty struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Empty) Reset() {
+	*x = Empty{}
+	mi := &file_api_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Empty) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Empty) ProtoMessage() {}
+
+func (x *Empty) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Empty.ProtoReflect.Descriptor instead.
+func (*Empty) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{3}
+}
+
 var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
@@ -253,7 +289,8 @@ const file_api_proto_rawDesc = "" +
 	"\aPayload\x18\x02 \x01(\fR\aPayload\"I\n" +
 	"\bResponse\x12#\n" +
 	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
-	"\aPayload\x18\x02 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
+	"\aPayload\x18\x02 \x01(\fR\aPayload\"\a\n" +
+	"\x05EmptyB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_api_proto_rawDescOnce sync.Once
@@ -267,11 +304,12 @@ func file_api_proto_rawDescGZIP() []byte {
 	return file_api_proto_rawDescData
 }
 
-var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_api_proto_goTypes = []any{
 	(*Header)(nil),   // 0: api.Header
 	(*Request)(nil),  // 1: api.Request
 	(*Response)(nil), // 2: api.Response
+	(*Empty)(nil),    // 3: api.Empty
 }
 var file_api_proto_depIdxs = []int32{
 	0, // 0: api.Request.Header:type_name -> api.Header
@@ -294,7 +332,7 @@ func file_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_rawDesc), len(file_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

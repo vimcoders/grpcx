@@ -148,8 +148,8 @@ type CallOption interface {
 type CallOptions api.Header
 
 func (c *CallOptions) apply(opts *api.Header) {
-	if c.Timeout > 0 && c.Timeout < opts.Timeout {
-		opts.Timeout = c.Timeout
+	if c.Timeout > 0 {
+		opts.Timeout = min(cmp.Or(opts.Timeout, c.Timeout), c.Timeout)
 	}
 	opts.Method = cmp.Or(c.Method, opts.Method)
 	opts.Service = cmp.Or(c.Service, opts.Service)

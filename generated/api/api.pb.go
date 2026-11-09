@@ -29,7 +29,7 @@ type Header struct {
 	Metadatas     []string               `protobuf:"bytes,4,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
 	Code          uint32                 `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
 	Desc          string                 `protobuf:"bytes,6,opt,name=Desc,proto3" json:"Desc,omitempty"`
-	Capacity      uint32                 `protobuf:"varint,7,opt,name=Capacity,proto3" json:"Capacity,omitempty"`
+	Length        uint32                 `protobuf:"varint,7,opt,name=Length,proto3" json:"Length,omitempty"`
 	Authority     string                 `protobuf:"bytes,8,opt,name=Authority,proto3" json:"Authority,omitempty"`
 	Closed        bool                   `protobuf:"varint,9,opt,name=Closed,proto3" json:"Closed,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -108,9 +108,9 @@ func (x *Header) GetDesc() string {
 	return ""
 }
 
-func (x *Header) GetCapacity() uint32 {
+func (x *Header) GetLength() uint32 {
 	if x != nil {
-		return x.Capacity
+		return x.Length
 	}
 	return 0
 }
@@ -237,15 +237,15 @@ var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
-	"\tapi.proto\x12\x03api\"\xec\x01\n" +
+	"\tapi.proto\x12\x03api\"\xe8\x01\n" +
 	"\x06Header\x12\x18\n" +
 	"\aService\x18\x01 \x01(\tR\aService\x12\x16\n" +
 	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
 	"\aTimeout\x18\x03 \x01(\x03R\aTimeout\x12\x1c\n" +
 	"\tMetadatas\x18\x04 \x03(\tR\tMetadatas\x12\x12\n" +
 	"\x04Code\x18\x05 \x01(\rR\x04Code\x12\x12\n" +
-	"\x04Desc\x18\x06 \x01(\tR\x04Desc\x12\x1a\n" +
-	"\bCapacity\x18\a \x01(\rR\bCapacity\x12\x1c\n" +
+	"\x04Desc\x18\x06 \x01(\tR\x04Desc\x12\x16\n" +
+	"\x06Length\x18\a \x01(\rR\x06Length\x12\x1c\n" +
 	"\tAuthority\x18\b \x01(\tR\tAuthority\x12\x16\n" +
 	"\x06Closed\x18\t \x01(\bR\x06Closed\"H\n" +
 	"\aRequest\x12#\n" +

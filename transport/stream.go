@@ -78,16 +78,16 @@ func (s *clientStream) SendMsg(m any) error {
 }
 
 func (s *clientStream) RecvMsg(m any) error {
-	response, err := s.recv()
+	reply, err := s.recv()
 	if err != nil {
 		return err
 	}
-	defer putmbuf(response.Payload)
-	code := codes.Code(response.Header.Code)
+	defer putmbuf(reply.Payload)
+	code := codes.Code(reply.Header.Code)
 	if code != codes.OK {
-		return status.Error(code, response.Header.Desc)
+		return status.Error(code, reply.Header.Desc)
 	}
-	if err := s.codec.Unmarshal(response.Payload, m); err != nil {
+	if err := s.codec.Unmarshal(reply.Payload, m); err != nil {
 		return err
 	}
 	return nil
@@ -104,7 +104,7 @@ func (s *clientStream) send(p ...[]byte) error {
 		opt.apply(&header)
 	}
 	opt := CallOptions{
-		Capacity: uint32(len(p)),
+		Length: uint32(len(p)),
 	}
 	opt.apply(&header)
 	h, err := encoding.Marshal(&header)
@@ -119,7 +119,7 @@ func (s *clientStream) put(h *api.Header) error {
 	if ok := h.Closed; ok {
 		return s.Close()
 	}
-	if h.Capacity == 0 {
+	if h.Length == 0 {
 		select {
 		case s.c <- &api.Response{Header: h}:
 		default:
@@ -127,7 +127,7 @@ func (s *clientStream) put(h *api.Header) error {
 		}
 		return nil
 	}
-	for range h.Capacity {
+	for range h.Length {
 		streamID, p, err := s.channel.Recv()
 		if err != nil {
 			return err
@@ -171,7 +171,7 @@ func (c *CallOptions) apply(opts *api.Header) {
 	}
 	opts.Method = cmp.Or(c.Method, opts.Method)
 	opts.Service = cmp.Or(c.Service, opts.Service)
-	opts.Capacity = cmp.Or(c.Capacity, opts.Capacity)
+	opts.Length = cmp.Or(c.Length, opts.Length)
 	opts.Authority = cmp.Or(c.Authority, opts.Authority)
 	opts.Closed = cmp.Or(c.Closed, opts.Closed)
 	opts.Code = cmp.Or(c.Code, opts.Code)
@@ -181,11 +181,11 @@ func (c *CallOptions) apply(opts *api.Header) {
 
 type unaryStream struct {
 	grpc.ServerStream
-	ctx      context.Context
-	id       uint32
-	codec    encoding.Codec
-	channel  *channel
-	capacity uint32
+	ctx     context.Context
+	id      uint32
+	codec   encoding.Codec
+	channel *channel
+	length  uint32
 }
 
 func (s *unaryStream) Context() context.Context {
@@ -210,7 +210,7 @@ func (s *unaryStream) SendMsg(m any) error {
 		return err
 	}
 	var header api.Header
-	opt := CallOptions{Code: uint32(codes.OK), Capacity: 1}
+	opt := CallOptions{Code: uint32(codes.OK), Length: defaultCapacity}
 	opt.apply(&header)
 	h, err := encoding.Marshal(&header)
 	if err != nil {
@@ -221,10 +221,10 @@ func (s *unaryStream) SendMsg(m any) error {
 }
 
 func (s *unaryStream) RecvMsg(m any) error {
-	if s.capacity == 0 {
+	if s.length == 0 {
 		return status.OutOfRange.Err()
 	}
-	s.capacity--
+	s.length--
 	streamID, p, err := s.channel.Recv()
 	if err != nil {
 		return err
@@ -240,7 +240,7 @@ func (s *unaryStream) RecvMsg(m any) error {
 }
 
 func (s *unaryStream) Close() error {
-	for n := s.capacity; n > 0; n-- {
+	for n := s.length; n > 0; n-- {
 		_, p, err := s.channel.Recv()
 		if err != nil {
 			return err

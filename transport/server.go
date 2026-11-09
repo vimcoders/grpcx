@@ -113,28 +113,24 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return err
 	}
 	defer putmbuf(h)
-	var header api.Header
-	if err := encoding.Unmarshal(h, &header); err != nil {
+	var opts api.Header
+	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}
-	metadatas := metadata.Pairs(header.Metadatas...)
+	metadatas := metadata.Pairs(opts.Metadatas...)
 	s := &unaryStream{
-		channel:  channel,
-		id:       streamID,
-		codec:    so.codec,
-		ctx:      metadata.WithMetadata(ctx, metadatas),
-		capacity: header.Capacity,
+		channel: channel,
+		id:      streamID,
+		codec:   so.codec,
+		ctx:     metadata.WithMetadata(ctx, metadatas),
+		length:  opts.Length,
 	}
 	defer s.Close()
-	switch {
-	case header.Closed:
-		return nil
-	}
 	for _, v := range so.desc.Methods {
-		if header.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
+		if opts.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		timeout := cmp.Or(time.Duration(header.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
+		timeout := cmp.Or(time.Duration(opts.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
 		defer cancel()
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
@@ -145,16 +141,20 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return s.SendMsg(reply)
 	}
 	for _, v := range so.desc.Streams {
-		if header.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
+		if opts.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
 			continue
 		}
+		switch {
+		case opts.Closed:
+			return nil
+		}
 		info := &grpc.StreamServerInfo{
-			FullMethod:     header.Method,
+			FullMethod:     opts.Method,
 			IsClientStream: v.ClientStreams,
 			IsServerStream: v.ServerStreams,
 		}
 		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
-	code, desc := uint32(codes.Unimplemented), header.Method
+	code, desc := uint32(codes.Unimplemented), opts.Method
 	return s.send(&CallOptions{Code: code, Desc: desc})
 }

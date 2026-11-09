@@ -164,7 +164,7 @@ func (c *client) dispatch(channel *channel) error {
 	}
 	s := c.getStream(streamID)
 	if s == nil {
-		return c.channel.Discard(header.Capacity)
+		return c.channel.Discard(header.Length)
 	}
 	return s.put(&header)
 }

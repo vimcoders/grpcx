@@ -109,10 +109,24 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 	return s, nil, nil
 }
 
+func (ch *channel) Discard(n uint32) error {
+	for range n {
+		_, p, err := ch.Recv()
+		if err != nil {
+			return err
+		}
+		putmbuf(p)
+	}
+	return nil
+}
+
 // Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
 func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
+		if len(b) > messageLengthMax {
+			return status.OutOfRange.Err()
+		}
 		var hwbuf [messageHeaderLength]byte
 		binary.BigEndian.PutUint32(hwbuf[:4], streamID)
 		binary.BigEndian.PutUint32(hwbuf[4:], uint32(len(b)))

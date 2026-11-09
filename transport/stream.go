@@ -19,8 +19,8 @@ package transport
 import (
 	"cmp"
 	"context"
+	"net"
 	"sync"
-	"sync/atomic"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
@@ -31,24 +31,32 @@ import (
 
 // stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
 type clientStream struct {
-	Sender
+	channel *channel
 	grpc.ClientStream
-	header       *api.Header
 	ctx          context.Context
 	id           uint32
 	c            chan *api.Response
 	cancel       context.CancelFunc
 	deleteStream func(id uint32)
 	codec        encoding.Codec
+	opts         []CallOption
 	sync.Once
 }
 
 func (s *clientStream) CloseSend() error {
+	defer s.Close()
+	var header api.Header
+	opt := CallOptions{Closed: true}
+	opt.apply(&header)
+	h, err := encoding.Marshal(&header)
+	if err != nil {
+		return err
+	}
 	s.Once.Do(func() {
-		defer s.Close()
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)
 		}
+		_ = s.channel.Send(s.id, h)
 	})
 	return nil
 }
@@ -66,7 +74,7 @@ func (s *clientStream) SendMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	return s.send(s.header, p)
+	return s.send(p)
 }
 
 func (s *clientStream) RecvMsg(m any) error {
@@ -90,27 +98,52 @@ func (s *clientStream) Context() context.Context {
 }
 
 // send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
-func (s *clientStream) send(header *api.Header, b []byte) error {
-	if len(b) > messageLengthMax {
-		return status.OutOfRange.Err()
+func (s *clientStream) send(p ...[]byte) error {
+	var header api.Header
+	for _, opt := range s.opts {
+		opt.apply(&header)
 	}
-	h, err := encoding.Marshal(header)
+	opt := CallOptions{
+		Capacity: uint32(len(p)),
+	}
+	opt.apply(&header)
+	h, err := encoding.Marshal(&header)
 	if err != nil {
 		return err
 	}
-	if len(h) > messageLengthMax {
-		return status.OutOfRange.Err()
-	}
-	return s.Sender.Send(s.id, h, b)
+	buffers := append(net.Buffers{h}, p...)
+	return s.channel.Send(s.id, buffers...)
 }
 
-func (s *clientStream) put(h *api.Header, p []byte) error {
-	select {
-	case s.c <- &api.Response{Header: h, Payload: p}:
-		return nil
-	default:
-		return status.Aborted.Err()
+func (s *clientStream) put(h *api.Header) error {
+	if ok := h.Closed; ok {
+		return s.Close()
 	}
+	if h.Capacity == 0 {
+		select {
+		case s.c <- &api.Response{Header: h}:
+		default:
+			return s.Close()
+		}
+		return nil
+	}
+	for range h.Capacity {
+		streamID, p, err := s.channel.Recv()
+		if err != nil {
+			return err
+		}
+		if streamID != s.id {
+			putmbuf(p)
+			return status.DataLoss.Err()
+		}
+		select {
+		case s.c <- &api.Response{Header: h, Payload: p}:
+		default:
+			putmbuf(p)
+			return s.Close()
+		}
+	}
+	return nil
 }
 
 // recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
@@ -138,61 +171,77 @@ func (c *CallOptions) apply(opts *api.Header) {
 	}
 	opts.Method = cmp.Or(c.Method, opts.Method)
 	opts.Service = cmp.Or(c.Service, opts.Service)
-	opts.Length = cmp.Or(c.Length, opts.Length)
+	opts.Capacity = cmp.Or(c.Capacity, opts.Capacity)
 	opts.Authority = cmp.Or(c.Authority, opts.Authority)
+	opts.Closed = cmp.Or(c.Closed, opts.Closed)
+	opts.Ping = cmp.Or(c.Ping, opts.Ping)
+	opts.Code = cmp.Or(c.Code, opts.Code)
+	opts.Desc = cmp.Or(c.Desc, opts.Desc)
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
 }
 
-type serverStream struct {
+type unaryStream struct {
 	grpc.ServerStream
-	ctx     context.Context
-	id      uint32
-	codec   encoding.Codec
-	channel *channel
-	length  uint32
-	count   atomic.Uint32
+	ctx      context.Context
+	id       uint32
+	codec    encoding.Codec
+	channel  *channel
+	capacity uint32
 }
 
-func (s *serverStream) Context() context.Context {
+func (s *unaryStream) Context() context.Context {
 	return s.ctx
 }
 
-func (s *serverStream) send(header *api.Header, p []byte) error {
-	if len(p) > messageLengthMax {
-		return status.OutOfRange.Err()
+func (s *unaryStream) send(opts ...CallOption) error {
+	var header api.Header
+	for _, v := range opts {
+		v.apply(&header)
 	}
-	h, err := encoding.Marshal(header)
+	h, err := encoding.Marshal(&header)
 	if err != nil {
 		return err
 	}
-	return s.channel.Send(s.id, h, p)
+	return s.channel.Send(s.id, h)
 }
 
-func (s *serverStream) SendMsg(m any) error {
+func (s *unaryStream) SendMsg(m any) error {
 	b, err := s.codec.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return s.send(&api.Header{Code: uint32(codes.OK)}, b)
+	var header api.Header
+	opt := CallOptions{Code: uint32(codes.OK), Capacity: 1}
+	opt.apply(&header)
+	h, err := encoding.Marshal(&header)
+	if err != nil {
+		return err
+	}
+	buffers := net.Buffers{h, b}
+	return s.channel.Send(s.id, buffers...)
 }
 
-func (s *serverStream) RecvMsg(m any) error {
-	if s.count.Add(1) > s.length {
+func (s *unaryStream) RecvMsg(m any) error {
+	if s.capacity == 0 {
 		return status.OutOfRange.Err()
 	}
-	_, p, err := s.channel.Recv()
+	s.capacity--
+	streamID, p, err := s.channel.Recv()
 	if err != nil {
 		return err
 	}
 	defer putmbuf(p)
+	if streamID != s.id {
+		return status.DataLoss.Err()
+	}
 	if err := s.codec.Unmarshal(p, m); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *serverStream) Close() error {
-	for n := s.count.Load(); n < s.length; n++ {
+func (s *unaryStream) Close() error {
+	for n := s.capacity; n > 0; n-- {
 		_, p, err := s.channel.Recv()
 		if err != nil {
 			return err

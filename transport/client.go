@@ -96,7 +96,7 @@ type client struct {
 	Options
 	RoundTripper
 	sync.RWMutex
-	Sender
+	channel     *channel
 	streams     map[uint32]*clientStream
 	streamID    uint32
 	dialContext func(ctx context.Context) (net.Conn, error)
@@ -132,9 +132,8 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(&rt.Options)
 	}
-	channel := newChannel(cc, opts...)
-	rt.Sender = channel
-	go rt.Handle(ctx, channel)
+	rt.channel = newChannel(cc, opts...)
+	go rt.Handle(ctx, rt.channel)
 	return rt, nil
 }
 
@@ -154,57 +153,29 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 }
 
 func (c *client) dispatch(channel *channel) error {
-	hdrID, h, err := channel.Recv()
+	streamID, h, err := channel.Recv()
 	if err != nil {
 		return err
 	}
 	defer putmbuf(h)
-	payloadID, p, err := channel.Recv()
-	if err != nil {
-		return err
-	}
-	if hdrID != payloadID {
-		putmbuf(p)
-		return status.DataLoss.Err()
-	}
 	var header api.Header
 	if err := encoding.Unmarshal(h, &header); err != nil {
-		putmbuf(p)
 		return err
 	}
-	s := c.getStream(hdrID)
+	s := c.getStream(streamID)
 	if s == nil {
-		putmbuf(p)
-		return nil
+		return c.channel.Discard(header.Capacity)
 	}
-	if err := s.put(&header, p); err != nil {
-		putmbuf(p)
-		return s.Close()
-	}
-	return nil
+	return s.put(&header)
 }
 
 // createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
 func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
-	options := api.Header{
-		Length:  defaultLength,
-		Timeout: cmp.Or(c.timeout.Milliseconds(), defaultTimeout.Milliseconds()),
-	}
-	for _, opt := range opts {
-		opt.apply(&options)
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
-			Timeout: time.Until(dl).Milliseconds(),
-		}
-		opt.apply(&options)
-	}
 	c.Lock()
 	defer c.Unlock()
 	if c.maxStreams > 0 && len(c.streams) >= int(c.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}
-
 	streamID := c.streamID + 1
 	if _, ok := c.streams[streamID]; ok {
 		return nil, status.ResourceExhausted.Err()
@@ -213,12 +184,19 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
-		Sender:       c.Sender,
-		header:       &options,
+		channel:      c.channel,
+		opts:         opts,
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
 		codec:        c.codec,
+	}
+	s.opts = append(s.opts, &CallOptions{Timeout: c.timeout.Milliseconds()})
+	if dl, ok := ctx.Deadline(); ok {
+		opt := CallOptions{
+			Timeout: time.Until(dl).Milliseconds(),
+		}
+		s.opts = append(s.opts, &opt)
 	}
 	c.streams[s.id] = &s
 	c.streamID = streamID
@@ -283,14 +261,13 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 		info.Timeout = req.Header.Timeout
 		info.Service = req.Header.Service
 		info.Authority = req.Header.Authority
-		info.Length = req.Header.Length
 	}
 	s, err := c.createStream(ctx, info)
 	if err != nil {
 		return nil, err
 	}
 	defer s.CloseSend()
-	if err := s.send(s.header, req.Payload); err != nil {
+	if err := s.send(req.Payload); err != nil {
 		return nil, err
 	}
 	return s.recv()
@@ -299,7 +276,18 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 func (c *client) Ping(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if _, err := c.RoundTrip(timeoutCtx, &api.Request{}); err != nil {
+	info := &CallOptions{
+		Ping: true,
+	}
+	s, err := c.createStream(timeoutCtx, info)
+	if err != nil {
+		return err
+	}
+	defer s.CloseSend()
+	if err := s.send(); err != nil {
+		return err
+	}
+	if _, err := s.recv(); err != nil {
 		return err
 	}
 	return nil
@@ -316,5 +304,5 @@ func (c *client) Close() error {
 		clear(c.streams)
 		c.maxStreams = 0
 	})
-	return c.Sender.Close()
+	return c.channel.Close()
 }

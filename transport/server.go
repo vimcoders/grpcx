@@ -118,14 +118,20 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return err
 	}
 	metadatas := metadata.Pairs(header.Metadatas...)
-	s := &serverStream{
-		channel: channel,
-		id:      streamID,
-		codec:   so.codec,
-		ctx:     metadata.WithMetadata(ctx, metadatas),
-		length:  header.Length,
+	s := &unaryStream{
+		channel:  channel,
+		id:       streamID,
+		codec:    so.codec,
+		ctx:      metadata.WithMetadata(ctx, metadatas),
+		capacity: header.Capacity,
 	}
 	defer s.Close()
+	switch {
+	case header.Closed:
+		return nil
+	case header.Ping:
+		return s.send(&CallOptions{Ping: true})
+	}
 	for _, v := range so.desc.Methods {
 		if header.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
 			continue
@@ -136,7 +142,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		reply, err := v.Handler(so.imp, timeoutCtx, s.RecvMsg, so.unaryServerInterceptor)
 		if err != nil {
 			code, desc := uint32(status.Code(err)), err.Error()
-			return s.send(&api.Header{Code: code, Desc: desc}, nil)
+			return s.send(&CallOptions{Code: code, Desc: desc})
 		}
 		return s.SendMsg(reply)
 	}
@@ -152,5 +158,5 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
 	code, desc := uint32(codes.Unimplemented), header.Method
-	return s.send(&api.Header{Code: code, Desc: desc}, nil)
+	return s.send(&CallOptions{Code: code, Desc: desc})
 }

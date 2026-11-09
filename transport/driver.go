@@ -65,6 +65,4 @@ const (
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the default keepalive interval of round robin balancer.
 	defaultKeepalive = 3
-	// defaultLength 是 unary 请求默认声明的消息条数。
-	defaultLength = 1
 )

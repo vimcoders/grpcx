@@ -10,8 +10,10 @@ message Header {
   repeated string Metadatas = 4;
   uint32 Code = 5;
   string Desc = 6;
-  uint32 Length = 7;
+  uint32 Capacity = 7;
   string Authority = 8;
+  bool Closed = 9;
+  bool Ping = 10;
 }
 
 message Request {

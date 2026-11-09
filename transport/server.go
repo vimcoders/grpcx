@@ -18,38 +18,41 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// Server is a ttrpc server that handles incoming requests and dispatches them to the appropriate service method.
+// ServerOption configures a ServerOptions.
 type ServerOption func(c *ServerOptions)
 
-// ServerOptions is a struct that holds the options for a ttrpc server.
+// ServerOptions holds the options for a grpcx server: the registered service
+// descriptor and implementation, the unary interceptor, plus the embedded
+// transport Options shared with the client side.
 type ServerOptions struct {
 	Options
-	desc                    *grpc.ServiceDesc
-	imp                     any
-	unaryServerInterceptor  grpc.UnaryServerInterceptor
-	streamServerInterceptor grpc.StreamServerInterceptor
+	desc                   *grpc.ServiceDesc
+	imp                    any
+	unaryServerInterceptor grpc.UnaryServerInterceptor
 }
 
-// DefaultServerOptions is the default options for a ttrpc server.
+// DefaultServerOptions is the default configuration for a grpcx server: the
+// standard transport options, a pass-through unary interceptor and an empty
+// service descriptor.
 var DefaultServerOptions = ServerOptions{
 	Options: DefaultOptions(),
 	unaryServerInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
 	},
-	streamServerInterceptor: func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		return handler(srv, ss)
-	},
 	desc: &grpc.ServiceDesc{},
 }
 
-// NewServer creates a new ttrpc server with the given options.
+// UnaryServerInterceptor sets the interceptor that wraps every unary call,
+// receiving the server implementation, the request, the call info and the
+// handler to invoke.
 func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
 	return func(so *ServerOptions) {
 		so.unaryServerInterceptor = interceptor
 	}
 }
 
-// Codec sets the codec for the ttrpc server.
+// RegisterService registers the service descriptor and its implementation.
+// nil arguments are ignored so an already registered service is kept.
 func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	return func(so *ServerOptions) {
 		if sd != nil {
@@ -61,37 +64,41 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	}
 }
 
+// WithServerCodec sets the codec used to unmarshal requests and marshal
+// replies on the server side.
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return func(so *ServerOptions) {
 		so.codec = codec
 	}
 }
 
+// WithServerReadTimeout sets how long the server waits for the next frame
+// before giving up on the connection.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.readTimeout = d
 	}
 }
 
+// WithServerWriteTimeout sets how long the server waits for a write to flush
+// before failing the call.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.writeTimeout = d
 	}
 }
 
+// WithServerBufSize caps the send buffer in blocks of defaultBufSize,
+// clamped to defaultMaxBufSize/defaultBufSize. A value of zero disables
+// batching and makes every Send synchronous.
 func WithServerBufSize(n int) ServerOption {
 	return func(so *ServerOptions) {
 		so.bufsize = min(n, defaultMaxBufSize/defaultBufSize)
 	}
 }
 
-func StreamServerInterceptor(interceptor grpc.StreamServerInterceptor) ServerOption {
-	return func(so *ServerOptions) {
-		so.streamServerInterceptor = interceptor
-	}
-}
-
-// Handle handles incoming requests on the given net.Conn. It reads requests from the connection, dispatches them to the appropriate service method, and writes responses back to the connection.
+// Handle serves the connection until it breaks: it creates the channel, then
+// loops reading one frame at a time and dispatching it through interceptor.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	channel := newChannel(c, WithBufSize(so.bufsize))
 	defer channel.Close()
@@ -107,6 +114,9 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	}
 }
 
+// interceptor reads one request frame, resolves the target method from the
+// header, and runs its unary handler. An unknown method is answered with
+// codes.Unimplemented.
 func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) error {
 	streamID, h, err := channel.Recv()
 	if err != nil {
@@ -138,17 +148,6 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 			return s.Send(&api.Empty{}, &CallOptions{Code: code, Desc: desc})
 		}
 		return s.Send(reply, &CallOptions{Code: uint32(codes.OK)})
-	}
-	for _, v := range so.desc.Streams {
-		if opts.Method != path.Join("/", so.desc.ServiceName, v.StreamName) {
-			continue
-		}
-		info := &grpc.StreamServerInfo{
-			FullMethod:     opts.Method,
-			IsClientStream: v.ClientStreams,
-			IsServerStream: v.ServerStreams,
-		}
-		return so.streamServerInterceptor(so.imp, s, info, v.Handler)
 	}
 	code, desc := uint32(codes.Unimplemented), opts.Method
 	return s.Send(&api.Empty{}, &CallOptions{Code: code, Desc: desc})

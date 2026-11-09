@@ -28,28 +28,32 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
-// Sender is the interface for sending messages to a channel.
+// Sender is the interface for sending messages to a channel. It is kept for
+// compatibility; the transport talks to the concrete *channel directly.
 type Sender interface {
 	Send(uint32, ...[]byte) error
 	io.Closer
 }
 
-// with every request.
+// buffers is the process-wide buffer pool every frame payload is allocated
+// from, so a 1MB payload is recycled instead of allocated per call.
 var buffers = mem.DefaultBufferPool()
 
-// getmbuf returns a buffer from the pool. The buffer is guaranteed to be at least size bytes long.
+// getmbuf returns a buffer from the pool, guaranteed to be at least size bytes
+// long. The pool rounds up to its own size classes.
 func getmbuf(size int) []byte {
 	// we can't use the standard New method on pool because we want to allocate
 	// based on size.
 	return *buffers.Get(size)
 }
 
-// putmbuf returns a buffer to the pool. The buffer must have been allocated by getmbuf.
+// putmbuf returns a buffer obtained from getmbuf to the pool.
 func putmbuf(p []byte) {
 	buffers.Put(&p)
 }
 
-// channel is a wrapper around a net.Conn that provides methods for sending and receiving messages with a fixed-length header.
+// channel owns one net.Conn: it frames messages, allocates payloads from the
+// pool, and batches writes when a non-zero bufsize is configured.
 type channel struct {
 	Options
 	net.Conn
@@ -59,7 +63,8 @@ type channel struct {
 	sync.Mutex
 }
 
-// NewChannel creates a new channel with the given net.Conn.
+// newChannel wraps c with a buffered reader and applies the options on top of
+// the defaults.
 func newChannel(c net.Conn, opts ...Option) *channel {
 	defaultOptions := DefaultOptions()
 	for _, opt := range opts {
@@ -73,12 +78,10 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 	return x
 }
 
-// recv a message from the channel. The returned buffer contains the message.
-//
-// If a valid grpc status is returned, the message header
-// returned will be valid and caller should send that along to
-// the correct consumer. The bytes on the underlying channel
-// will be discarded.
+// Recv reads one frame: an 8-byte header carrying the stream id and the
+// payload length, followed by the payload itself. The payload comes from the
+// pool and the caller must putmbuf it. A zero-length frame returns a nil
+// payload.
 func (ch *channel) Recv() (uint32, []byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -109,6 +112,10 @@ func (ch *channel) Recv() (uint32, []byte, error) {
 	return s, nil, nil
 }
 
+// discard reads one frame header and skips its payload straight off the
+// buffered reader. Unlike Recv it never allocates and never touches the pool,
+// which is what makes it cheap to drop a reply for a stream that is already
+// gone.
 func (ch *channel) discard() (int, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -120,7 +127,7 @@ func (ch *channel) discard() (int, error) {
 		return 0, err
 	}
 
-	// s := binary.BigEndian.Uint32(hrbuf[:4])
+	// the stream id is not needed when the frame is being dropped
 	h := binary.BigEndian.Uint32(hrbuf[4:])
 
 	if h > uint32(messageLengthMax) {
@@ -134,7 +141,12 @@ func (ch *channel) discard() (int, error) {
 	return 0, nil
 }
 
-// Send sends a message to the channel. The message is prefixed with a fixed-length header containing the length of the message and the stream ID.
+// Send writes the given byte slices as one or more frames, each prefixed with
+// an 8-byte header carrying streamID and that slice's length.
+//
+// With bufsize <= 0 every call goes straight to the connection. Otherwise the
+// frames are appended to a pending write buffer and flushed as soon as it grows
+// past bufsize, or by a timer after flushInterval, whichever comes first.
 func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -197,6 +209,8 @@ func (ch *channel) Send(streamID uint32, p ...[]byte) error {
 	return nil
 }
 
+// Close stops the flush timer, writes out whatever batching still holds, then
+// closes the connection.
 func (ch *channel) Close() error {
 	defer ch.Conn.Close()
 	if ch.t != nil {

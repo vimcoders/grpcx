@@ -29,7 +29,10 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// stream is a wrapper around grpc.ClientStream that provides methods for sending and receiving messages with a fixed-length header.
+// clientStream is the client-side state of one unary call: the stream id, the
+// channel that carries it, the receive slot and the cleanup hooks. The
+// embedded grpc.ClientStream is never assigned and exists only to satisfy the
+// grpc.ClientStream interface.
 type clientStream struct {
 	channel *channel
 	grpc.ClientStream
@@ -42,20 +45,23 @@ type clientStream struct {
 	sync.Once
 }
 
+// CloseSend deregisters the stream exactly once, then closes it. The end-of-
+// stream frame is intentionally not sent: grpcx only carries unary calls, so
+// there is no stream to terminate.
 func (s *clientStream) CloseSend() error {
 	defer s.Close()
 	s.Once.Do(func() {
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)
 		}
-		// :: TODO
+		// TODO: send the Closed frame once streaming lands.
 		// opt := CallOptions{Closed: true}
 		// _ = s.Send(&api.Empty{}, &opt)
 	})
 	return nil
 }
 
-// close closes the stream and releases any resources associated with it.
+// Close cancels the stream context, unblocking any pending recv.
 func (s *clientStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
@@ -63,6 +69,8 @@ func (s *clientStream) Close() error {
 	return nil
 }
 
+// Recv waits for the reply frame, checks its code and unmarshals its payload
+// into m.
 func (s *clientStream) Recv(m any) error {
 	reply, err := s.recv()
 	if err != nil {
@@ -79,11 +87,14 @@ func (s *clientStream) Recv(m any) error {
 	return nil
 }
 
+// Context returns the stream context, canceled when the stream is closed.
 func (s *clientStream) Context() context.Context {
 	return s.ctx
 }
 
-// send sends a message on the stream. The message is sent with a fixed-length header that includes the stream id.
+// Send marshals the header and the payload into two frames and writes them on
+// the stream. The header carries the stream id, so the two frames stay
+// addressable by the server.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
 	var header api.Header
 	for _, v := range opts {
@@ -100,6 +111,9 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 	return s.send(s.id, h, b)
 }
 
+// invoke reads the response payload straight off the channel, verifies the
+// stream id, and hands it to the waiting Recv. When the stream is already
+// canceled or gone, the payload is returned to the pool and the stream closed.
 func (s *clientStream) invoke(ctx context.Context, opts ...CallOption) error {
 	var h api.Header
 	for _, v := range opts {
@@ -124,11 +138,13 @@ func (s *clientStream) invoke(ctx context.Context, opts ...CallOption) error {
 	return s.Close()
 }
 
+// send forwards the frames to the channel under this stream's id.
 func (s *clientStream) send(streamID uint32, p ...[]byte) error {
 	return s.channel.Send(streamID, p...)
 }
 
-// recv receives a message from the stream. It blocks until a message is received or the context is canceled. If the stream is closed, an error is returned.
+// recv blocks until the response slot is filled, the stream is canceled, or
+// the slot is closed because the connection went away.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():
@@ -141,12 +157,18 @@ func (s *clientStream) recv() (*api.Response, error) {
 	}
 }
 
+// CallOption mutates the outgoing request header before it is marshalled.
 type CallOption interface {
 	apply(*api.Header)
 }
 
+// CallOptions is the concrete CallOption: each non-zero field overrides its
+// counterpart in the header.
 type CallOptions api.Header
 
+// apply merges c into opts field by field. Non-zero values in c win, except
+// Timeout, where the smaller of the two is kept so a short caller deadline is
+// never silently extended.
 func (c *CallOptions) apply(opts *api.Header) {
 	if c.Timeout > 0 {
 		opts.Timeout = min(cmp.Or(opts.Timeout, c.Timeout), c.Timeout)
@@ -161,6 +183,11 @@ func (c *CallOptions) apply(opts *api.Header) {
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
 }
 
+// unaryStream is the server-side view of one request. It carries the id, the
+// channel and the single-use flag that guarantees the request payload is
+// consumed at most once. The embedded grpc.ServerStream is never assigned and
+// exists only to satisfy the interface; grpc.SetHeader and grpc.SetTrailer
+// would therefore panic if called.
 type unaryStream struct {
 	grpc.ServerStream
 	ctx      context.Context
@@ -170,10 +197,13 @@ type unaryStream struct {
 	consumed atomic.Bool
 }
 
+// Context returns the server-side context, carrying the request metadata.
 func (s *unaryStream) Context() context.Context {
 	return s.ctx
 }
 
+// Send marshals the header and the payload into two frames and writes the
+// reply on the channel.
 func (s *unaryStream) Send(m any, opts ...CallOption) error {
 	var header api.Header
 	for _, v := range opts {
@@ -190,6 +220,9 @@ func (s *unaryStream) Send(m any, opts ...CallOption) error {
 	return s.channel.Send(s.id, h, b)
 }
 
+// Recv reads the request payload, verifies the stream id and unmarshals it
+// into m. It may run at most once per request: a second call reports
+// codes.DataLoss instead of reading another frame off the connection.
 func (s *unaryStream) Recv(m any) error {
 	if s.consumed.Swap(true) {
 		return status.DataLoss.Err()
@@ -208,6 +241,9 @@ func (s *unaryStream) Recv(m any) error {
 	return nil
 }
 
+// Close skips whatever part of the request the handler did not read, so the
+// next request on the same connection starts at a frame boundary. Closing a
+// stream whose payload was already consumed reports codes.DataLoss.
 func (s *unaryStream) Close() error {
 	if s.consumed.Swap(true) {
 		return status.DataLoss.Err()

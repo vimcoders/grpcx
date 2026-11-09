@@ -32,36 +32,43 @@ import (
 	"google.golang.org/grpc"
 )
 
-// RoundTripper is the interface for sending and receiving messages over a transport.
+// Option configures the transport Options.
 type Option func(*Options)
 
-// WithCodec sets the codec for the ttrpc transport.
+// WithMaxStreams caps how many concurrent streams a connection may carry.
+// Zero falls back to defaultMaxStreams.
 func WithMaxStreams(n uint32) Option {
 	return func(t *Options) {
 		t.maxStreams = cmp.Or(n, uint32(defaultMaxStreams))
 	}
 }
 
-// WithCodec sets the codec for the ttrpc transport.
+// WithTimeout sets the default call timeout advertised in the request header.
+// Zero falls back to defaultTimeout.
 func WithTimeout(d time.Duration) Option {
 	return func(t *Options) {
 		t.timeout = cmp.Or(d, defaultTimeout)
 	}
 }
 
-// WithCodec sets the codec for the ttrpc transport.
+// WithCodec sets the codec used to marshal requests and unmarshal responses.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
 		t.codec = c
 	}
 }
 
+// WithBufSize sets the send buffer in blocks of defaultBufSize, clamped to
+// defaultMaxBufSize. A value of zero disables batching and makes every Send
+// synchronous.
 func WithBufSize(n int) Option {
 	return func(c *Options) {
 		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
 	}
 }
 
+// Options holds the transport configuration shared by the client and the
+// server sides.
 type Options struct {
 	maxStreams    uint32
 	timeout       time.Duration
@@ -72,14 +79,19 @@ type Options struct {
 	bufsize       int
 }
 
+// Keepalive returns the period at which an idle connection is pinged to keep
+// it alive.
 func (o Options) Keepalive() time.Duration {
 	return defaultKeepalive * defaultTimeout
 }
 
+// Timeout returns the default call timeout.
 func (o Options) Timeout() time.Duration {
 	return o.timeout
 }
 
+// DefaultOptions returns the transport configuration with every field set to
+// its package default.
 func DefaultOptions() Options {
 	return Options{
 		timeout:       defaultTimeout,
@@ -91,7 +103,8 @@ func DefaultOptions() Options {
 	}
 }
 
-// Transport is the implementation of RoundTripper for ttrpc.
+// client is the RoundTripper implementation: it owns the connection, the
+// stream table and the receive loop that demultiplexes responses.
 type client struct {
 	Options
 	RoundTripper
@@ -103,12 +116,13 @@ type client struct {
 	sync.Once
 }
 
-// Dial creates a new ttrpc transport to the given endpoint.
+// Dial connects to endpoint over TCP with the background context.
 func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 	return DialContext(context.Background(), endpoint, opts...)
 }
 
-// DialContext creates a new ttrpc transport to the given endpoint with the given context.
+// DialContext connects to endpoint over TCP, applies the options to both the
+// transport configuration and the connection, then starts the receive loop.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	dialContext := func(ctx context.Context) (net.Conn, error) {
 		d := net.Dialer{
@@ -137,7 +151,8 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	return rt, nil
 }
 
-// run runs the receive loop for the transport. It receives messages from the channel and dispatches them to the appropriate stream. If the context is canceled, it closes the transport and returns an error.
+// Handle runs the receive loop: it keeps reading frames and dispatching them
+// until the connection breaks or ctx is canceled, then closes the transport.
 func (c *client) Handle(ctx context.Context, channel *channel) error {
 	defer c.Close()
 	for {
@@ -152,6 +167,8 @@ func (c *client) Handle(ctx context.Context, channel *channel) error {
 	}
 }
 
+// dispatch reads one response frame, resolves the stream by its id and hands
+// the payload to it. A frame whose stream is already gone is discarded.
 func (c *client) dispatch(ctx context.Context, channel *channel) error {
 	hdrID, h, err := channel.Recv()
 	if err != nil {
@@ -176,7 +193,9 @@ func (c *client) dispatch(ctx context.Context, channel *channel) error {
 	return s.invoke(ctx, opt)
 }
 
-// createStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
+// createStream allocates the next stream id, registers it in the stream table
+// and derives a cancellable context for it. It fails with
+// codes.ResourceExhausted once maxStreams is reached.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
@@ -202,7 +221,9 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	return &s, nil
 }
 
-// NewStream creates a new stream with the given context. It returns an error if the maximum number of streams has been reached or if the context is canceled.
+// NewStream opens a stream for the given method. Only unary calls are
+// supported: desc is ignored and the returned stream carries exactly one
+// request and one response.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	info := CallOptions{
 		Method:  method,
@@ -211,21 +232,23 @@ func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 	return c.createStream(ctx, &info)
 }
 
-// deleteStream deletes the given stream from the transport. It closes the stream and removes it from the map of streams.
+// deleteStream removes the stream from the table so no further frame is
+// routed to it.
 func (c *client) deleteStream(id uint32) {
 	c.Lock()
 	defer c.Unlock()
 	delete(c.streams, id)
 }
 
-// getStream returns the stream with the given stream ID. It returns nil if the stream does not exist.
+// getStream looks up the stream by id, returning nil when it is already gone.
 func (c *client) getStream(sid uint32) *clientStream {
 	c.RLock()
 	defer c.RUnlock()
 	return c.streams[sid]
 }
 
-// Invoke invokes the given method with the given request and response. It marshals the request, sends it to the server, and unmarshals the response. If the context is canceled, it returns an error.
+// Invoke performs one unary call: it opens a stream, sends the request with
+// the collected metadata and deadline, then waits for the reply.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
 	info := CallOptions{
 		Method:  method,
@@ -257,7 +280,9 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return nil
 }
 
-// RoundTrip sends the given request to the server and returns the response. It creates a new stream, sends the request, and waits for the response. If the context is canceled, it returns an error.
+// RoundTrip sends an already framed request — header plus payload — and waits
+// for the matching response. It bypasses the codec and is used by Ping and by
+// internals that marshal the request themselves.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	header := cmp.Or(req.Header, &api.Header{})
 	if dl, ok := ctx.Deadline(); ok {
@@ -285,6 +310,9 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	return s.recv()
 }
 
+// Ping keeps the connection active by sending an empty request through
+// RoundTrip. It is the health check the balancer relies on, so an idle
+// connection never reaches the read deadline and gets torn down.
 func (c *client) Ping(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -294,7 +322,8 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the ttrpc connection and underlying connection
+// Close tears the transport down once: it closes every live stream, empties
+// the table and closes the underlying connection.
 func (c *client) Close() error {
 	c.Once.Do(func() {
 		c.Lock()

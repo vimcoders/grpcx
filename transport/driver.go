@@ -11,59 +11,49 @@ import (
 	"google.golang.org/grpc"
 )
 
-// RoundTripper is an interface representing the ability to execute a
-// single HTTP transaction, obtaining the [Response] for a given [Request].
-//
-// A RoundTripper must be safe for concurrent use by multiple
-// goroutines.
+// RoundTripper is the client-side transport: it dials a connection, dispatches
+// unary calls over it and keeps it alive. A RoundTripper is safe for concurrent
+// use by multiple goroutines.
 type RoundTripper interface {
-	// RoundTrip executes a single HTTP transaction, returning
-	// a Response for the provided Request.
-	//
-	// RoundTrip should not attempt to interpret the response. In
-	// particular, RoundTrip must return err == nil if it obtained
-	// a response, regardless of the response's HTTP status code.
-	// A non-nil err should be reserved for failure to obtain a
-	// response. Similarly, RoundTrip should not attempt to
-	// handle higher-level protocol details such as redirects,
-	// authentication, or cookies.
-	//
-	// RoundTrip should not modify the request, except for
-	// consuming and closing the Request's Body. RoundTrip may
-	// read fields of the request in a separate goroutine. Callers
-	// should not mutate or reuse the request until the Response's
-	// Body has been closed.
-	//
-	// RoundTrip must always close the body, including on errors,
-	// but depending on the implementation may do so in a separate
-	// goroutine even after RoundTrip returns. This means that
-	// callers wanting to reuse the body for subsequent requests
-	// must arrange to wait for the Close call before doing so.
-	//
-	// The Request's URL and Header fields must be initialized.
-	grpc.ClientConnInterface
+	// RoundTrip sends an already framed request and waits for the response.
 	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+	// Ping sends an empty request to keep the connection from hitting the read
+	// deadline.
 	Ping(ctx context.Context) error
+	grpc.ClientConnInterface
 	io.Closer
 }
 
 const (
+	// messageHeaderLength is the fixed frame header: 4 bytes of stream id
+	// followed by 4 bytes of payload length.
 	messageHeaderLength = 8
-	// 4MB 与标准 gRPC 默认值对齐
+	// messageLengthMax caps a single frame payload, aligned with the standard
+	// gRPC default.
 	messageLengthMax = 4 * 1024 * 1024
-	// Go 1.27.3 采用的时间轮算法最小时间是1毫秒
+	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
+	// settles on, so it is the shortest useful flush delay.
 	defaultFlushInterval = time.Millisecond
-	// bw
+	// defaultBufSize is one batching block. bufsize is counted in blocks.
 	defaultBufSize = 1024
-	// linux内核tcp发送缓冲区的默认值是16k
+	// defaultMaxBufSize bounds the send buffer at 16 blocks, matching the
+	// default TCP send buffer on Linux.
 	defaultMaxBufSize = 16 * defaultBufSize
-	// DefaultMaxStreams is the default maximum number of concurrent streams per connection.
+	// defaultMaxStreams is the default maximum number of concurrent streams
+	// per connection.
 	defaultMaxStreams = math.MaxUint16
-	// DefaultTimeout is the default timeout for each request.
-	defaultTimeout      = 3 * time.Second
-	defaultReadTimeout  = 10 * defaultTimeout
+	// defaultTimeout is the default timeout of one request.
+	defaultTimeout = 3 * time.Second
+	// defaultReadTimeout bounds how long the reader waits for the next frame
+	// before treating the connection as dead. It must stay well above the
+	// keepalive period, or idle connections would be torn down between pings.
+	defaultReadTimeout = 10 * defaultTimeout
+	// defaultWriteTimeout bounds a single flush.
 	defaultWriteTimeout = defaultTimeout
-	// defaultKeepalive is the default keepalive interval of round robin balancer.
+	// defaultKeepalive is the idle period, in units of defaultTimeout, at which
+	// the round robin balancer pings a connection.
 	defaultKeepalive = 3
-	defaultLength    = 1
+	// defaultLength is how many payload frames one request carries. grpcx only
+	// serves unary calls, so it is always one.
+	defaultLength = 1
 )

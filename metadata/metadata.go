@@ -23,7 +23,8 @@ import (
 	"strings"
 )
 
-// MD is the user type for ttrpc metadata
+// MD is the metadata type: string keys mapped to string values, carried in the
+// request header.
 type MD map[string]string
 
 // Pairs returns an MD formed by the mapping of key, value ...

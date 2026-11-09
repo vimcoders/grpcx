@@ -13,9 +13,9 @@ type Picker interface {
 	io.Closer
 }
 
-// PickInfo contains information about the request being made.
+// PickInfo identifies the call that a backend is being picked for.
 type PickInfo struct {
-	FullMethodName string // 请求方法名
+	FullMethodName string // the method being invoked, e.g. /api.EchoService/Echo
 	Authority      int64
 }
 

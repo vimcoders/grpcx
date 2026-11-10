@@ -200,6 +200,8 @@ func WithUnaryInterceptor(readonly *api.Header) CallOption {
 	}
 }
 
+// WithUnaryCode sets the response status code and its description, so a reply
+// can report a failure instead of a payload.
 func WithUnaryCode(code codes.Code, desc string) CallOption {
 	return &CallOptions{
 		Code: uint32(code),
@@ -244,7 +246,7 @@ func (s *unary) UnaryInterceptor(ctx context.Context, opts ...CallOption) error 
 		defer cancel()
 		reply, err := v.Handler(s.imp, timeoutCtx, s.Recv, s.unaryInterceptor)
 		if err != nil {
-			return s.Send(&api.Empty{}, WithUnaryCode(status.Code(err), opt.Method))
+			return s.Send(&api.Empty{}, WithUnaryCode(status.Code(err), err.Error()))
 		}
 		return s.Send(reply)
 	}

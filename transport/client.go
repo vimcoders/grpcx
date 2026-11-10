@@ -277,8 +277,8 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 }
 
 // RoundTrip sends an already framed request — header plus payload — and waits
-// for the matching response. It bypasses the codec and is used by Ping and by
-// internals that marshal the request themselves.
+// for the matching response. It bypasses the codec, so the caller owns the
+// marshalling of both the header and the payload.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	header := cmp.Or(req.Header, &api.Header{})
 	if dl, ok := ctx.Deadline(); ok {
@@ -306,9 +306,10 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	return s.recv()
 }
 
-// Ping keeps the connection active by sending an empty request through
-// RoundTrip. It is the health check the balancer relies on, so an idle
-// connection never reaches the read deadline and gets torn down.
+// Ping keeps the connection active by opening a stream, sending an empty
+// request and waiting for the reply. It is the health check the balancer relies
+// on, so an idle connection never reaches the read deadline and gets torn
+// down.
 func (c *client) Ping(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

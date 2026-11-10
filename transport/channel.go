@@ -28,13 +28,6 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
-// Sender is the interface for sending messages to a channel. It is kept for
-// compatibility; the transport talks to the concrete *channel directly.
-type Sender interface {
-	Send(uint32, ...[]byte) error
-	io.Closer
-}
-
 // buffers is the process-wide buffer pool every frame payload is allocated
 // from, so a 1MB payload is recycled instead of allocated per call.
 var buffers = mem.DefaultBufferPool()

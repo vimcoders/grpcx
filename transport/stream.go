@@ -32,12 +32,15 @@ import (
 )
 
 // clientStream is the client-side state of one unary call: the stream id, the
-// channel that carries it, the receive slot and the cleanup hooks. The
-// embedded grpc.ClientStream is never assigned and exists only to satisfy the
-// grpc.ClientStream interface.
+// channel that carries it, the receive slot and the cleanup hooks. It embeds
+// ClientStream so the generated stubs and the interceptor chain see the
+// grpc.ClientStream surface they are typed against. Only Send, Recv, Context
+// and CloseSend are implemented here: the embedded grpc.ClientStream is never
+// assigned, so Header, Trailer, SendMsg and RecvMsg fall through to nil and
+// would panic if called.
 type clientStream struct {
-	channel *channel
-	grpc.ClientStream
+	ClientStream
+	channel      *channel
 	ctx          context.Context
 	id           uint32
 	c            chan *api.Response
@@ -94,9 +97,9 @@ func (s *clientStream) Context() context.Context {
 	return s.ctx
 }
 
-// Send marshals the header and the payload into two frames and writes them on
-// the stream. The header carries the stream id, so the two frames stay
-// addressable by the server.
+// Send marshals the header and the payload into two frames and writes them to
+// the channel under this stream's id. The header carries the id, so the two
+// frames stay addressable by the server.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
 	var header api.Header
 	for _, v := range opts {
@@ -110,7 +113,7 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	return s.send(s.id, h, b)
+	return s.channel.Send(s.id, h, b)
 }
 
 // UnaryInterceptor reads the response payload straight off the channel,
@@ -139,11 +142,6 @@ func (s *clientStream) UnaryInterceptor(ctx context.Context, opts ...CallOption)
 	}
 	putmbuf(p)
 	return s.Close()
-}
-
-// send forwards the frames to the channel under this stream's id.
-func (s *clientStream) send(streamID uint32, p ...[]byte) error {
-	return s.channel.Send(streamID, p...)
 }
 
 // recv blocks until the response slot is filled, the stream is canceled, or
@@ -205,8 +203,13 @@ func WithUnaryInterceptor(readonly *api.Header) CallOption {
 // unary is the server-side view of one request: the stream id, the channel it
 // arrived on, the service descriptor to look the method up in, and the
 // interceptors to run. It embeds Options so the server-side settings, timeout
-// among them, apply to the call.
+// among them, apply to the call, and ServerStream so the handler and the
+// interceptor chain see the grpc.ServerStream surface they are typed against.
+// Only Send and Recv are implemented here: the embedded grpc.ServerStream is
+// never assigned, so SetHeader, SetTrailer and Context fall through to nil and
+// would panic if called.
 type unary struct {
+	ServerStream
 	Options
 	id               uint32
 	codec            encoding.Codec
@@ -232,23 +235,23 @@ func (s *unary) UnaryInterceptor(ctx context.Context, opts ...CallOption) error 
 		timeout := cmp.Or(time.Duration(header.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 		defer cancel()
-		reply, err := v.Handler(s.imp, timeoutCtx, s.recv, s.unaryInterceptor)
+		reply, err := v.Handler(s.imp, timeoutCtx, s.Recv, s.unaryInterceptor)
 		if err != nil {
 			header.Code, header.Desc = uint32(status.Code(err)), err.Error()
-			return s.send(&api.Empty{}, WithUnaryInterceptor(&header))
+			return s.Send(&api.Empty{}, WithUnaryInterceptor(&header))
 		}
-		return s.send(reply, WithUnaryInterceptor(&header))
+		return s.Send(reply, WithUnaryInterceptor(&header))
 	}
 	if _, err := s.discard(); err != nil {
 		return err
 	}
 	header.Code, header.Desc = uint32(codes.Unimplemented), header.Method
-	return s.send(&api.Empty{}, WithUnaryInterceptor(&header))
+	return s.Send(&api.Empty{}, WithUnaryInterceptor(&header))
 }
 
-// send marshals the header and the payload into two frames and writes the
+// Send marshals the header and the payload into two frames and writes the
 // reply on the channel.
-func (s *unary) send(m any, opts ...CallOption) error {
+func (s *unary) Send(m any, opts ...CallOption) error {
 	var header api.Header
 	for _, v := range opts {
 		v.apply(&header)
@@ -264,11 +267,11 @@ func (s *unary) send(m any, opts ...CallOption) error {
 	return s.channel.Send(s.id, h, b)
 }
 
-// recv reads the request payload, verifies the stream id and unmarshals it into
+// Recv reads the request payload, verifies the stream id and unmarshals it into
 // m. A unary request carries exactly one payload frame, so the handler calls
 // this once; a mismatched id means the frame belongs to another call and
 // reports codes.DataLoss.
-func (s *unary) recv(m any) error {
+func (s *unary) Recv(m any) error {
 	streamID, p, err := s.channel.Recv()
 	if err != nil {
 		return err

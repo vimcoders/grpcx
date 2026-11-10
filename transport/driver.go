@@ -24,6 +24,30 @@ type RoundTripper interface {
 	io.Closer
 }
 
+// Stream is the message-level half of a stream: it sends and receives one
+// message at a time. grpcx carries unary calls only, so each stream carries
+// exactly one request and one response.
+type Stream interface {
+	Send(any, ...CallOption) error
+	Recv(any) error
+}
+
+// ClientStream is the client-side stream: the message level Stream plus the
+// grpc.ClientStream surface the generated stubs and interceptors are typed
+// against.
+type ClientStream interface {
+	Stream
+	grpc.ClientStream
+}
+
+// ServerStream is the server-side stream: the message level Stream plus the
+// grpc.ServerStream surface the generated handlers and interceptors are typed
+// against.
+type ServerStream interface {
+	Stream
+	grpc.ServerStream
+}
+
 const (
 	// messageHeaderLength is the fixed frame header: 4 bytes of stream id
 	// followed by 4 bytes of payload length.

@@ -200,6 +200,13 @@ func WithUnaryInterceptor(readonly *api.Header) CallOption {
 	}
 }
 
+func WithUnaryCode(code codes.Code, desc string) CallOption {
+	return &CallOptions{
+		Code: uint32(code),
+		Desc: desc,
+	}
+}
+
 // unary is the server-side view of one request: the stream id, the channel it
 // arrived on, the service descriptor to look the method up in, and the
 // interceptors to run. It embeds Options so the server-side settings, timeout
@@ -223,30 +230,28 @@ type unary struct {
 // metadata and timeout, runs the unary interceptor chain and writes the reply
 // back. An unknown method reports codes.Unimplemented.
 func (s *unary) UnaryInterceptor(ctx context.Context, opts ...CallOption) error {
-	header := api.Header{Code: uint32(codes.OK), Desc: codes.OK.String()}
+	opt := api.Header{Code: uint32(codes.OK), Desc: codes.OK.String()}
 	for _, v := range opts {
-		v.apply(&header)
+		v.apply(&opt)
 	}
 	for _, v := range s.desc.Methods {
-		if header.Method != path.Join("/", s.desc.ServiceName, v.MethodName) {
+		if opt.Method != path.Join("/", s.desc.ServiceName, v.MethodName) {
 			continue
 		}
-		metadatas := metadata.Pairs(header.Metadatas...)
-		timeout := cmp.Or(time.Duration(header.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
+		metadatas := metadata.Pairs(opt.Metadatas...)
+		timeout := cmp.Or(time.Duration(opt.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 		defer cancel()
 		reply, err := v.Handler(s.imp, timeoutCtx, s.Recv, s.unaryInterceptor)
 		if err != nil {
-			header.Code, header.Desc = uint32(status.Code(err)), err.Error()
-			return s.Send(&api.Empty{}, WithUnaryInterceptor(&header))
+			return s.Send(&api.Empty{}, WithUnaryCode(status.Code(err), opt.Method))
 		}
-		return s.Send(reply, WithUnaryInterceptor(&header))
+		return s.Send(reply)
 	}
-	if _, err := s.discard(); err != nil {
+	if err := s.Recv(&api.Empty{}); err != nil {
 		return err
 	}
-	header.Code, header.Desc = uint32(codes.Unimplemented), header.Method
-	return s.Send(&api.Empty{}, WithUnaryInterceptor(&header))
+	return s.Send(&api.Empty{}, WithUnaryCode(codes.Unimplemented, opt.Method))
 }
 
 // Send marshals the header and the payload into two frames and writes the
@@ -284,10 +289,4 @@ func (s *unary) Recv(m any) error {
 		return err
 	}
 	return nil
-}
-
-// discard skips the payload the handler never read, so the next request on the
-// same connection starts at a frame boundary.
-func (s *unary) discard() (int, error) {
-	return s.channel.discard()
 }

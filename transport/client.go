@@ -30,6 +30,7 @@ import (
 	"github.com/vimcoders/grpcx/encoding"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
 // Option configures the transport Options.
@@ -272,10 +273,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err := s.Send(req, opts...); err != nil {
 		return err
 	}
-	if err := s.Recv(reply); err != nil {
-		return err
-	}
-	return nil
+	return s.Recv(reply)
 }
 
 // RoundTrip sends an already framed request — header plus payload — and waits
@@ -314,7 +312,18 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 func (c *client) Ping(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if _, err := c.RoundTrip(timeoutCtx, &api.Request{}); err != nil {
+	s, err := c.createStream(timeoutCtx)
+	if err != nil {
+		return err
+	}
+	defer s.CloseSend()
+	if err := s.Send(&api.Empty{}); err != nil {
+		return err
+	}
+	// The request carries no method name, so the server can only answer
+	// codes.Unimplemented. That answer is proof the connection is alive, so it
+	// counts as success; every other error is propagated.
+	if err := s.Recv(&api.Empty{}); err != nil && status.Code(err) != codes.Unimplemented {
 		return err
 	}
 	return nil

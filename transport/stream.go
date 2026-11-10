@@ -19,11 +19,13 @@ package transport
 import (
 	"cmp"
 	"context"
+	"path"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
+	"github.com/vimcoders/grpcx/metadata"
 	"github.com/vimcoders/grpcx/status"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -111,10 +113,11 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 	return s.send(s.id, h, b)
 }
 
-// invoke reads the response payload straight off the channel, verifies the
-// stream id, and hands it to the waiting Recv. When the stream is already
-// canceled or gone, the payload is returned to the pool and the stream closed.
-func (s *clientStream) invoke(ctx context.Context, opts ...CallOption) error {
+// UnaryInterceptor reads the response payload straight off the channel,
+// verifies the stream id, and hands it to the waiting Recv. When the stream is
+// already canceled or gone, the payload is returned to the pool and the stream
+// closed.
+func (s *clientStream) UnaryInterceptor(ctx context.Context, opts ...CallOption) error {
 	var h api.Header
 	for _, v := range opts {
 		v.apply(&h)
@@ -183,28 +186,69 @@ func (c *CallOptions) apply(opts *api.Header) {
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
 }
 
-// unaryStream is the server-side view of one request. It carries the id, the
-// channel and the single-use flag that guarantees the request payload is
-// consumed at most once. The embedded grpc.ServerStream is never assigned and
-// exists only to satisfy the interface; grpc.SetHeader and grpc.SetTrailer
-// would therefore panic if called.
-type unaryStream struct {
-	grpc.ServerStream
-	ctx      context.Context
-	id       uint32
-	codec    encoding.Codec
-	channel  *channel
-	consumed atomic.Bool
+// WithUnaryInterceptor turns an already decoded request header into a
+// CallOption, so the server-side handler sees the call it was dispatched from
+// without re-parsing the frame.
+func WithUnaryInterceptor(readonly *api.Header) CallOption {
+	return &CallOptions{
+		Method:    readonly.Method,
+		Service:   readonly.Service,
+		Length:    readonly.Length,
+		Authority: readonly.Authority,
+		Timeout:   readonly.Timeout,
+		Metadatas: readonly.Metadatas,
+		Code:      readonly.Code,
+		Desc:      readonly.Desc,
+	}
 }
 
-// Context returns the server-side context, carrying the request metadata.
-func (s *unaryStream) Context() context.Context {
-	return s.ctx
+// unary is the server-side view of one request: the stream id, the channel it
+// arrived on, the service descriptor to look the method up in, and the
+// interceptors to run. It embeds Options so the server-side settings, timeout
+// among them, apply to the call.
+type unary struct {
+	Options
+	id               uint32
+	codec            encoding.Codec
+	channel          *channel
+	desc             *grpc.ServiceDesc
+	imp              any
+	unaryInterceptor grpc.UnaryServerInterceptor
 }
 
-// Send marshals the header and the payload into two frames and writes the
+// UnaryInterceptor resolves the method from the decoded header, applies the
+// metadata and timeout, runs the unary interceptor chain and writes the reply
+// back. An unknown method reports codes.Unimplemented.
+func (s *unary) UnaryInterceptor(ctx context.Context, opts ...CallOption) error {
+	header := api.Header{Code: uint32(codes.OK), Desc: codes.OK.String()}
+	for _, v := range opts {
+		v.apply(&header)
+	}
+	for _, v := range s.desc.Methods {
+		if header.Method != path.Join("/", s.desc.ServiceName, v.MethodName) {
+			continue
+		}
+		metadatas := metadata.Pairs(header.Metadatas...)
+		timeout := cmp.Or(time.Duration(header.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
+		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
+		defer cancel()
+		reply, err := v.Handler(s.imp, timeoutCtx, s.recv, s.unaryInterceptor)
+		if err != nil {
+			header.Code, header.Desc = uint32(status.Code(err)), err.Error()
+			return s.send(&api.Empty{}, WithUnaryInterceptor(&header))
+		}
+		return s.send(reply, WithUnaryInterceptor(&header))
+	}
+	if _, err := s.discard(); err != nil {
+		return err
+	}
+	header.Code, header.Desc = uint32(codes.Unimplemented), header.Method
+	return s.send(&api.Empty{}, WithUnaryInterceptor(&header))
+}
+
+// send marshals the header and the payload into two frames and writes the
 // reply on the channel.
-func (s *unaryStream) Send(m any, opts ...CallOption) error {
+func (s *unary) send(m any, opts ...CallOption) error {
 	var header api.Header
 	for _, v := range opts {
 		v.apply(&header)
@@ -220,13 +264,11 @@ func (s *unaryStream) Send(m any, opts ...CallOption) error {
 	return s.channel.Send(s.id, h, b)
 }
 
-// Recv reads the request payload, verifies the stream id and unmarshals it
-// into m. It may run at most once per request: a second call reports
-// codes.DataLoss instead of reading another frame off the connection.
-func (s *unaryStream) Recv(m any) error {
-	if s.consumed.Swap(true) {
-		return status.DataLoss.Err()
-	}
+// recv reads the request payload, verifies the stream id and unmarshals it into
+// m. A unary request carries exactly one payload frame, so the handler calls
+// this once; a mismatched id means the frame belongs to another call and
+// reports codes.DataLoss.
+func (s *unary) recv(m any) error {
 	streamID, p, err := s.channel.Recv()
 	if err != nil {
 		return err
@@ -241,15 +283,8 @@ func (s *unaryStream) Recv(m any) error {
 	return nil
 }
 
-// Close skips whatever part of the request the handler did not read, so the
-// next request on the same connection starts at a frame boundary. Closing a
-// stream whose payload was already consumed reports codes.DataLoss.
-func (s *unaryStream) Close() error {
-	if s.consumed.Swap(true) {
-		return status.DataLoss.Err()
-	}
-	if _, err := s.channel.discard(); err != nil {
-		return err
-	}
-	return nil
+// discard skips the payload the handler never read, so the next request on the
+// same connection starts at a frame boundary.
+func (s *unary) discard() (int, error) {
+	return s.channel.discard()
 }

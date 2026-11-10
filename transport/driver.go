@@ -53,7 +53,4 @@ const (
 	// defaultKeepalive is the idle period, in units of defaultTimeout, at which
 	// the round robin balancer pings a connection.
 	defaultKeepalive = 3
-	// defaultLength is how many payload frames one request carries. grpcx only
-	// serves unary calls, so it is always one.
-	defaultLength = 1
 )

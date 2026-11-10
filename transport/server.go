@@ -1,10 +1,8 @@
 package transport
 
 import (
-	"cmp"
 	"context"
 	"net"
-	"path"
 	"time"
 
 	"github.com/vimcoders/grpcx/generated/api"
@@ -12,10 +10,7 @@ import (
 
 	"github.com/vimcoders/grpcx/encoding"
 
-	"github.com/vimcoders/grpcx/metadata"
-
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 )
 
 // ServerOption configures a ServerOptions.
@@ -26,9 +21,9 @@ type ServerOption func(c *ServerOptions)
 // transport Options shared with the client side.
 type ServerOptions struct {
 	Options
-	desc                   *grpc.ServiceDesc
-	imp                    any
-	unaryServerInterceptor grpc.UnaryServerInterceptor
+	desc             *grpc.ServiceDesc
+	imp              any
+	unaryInterceptor grpc.UnaryServerInterceptor
 }
 
 // DefaultServerOptions is the default configuration for a grpcx server: the
@@ -36,7 +31,7 @@ type ServerOptions struct {
 // service descriptor.
 var DefaultServerOptions = ServerOptions{
 	Options: DefaultOptions(),
-	unaryServerInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
+	unaryInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
 	},
 	desc: &grpc.ServiceDesc{},
@@ -47,7 +42,7 @@ var DefaultServerOptions = ServerOptions{
 // handler to invoke.
 func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
 	return func(so *ServerOptions) {
-		so.unaryServerInterceptor = interceptor
+		so.unaryInterceptor = interceptor
 	}
 }
 
@@ -127,28 +122,14 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}
-	metadatas := metadata.Pairs(opts.Metadatas...)
-	s := &unaryStream{
-		channel: channel,
-		id:      streamID,
-		codec:   so.codec,
-		ctx:     metadata.WithMetadata(ctx, metadatas),
+	s := &unary{
+		channel:          channel,
+		Options:          so.Options,
+		id:               streamID,
+		codec:            so.codec,
+		desc:             so.desc,
+		imp:              so.imp,
+		unaryInterceptor: so.unaryInterceptor,
 	}
-	defer s.Close()
-	for _, v := range so.desc.Methods {
-		if opts.Method != path.Join("/", so.desc.ServiceName, v.MethodName) {
-			continue
-		}
-		timeout := cmp.Or(time.Duration(opts.Timeout)*time.Millisecond, so.timeout, defaultTimeout)
-		timeoutCtx, cancel := context.WithTimeout(s.Context(), timeout)
-		defer cancel()
-		reply, err := v.Handler(so.imp, timeoutCtx, s.Recv, so.unaryServerInterceptor)
-		if err != nil {
-			code, desc := uint32(status.Code(err)), err.Error()
-			return s.Send(&api.Empty{}, &CallOptions{Code: code, Desc: desc})
-		}
-		return s.Send(reply, &CallOptions{Code: uint32(codes.OK)})
-	}
-	code, desc := uint32(codes.Unimplemented), opts.Method
-	return s.Send(&api.Empty{}, &CallOptions{Code: code, Desc: desc})
+	return s.UnaryInterceptor(ctx, WithUnaryInterceptor(&opts))
 }

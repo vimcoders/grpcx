@@ -147,30 +147,31 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		o(&rt.Options)
 	}
 	rt.channel = newChannel(cc, opts...)
-	go rt.Handle(ctx, rt.channel)
+	go rt.Handle(ctx)
 	return rt, nil
 }
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
-func (c *client) Handle(ctx context.Context, channel *channel) error {
+func (c *client) Handle(ctx context.Context) error {
 	defer c.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := c.dispatch(ctx, channel); err != nil {
+			if err := c.interceptor(ctx); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-// dispatch reads one response frame, resolves the stream by its id and hands
-// the payload to it. A frame whose stream is already gone is discarded.
-func (c *client) dispatch(ctx context.Context, channel *channel) error {
-	hdrID, h, err := channel.Recv()
+// interceptor reads one response frame, resolves the stream by its id and hands
+// the header and payload to it. A frame whose stream is already gone is
+// discarded so the next frame stays aligned to a boundary.
+func (c *client) interceptor(ctx context.Context) error {
+	streamID, h, err := c.channel.Recv()
 	if err != nil {
 		return err
 	}
@@ -179,18 +180,14 @@ func (c *client) dispatch(ctx context.Context, channel *channel) error {
 	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}
-	s := c.getStream(hdrID)
+	s := c.getStream(streamID)
 	if s == nil {
-		if _, err := channel.discard(); err != nil {
+		if _, err := c.channel.discard(); err != nil {
 			return err
 		}
 		return nil
 	}
-	opt := &CallOptions{
-		Code: opts.Code,
-		Desc: opts.Desc,
-	}
-	return s.invoke(ctx, opt)
+	return s.UnaryInterceptor(ctx, WithUnaryInterceptor(&opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table

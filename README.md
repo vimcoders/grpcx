@@ -27,6 +27,14 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 
 Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. client benchmark container runs unconstrained, server containers each limited to 1 CPU (compose cpus: "1"). -cpu=N sets GOMAXPROCS=N: N parallel workers via b.RunParallel over a single client connection. Speedup > 1.0 means grpcx faster.
 
+### startup
+```bash
+docker compose up -d --build --wait grpc grpcx
+docker compose run bench-1k 
+docker compose run bench-5k 
+docker compose run bench-1024k 
+```
+
 ### Latency & Throughput
 
 | Payload | Concurrency | gRPC ns/op | grpcx ns/op | Speedup | gRPC QPS | grpcx QPS | gRPC allocs/op | grpcx allocs/op |
@@ -53,6 +61,12 @@ Benchmarks run on Intel i5-14600KF (Linux), same-host Docker bridge network. cli
 - **5KB**: grpcx leads 1.43x~1.91x; latency improved ~8% vs previous release.
 - **1MB**: grpcx leads across all concurrency levels, 1.63x~1.97x, latency 0.90~0.95ms.
 - **Memory**: 27~28 allocs/op (vs gRPC 74~98); 1KB B/op 3.7KB (vs gRPC 5.9KB).
+
+### cleanup
+```bash
+docker system prune -a -f
+```
+
 ## 架构设计：与标准 gRPC 分层对应
 grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计，完整保留 gRPC 经过验证的核心编程模型，仅替换标准化但沉重的 HTTP/2 传输栈，实现内网场景的极致性能。
 

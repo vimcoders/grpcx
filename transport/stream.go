@@ -19,6 +19,8 @@ package transport
 import (
 	"cmp"
 	"context"
+	"encoding/binary"
+	"io"
 	"path"
 	"sync"
 	"time"
@@ -279,16 +281,36 @@ func (s *unary) Send(m any, opts ...CallOption) error {
 // this once; a mismatched id means the frame belongs to another call and
 // reports codes.DataLoss.
 func (s *unary) Recv(m any) error {
-	streamID, p, err := s.channel.Recv()
-	if err != nil {
+	channel := s.channel
+	if err := channel.SetReadDeadline(time.Now().Add(channel.readTimeout)); err != nil {
 		return err
 	}
+	br := channel.br
+	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
+
+	if _, err := io.ReadFull(br, hrbuf[:]); err != nil {
+		return err
+	}
+
+	h := binary.BigEndian.Uint32(hrbuf[4:])
+
+	if h > uint32(messageLengthMax) {
+		return status.OutOfRange.Err()
+	}
+
+	if int(h) <= br.Size() { // 缓冲装得下 → 零拷贝路径，保持不变
+		b, err := br.Peek(int(h))
+		if err != nil {
+			return err
+		}
+		defer br.Discard(int(h))
+		return s.codec.Unmarshal(b, m)
+	}
+
+	p := getmbuf(int(h)) // 装不下 → 池化直读，不占常驻内存
 	defer putmbuf(p)
-	if streamID != s.id {
-		return status.DataLoss.Err()
-	}
-	if err := s.codec.Unmarshal(p, m); err != nil {
+	if _, err := io.ReadFull(br, p[:h]); err != nil { // 注意仍要经过 br
 		return err
 	}
-	return nil
+	return s.codec.Unmarshal(p, m)
 }

@@ -65,7 +65,7 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 	}
 	x := &channel{
 		Conn:    c,
-		br:      bufio.NewReader(c),
+		br:      bufio.NewReaderSize(c, messageLengthMax),
 		Options: defaultOptions,
 	}
 	return x

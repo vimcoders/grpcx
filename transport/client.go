@@ -173,7 +173,7 @@ func (c *client) Handle(ctx context.Context) error {
 // the header and payload to it. A frame whose stream is already gone is
 // discarded so the next frame stays aligned to a boundary.
 func (c *client) interceptor(ctx context.Context) error {
-	streamID, h, err := c.channel.Recv()
+	h, err := c.channel.Recv()
 	if err != nil {
 		return err
 	}
@@ -182,7 +182,7 @@ func (c *client) interceptor(ctx context.Context) error {
 	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}
-	s := c.getStream(streamID)
+	s := c.getStream(opts.StreamID)
 	if s == nil {
 		if _, err := c.channel.discard(); err != nil {
 			return err
@@ -287,20 +287,22 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 		}
 		opt.apply(header)
 	}
+	s, err := c.createStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.CloseSend()
 	info := CallOptions{
-		Timeout: c.timeout.Milliseconds(),
+		StreamID: s.id,
+		Timeout:  c.timeout.Milliseconds(),
 	}
 	info.apply(header)
 	h, err := encoding.Marshal(header)
 	if err != nil {
 		return nil, err
 	}
-	s, err := c.createStream(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer s.CloseSend()
-	if err := s.channel.Send(s.id, h, req.Payload); err != nil {
+
+	if err := s.channel.Send(h, req.Payload); err != nil {
 		return nil, err
 	}
 	return s.recv()

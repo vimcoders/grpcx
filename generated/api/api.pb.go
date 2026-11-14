@@ -32,6 +32,7 @@ type Header struct {
 	Length        uint32                 `protobuf:"varint,7,opt,name=Length,proto3" json:"Length,omitempty"`
 	Authority     string                 `protobuf:"bytes,8,opt,name=Authority,proto3" json:"Authority,omitempty"`
 	Closed        bool                   `protobuf:"varint,9,opt,name=Closed,proto3" json:"Closed,omitempty"`
+	StreamID      uint32                 `protobuf:"varint,10,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -127,6 +128,13 @@ func (x *Header) GetClosed() bool {
 		return x.Closed
 	}
 	return false
+}
+
+func (x *Header) GetStreamID() uint32 {
+	if x != nil {
+		return x.StreamID
+	}
+	return 0
 }
 
 type Request struct {
@@ -273,7 +281,7 @@ var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
-	"\tapi.proto\x12\x03api\"\xe8\x01\n" +
+	"\tapi.proto\x12\x03api\"\x84\x02\n" +
 	"\x06Header\x12\x18\n" +
 	"\aService\x18\x01 \x01(\tR\aService\x12\x16\n" +
 	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
@@ -283,7 +291,9 @@ const file_api_proto_rawDesc = "" +
 	"\x04Desc\x18\x06 \x01(\tR\x04Desc\x12\x16\n" +
 	"\x06Length\x18\a \x01(\rR\x06Length\x12\x1c\n" +
 	"\tAuthority\x18\b \x01(\tR\tAuthority\x12\x16\n" +
-	"\x06Closed\x18\t \x01(\bR\x06Closed\"H\n" +
+	"\x06Closed\x18\t \x01(\bR\x06Closed\x12\x1a\n" +
+	"\bStreamID\x18\n" +
+	" \x01(\rR\bStreamID\"H\n" +
 	"\aRequest\x12#\n" +
 	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
 	"\aPayload\x18\x02 \x01(\fR\aPayload\"I\n" +

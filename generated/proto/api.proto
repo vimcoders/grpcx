@@ -13,6 +13,7 @@ message Header {
   uint32 Length = 7;
   string Authority = 8;
   bool Closed = 9;
+  uint32 StreamID = 10;
 }
 
 message Request {

@@ -75,34 +75,33 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 // payload length, followed by the payload itself. The payload comes from the
 // pool and the caller must putmbuf it. A zero-length frame returns a nil
 // payload.
-func (ch *channel) Recv() (uint32, []byte, error) {
+func (ch *channel) Recv() ([]byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
 	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
 	if _, err := io.ReadFull(ch.br, hrbuf[:]); err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 
-	s := binary.BigEndian.Uint32(hrbuf[:4])
-	h := binary.BigEndian.Uint32(hrbuf[4:])
+	h := binary.BigEndian.Uint32(hrbuf[:])
 
 	if h > uint32(messageLengthMax) {
-		return 0, nil, status.OutOfRange.Err()
+		return nil, status.OutOfRange.Err()
 	}
 
 	if h > 0 {
 		payload := getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, payload); err != nil {
 			putmbuf(payload)
-			return 0, nil, err
+			return nil, err
 		}
-		return s, payload, nil
+		return payload, nil
 	}
 
-	return s, nil, nil
+	return nil, nil
 }
 
 // discard reads one frame header and skips its payload straight off the
@@ -121,7 +120,7 @@ func (ch *channel) discard() (int, error) {
 	}
 
 	// the stream id is not needed when the frame is being dropped
-	h := binary.BigEndian.Uint32(hrbuf[4:])
+	h := binary.BigEndian.Uint32(hrbuf[:])
 
 	if h > uint32(messageLengthMax) {
 		return 0, status.OutOfRange.Err()
@@ -140,15 +139,14 @@ func (ch *channel) discard() (int, error) {
 // With bufsize <= 0 every call goes straight to the connection. Otherwise the
 // frames are appended to a pending write buffer and flushed as soon as it grows
 // past bufsize, or by a timer after flushInterval, whichever comes first.
-func (ch *channel) Send(streamID uint32, p ...[]byte) error {
+func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
 		if len(b) > messageLengthMax {
 			return status.OutOfRange.Err()
 		}
 		var hwbuf [messageHeaderLength]byte
-		binary.BigEndian.PutUint32(hwbuf[:4], streamID)
-		binary.BigEndian.PutUint32(hwbuf[4:], uint32(len(b)))
+		binary.BigEndian.PutUint32(hwbuf[:], uint32(len(b)))
 		bw = append(bw, hwbuf[:], b)
 	}
 	if ch.bufsize <= 0 {

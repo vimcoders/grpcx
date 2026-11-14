@@ -103,7 +103,7 @@ func (s *clientStream) Context() context.Context {
 // the channel under this stream's id. The header carries the id, so the two
 // frames stay addressable by the server.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
-	var header api.Header
+	header := api.Header{StreamID: s.id}
 	for _, v := range opts {
 		v.apply(&header)
 	}
@@ -115,7 +115,7 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	return s.channel.Send(s.id, h, b)
+	return s.channel.Send(h, b)
 }
 
 // UnaryInterceptor reads the response payload straight off the channel,
@@ -127,13 +127,9 @@ func (s *clientStream) UnaryInterceptor(ctx context.Context, opts ...CallOption)
 	for _, v := range opts {
 		v.apply(&h)
 	}
-	streamID, p, err := s.channel.Recv()
+	p, err := s.channel.Recv()
 	if err != nil {
 		return err
-	}
-	if s.id != streamID {
-		putmbuf(p)
-		return status.DataLoss.Err()
 	}
 	select {
 	case s.c <- &api.Response{Header: &h, Payload: p}:
@@ -184,6 +180,7 @@ func (c *CallOptions) apply(opts *api.Header) {
 	opts.Code = cmp.Or(c.Code, opts.Code)
 	opts.Desc = cmp.Or(c.Desc, opts.Desc)
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
+	opts.StreamID = cmp.Or(c.StreamID, opts.StreamID)
 }
 
 // WithUnaryInterceptor turns an already decoded request header into a
@@ -199,6 +196,7 @@ func WithUnaryInterceptor(readonly *api.Header) CallOption {
 		Metadatas: readonly.Metadatas,
 		Code:      readonly.Code,
 		Desc:      readonly.Desc,
+		StreamID:  readonly.StreamID,
 	}
 }
 
@@ -261,7 +259,7 @@ func (s *unary) UnaryInterceptor(ctx context.Context, opts ...CallOption) error 
 // Send marshals the header and the payload into two frames and writes the
 // reply on the channel.
 func (s *unary) Send(m any, opts ...CallOption) error {
-	var header api.Header
+	header := api.Header{StreamID: s.id}
 	for _, v := range opts {
 		v.apply(&header)
 	}
@@ -273,7 +271,7 @@ func (s *unary) Send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	return s.channel.Send(s.id, h, b)
+	return s.channel.Send(h, b)
 }
 
 // Recv reads the request payload, verifies the stream id and unmarshals it into
@@ -292,7 +290,7 @@ func (s *unary) Recv(m any) error {
 		return err
 	}
 
-	h := binary.BigEndian.Uint32(hrbuf[4:])
+	h := binary.BigEndian.Uint32(hrbuf[:])
 
 	if h > uint32(messageLengthMax) {
 		return status.OutOfRange.Err()

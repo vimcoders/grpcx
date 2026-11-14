@@ -113,7 +113,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 // header, and runs its unary handler. An unknown method is answered with
 // codes.Unimplemented.
 func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) error {
-	streamID, h, err := channel.Recv()
+	h, err := channel.Recv()
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 	s := &unary{
 		channel:          channel,
 		Options:          so.Options,
-		id:               streamID,
+		id:               opts.StreamID,
 		codec:            so.codec,
 		desc:             so.desc,
 		imp:              so.imp,

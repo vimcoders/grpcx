@@ -49,9 +49,9 @@ type ServerStream interface {
 }
 
 const (
-	// messageHeaderLength is the fixed frame header: 4 bytes of stream id
-	// followed by 4 bytes of payload length.
-	messageHeaderLength = 8
+	// messageHeaderLength is the fixed frame header: a 4-byte payload length.
+	// The stream id travels inside the protobuf header frame, not the frame header.
+	messageHeaderLength = 4
 	// messageLengthMax caps a single frame payload, aligned with the standard
 	// gRPC default.
 	messageLengthMax = 4 * 1024 * 1024

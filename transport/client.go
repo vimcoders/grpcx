@@ -184,7 +184,7 @@ func (c *client) interceptor(ctx context.Context, recv Receiver) error {
 		putmbuf(p)
 		return nil
 	}
-	return s.UnaryInterceptor(ctx, recv, WithUnaryInterceptor(&opts))
+	return s.interceptor(ctx, recv, WithUnaryInterceptor(&opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table

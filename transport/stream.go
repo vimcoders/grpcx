@@ -19,8 +19,6 @@ package transport
 import (
 	"cmp"
 	"context"
-	"encoding/binary"
-	"io"
 	"path"
 	"sync"
 	"time"
@@ -122,7 +120,7 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 // verifies the stream id, and hands it to the waiting Recv. When the stream is
 // already canceled or gone, the payload is returned to the pool and the stream
 // closed.
-func (s *clientStream) UnaryInterceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
+func (s *clientStream) interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
 	var h api.Header
 	for _, v := range opts {
 		v.apply(&h)
@@ -223,10 +221,10 @@ func WithUnaryCode(code codes.Code, desc string) CallOption {
 // would panic if called.
 type unary struct {
 	ServerStream
+	Sender
 	Options
 	id               uint32
 	codec            encoding.Codec
-	channel          *channel
 	desc             *grpc.ServiceDesc
 	imp              any
 	unaryInterceptor grpc.UnaryServerInterceptor
@@ -235,27 +233,30 @@ type unary struct {
 // UnaryInterceptor resolves the method from the decoded header, applies the
 // metadata and timeout, runs the unary interceptor chain and writes the reply
 // back. An unknown method reports codes.Unimplemented.
-func (s *unary) UnaryInterceptor(ctx context.Context, opts ...CallOption) error {
+func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
 	opt := api.Header{Code: uint32(codes.OK), Desc: codes.OK.String()}
 	for _, v := range opts {
 		v.apply(&opt)
 	}
+	p, err := recv.Recv()
+	if err != nil {
+		return err
+	}
+	defer putmbuf(p)
 	for _, v := range s.desc.Methods {
 		if opt.Method != path.Join("/", s.desc.ServiceName, v.MethodName) {
 			continue
 		}
+		codec := s.codec
 		metadatas := metadata.Pairs(opt.Metadatas...)
 		timeout := cmp.Or(time.Duration(opt.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 		defer cancel()
-		reply, err := v.Handler(s.imp, timeoutCtx, s.Recv, s.unaryInterceptor)
+		reply, err := v.Handler(s.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, s.unaryInterceptor)
 		if err != nil {
 			return s.Send(&api.Empty{}, WithUnaryCode(status.Code(err), err.Error()))
 		}
 		return s.Send(reply)
-	}
-	if err := s.Recv(&api.Empty{}); err != nil {
-		return err
 	}
 	return s.Send(&api.Empty{}, WithUnaryCode(codes.Unimplemented, opt.Method))
 }
@@ -275,44 +276,5 @@ func (s *unary) Send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	return s.channel.Send(h, b)
-}
-
-// Recv reads the request payload, verifies the stream id and unmarshals it into
-// m. A unary request carries exactly one payload frame, so the handler calls
-// this once; a mismatched id means the frame belongs to another call and
-// reports codes.DataLoss.
-func (s *unary) Recv(m any) error {
-	channel := s.channel
-	if err := channel.SetReadDeadline(time.Now().Add(channel.readTimeout)); err != nil {
-		return err
-	}
-	br := channel.br
-	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
-
-	if _, err := io.ReadFull(br, hrbuf[:]); err != nil {
-		return err
-	}
-
-	h := binary.BigEndian.Uint32(hrbuf[:])
-
-	if h > uint32(messageLengthMax) {
-		return status.OutOfRange.Err()
-	}
-
-	if int(h) <= br.Size() { // 缓冲装得下 → 零拷贝路径，保持不变
-		b, err := br.Peek(int(h))
-		if err != nil {
-			return err
-		}
-		defer br.Discard(int(h))
-		return s.codec.Unmarshal(b, m)
-	}
-
-	p := getmbuf(int(h)) // 装不下 → 池化直读，不占常驻内存
-	defer putmbuf(p)
-	if _, err := io.ReadFull(br, p[:h]); err != nil { // 注意仍要经过 br
-		return err
-	}
-	return s.codec.Unmarshal(p, m)
+	return s.Sender.Send(h, b)
 }

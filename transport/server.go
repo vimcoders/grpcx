@@ -123,7 +123,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return err
 	}
 	s := &unary{
-		channel:          channel,
+		Sender:           channel,
 		Options:          so.Options,
 		id:               opts.StreamID,
 		codec:            so.codec,
@@ -131,5 +131,5 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		imp:              so.imp,
 		unaryInterceptor: so.unaryInterceptor,
 	}
-	return s.UnaryInterceptor(ctx, WithUnaryInterceptor(&opts))
+	return s.interceptor(ctx, channel, WithUnaryInterceptor(&opts))
 }

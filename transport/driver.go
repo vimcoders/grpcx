@@ -83,7 +83,7 @@ type Sender interface {
 	Send(...[]byte) error
 }
 
-type Recver interface {
+type Receiver interface {
 	Recv() ([]byte, error)
 }
 
@@ -93,6 +93,6 @@ type SendCloser interface {
 }
 
 type RecvCloser interface {
-	Recver
+	Receiver
 	io.Closer
 }

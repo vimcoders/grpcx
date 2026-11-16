@@ -131,8 +131,12 @@ func (s *clientStream) UnaryInterceptor(ctx context.Context, opts ...CallOption)
 	if err != nil {
 		return err
 	}
+	response := &api.Response{
+		Header:  &h,
+		Payload: p,
+	}
 	select {
-	case s.c <- &api.Response{Header: &h, Payload: p}:
+	case s.c <- response:
 		return nil
 	case <-ctx.Done():
 	case <-s.ctx.Done():

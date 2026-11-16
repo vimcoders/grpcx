@@ -104,10 +104,9 @@ func (ch *channel) Recv() ([]byte, error) {
 	return nil, nil
 }
 
-// discard reads one frame header and skips its payload straight off the
-// buffered reader. Unlike Recv it never allocates and never touches the pool,
-// which is what makes it cheap to drop a reply for a stream that is already
-// gone.
+// discard reads one frame and throws its payload away straight off the
+// buffered reader. Unlike Recv it never touches the pool, which is what makes
+// it cheap to drop the payload frame of a stream that is already gone.
 func (ch *channel) discard() (int, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -119,7 +118,6 @@ func (ch *channel) discard() (int, error) {
 		return 0, err
 	}
 
-	// the stream id is not needed when the frame is being dropped
 	h := binary.BigEndian.Uint32(hrbuf[:])
 
 	if h > uint32(messageLengthMax) {
@@ -149,15 +147,6 @@ func (ch *channel) Send(p ...[]byte) error {
 		binary.BigEndian.PutUint32(hwbuf[:], uint32(len(b)))
 		bw = append(bw, hwbuf[:], b)
 	}
-	if ch.bufsize <= 0 {
-		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-			return err
-		}
-		if _, err := bw.WriteTo(ch.Conn); err != nil {
-			return err
-		}
-		return nil
-	}
 
 	ch.Lock()
 	defer ch.Unlock()
@@ -172,7 +161,7 @@ func (ch *channel) Send(p ...[]byte) error {
 			return err
 		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-			return err
+			return ch.Conn.Close()
 		}
 		if ch.t != nil {
 			ch.t.Stop()

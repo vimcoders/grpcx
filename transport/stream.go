@@ -122,12 +122,12 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 // verifies the stream id, and hands it to the waiting Recv. When the stream is
 // already canceled or gone, the payload is returned to the pool and the stream
 // closed.
-func (s *clientStream) UnaryInterceptor(ctx context.Context, opts ...CallOption) error {
+func (s *clientStream) UnaryInterceptor(ctx context.Context, ch *channel, opts ...CallOption) error {
 	var h api.Header
 	for _, v := range opts {
 		v.apply(&h)
 	}
-	p, err := s.channel.Recv()
+	p, err := ch.Recv()
 	if err != nil {
 		return err
 	}

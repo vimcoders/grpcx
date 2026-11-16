@@ -104,33 +104,6 @@ func (ch *channel) Recv() ([]byte, error) {
 	return nil, nil
 }
 
-// discard reads one frame and throws its payload away straight off the
-// buffered reader. Unlike Recv it never touches the pool, which is what makes
-// it cheap to drop the payload frame of a stream that is already gone.
-func (ch *channel) discard() (int, error) {
-	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
-
-	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
-		return 0, err
-	}
-
-	if _, err := io.ReadFull(ch.br, hrbuf[:]); err != nil {
-		return 0, err
-	}
-
-	h := binary.BigEndian.Uint32(hrbuf[:])
-
-	if h > uint32(messageLengthMax) {
-		return 0, status.OutOfRange.Err()
-	}
-
-	if h > 0 {
-		return ch.br.Discard(int(h))
-	}
-
-	return 0, nil
-}
-
 // Send writes the given byte slices as one or more frames, each prefixed with
 // an 8-byte header carrying streamID and that slice's length.
 //

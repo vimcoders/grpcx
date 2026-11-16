@@ -184,12 +184,16 @@ func (c *client) interceptor(ctx context.Context) error {
 	}
 	s := c.getStream(opts.StreamID)
 	if s == nil {
-		if _, err := c.channel.discard(); err != nil {
+		// the stream is already gone; read the payload frame off the wire to
+		// keep the next frame on a boundary, then give the buffer back
+		p, err := c.channel.Recv()
+		if err != nil {
 			return err
 		}
+		putmbuf(p)
 		return nil
 	}
-	return s.UnaryInterceptor(ctx, WithUnaryInterceptor(&opts))
+	return s.UnaryInterceptor(ctx, c.channel, WithUnaryInterceptor(&opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table

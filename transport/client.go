@@ -112,9 +112,8 @@ type client struct {
 	RoundTripper
 	sync.RWMutex
 	Sender
-	streams     map[uint32]*clientStream
-	streamID    uint32
-	dialContext func(ctx context.Context) (net.Conn, error)
+	streams  map[uint32]*clientStream
+	streamID uint32
 	sync.Once
 }
 
@@ -126,26 +125,18 @@ func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 // DialContext connects to endpoint over TCP, applies the options to both the
 // transport configuration and the connection, then starts the receive loop.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
-	dialContext := func(ctx context.Context) (net.Conn, error) {
-		d := net.Dialer{
-			Timeout: defaultTimeout,
-		}
-		cc, err := d.DialContext(ctx, "tcp", endpoint)
-		if err != nil {
-			return nil, err
-		}
-		return cc, nil
+	d := net.Dialer{
+		Timeout: defaultTimeout,
 	}
-	cc, err := dialContext(ctx)
+	cc, err := d.DialContext(ctx, "tcp", endpoint)
 	if err != nil {
 		return nil, err
 	}
 	ch := newChannel(cc, opts...)
 	rt := &client{
-		Sender:      ch,
-		dialContext: dialContext,
-		Options:     DefaultOptions(),
-		streams:     make(map[uint32]*clientStream),
+		Sender:  ch,
+		Options: DefaultOptions(),
+		streams: make(map[uint32]*clientStream),
 	}
 	for _, o := range opts {
 		o(&rt.Options)

@@ -109,11 +109,11 @@ func DefaultOptions() Options {
 type client struct {
 	Options
 	RoundTripper
-	sync.RWMutex
-	Sender
+	SendCloser
 	streams  map[uint32]*clientStream
 	streamID uint32
 	sync.Once
+	sync.RWMutex
 }
 
 // Dial connects to endpoint over TCP with the background context.
@@ -133,9 +133,9 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	}
 	ch := newChannel(cc, opts...)
 	rt := &client{
-		Sender:  ch,
-		Options: DefaultOptions(),
-		streams: make(map[uint32]*clientStream),
+		SendCloser: ch,
+		Options:    DefaultOptions(),
+		streams:    make(map[uint32]*clientStream),
 	}
 	for _, o := range opts {
 		o(&rt.Options)
@@ -146,14 +146,14 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
-func (c *client) Handle(ctx context.Context, ch *channel) error {
+func (c *client) Handle(ctx context.Context, recv Recver) error {
 	defer c.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := c.interceptor(ctx, ch); err != nil {
+			if err := c.interceptor(ctx, recv); err != nil {
 				return err
 			}
 		}
@@ -163,8 +163,8 @@ func (c *client) Handle(ctx context.Context, ch *channel) error {
 // interceptor reads one response frame, resolves the stream by its id and hands
 // the header and payload to it. A frame whose stream is already gone is
 // discarded so the next frame stays aligned to a boundary.
-func (c *client) interceptor(ctx context.Context, ch *channel) error {
-	h, err := ch.Recv()
+func (c *client) interceptor(ctx context.Context, recv Recver) error {
+	h, err := recv.Recv()
 	if err != nil {
 		return err
 	}
@@ -177,14 +177,14 @@ func (c *client) interceptor(ctx context.Context, ch *channel) error {
 	if s == nil {
 		// the stream is already gone; read the payload frame off the wire to
 		// keep the next frame on a boundary, then give the buffer back
-		p, err := ch.Recv()
+		p, err := recv.Recv()
 		if err != nil {
 			return err
 		}
 		putmbuf(p)
 		return nil
 	}
-	return s.UnaryInterceptor(ctx, ch, WithUnaryInterceptor(&opts))
+	return s.UnaryInterceptor(ctx, recv, WithUnaryInterceptor(&opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table
@@ -204,7 +204,7 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
-		Sender:       c.Sender,
+		Sender:       c.SendCloser,
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
@@ -339,5 +339,5 @@ func (c *client) Close() error {
 		clear(c.streams)
 		c.maxStreams = 0
 	})
-	return c.Sender.Close()
+	return c.SendCloser.Close()
 }

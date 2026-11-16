@@ -11,6 +11,37 @@ import (
 	"google.golang.org/grpc"
 )
 
+const (
+	// messageHeaderLength is the fixed frame header: a 4-byte payload length.
+	// The stream id travels inside the protobuf header frame, not the frame header.
+	messageHeaderLength = 4
+	// messageLengthMax caps a single frame payload, aligned with the standard
+	// gRPC default.
+	messageLengthMax = 4 * 1024 * 1024
+	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
+	// settles on, so it is the shortest useful flush delay.
+	defaultFlushInterval = time.Millisecond
+	// defaultBufSize is one batching block. bufsize is counted in blocks.
+	defaultBufSize = 1024
+	// defaultMaxBufSize bounds the send buffer at 16 blocks, matching the
+	// default TCP send buffer on Linux.
+	defaultMaxBufSize = 16 * defaultBufSize
+	// defaultMaxStreams is the default maximum number of concurrent streams
+	// per connection.
+	defaultMaxStreams = math.MaxUint16
+	// defaultTimeout is the default timeout of one request.
+	defaultTimeout = 3 * time.Second
+	// defaultReadTimeout bounds how long the reader waits for the next frame
+	// before treating the connection as dead. It must stay well above the
+	// keepalive period, or idle connections would be torn down between pings.
+	defaultReadTimeout = 10 * defaultTimeout
+	// defaultWriteTimeout bounds a single flush.
+	defaultWriteTimeout = defaultTimeout
+	// defaultKeepalive is the idle period, in units of defaultTimeout, at which
+	// the round robin balancer pings a connection.
+	defaultKeepalive = 3
+)
+
 // RoundTripper is the client-side transport: it dials a connection, dispatches
 // unary calls over it and keeps it alive. A RoundTripper is safe for concurrent
 // use by multiple goroutines.
@@ -50,36 +81,18 @@ type ServerStream interface {
 
 type Sender interface {
 	Send(...[]byte) error
+}
+
+type Recver interface {
+	Recv() ([]byte, error)
+}
+
+type SendCloser interface {
+	Sender
 	io.Closer
 }
 
-const (
-	// messageHeaderLength is the fixed frame header: a 4-byte payload length.
-	// The stream id travels inside the protobuf header frame, not the frame header.
-	messageHeaderLength = 4
-	// messageLengthMax caps a single frame payload, aligned with the standard
-	// gRPC default.
-	messageLengthMax = 4 * 1024 * 1024
-	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
-	// settles on, so it is the shortest useful flush delay.
-	defaultFlushInterval = time.Millisecond
-	// defaultBufSize is one batching block. bufsize is counted in blocks.
-	defaultBufSize = 1024
-	// defaultMaxBufSize bounds the send buffer at 16 blocks, matching the
-	// default TCP send buffer on Linux.
-	defaultMaxBufSize = 16 * defaultBufSize
-	// defaultMaxStreams is the default maximum number of concurrent streams
-	// per connection.
-	defaultMaxStreams = math.MaxUint16
-	// defaultTimeout is the default timeout of one request.
-	defaultTimeout = 3 * time.Second
-	// defaultReadTimeout bounds how long the reader waits for the next frame
-	// before treating the connection as dead. It must stay well above the
-	// keepalive period, or idle connections would be torn down between pings.
-	defaultReadTimeout = 10 * defaultTimeout
-	// defaultWriteTimeout bounds a single flush.
-	defaultWriteTimeout = defaultTimeout
-	// defaultKeepalive is the idle period, in units of defaultTimeout, at which
-	// the round robin balancer pings a connection.
-	defaultKeepalive = 3
-)
+type RecvCloser interface {
+	Recver
+	io.Closer
+}

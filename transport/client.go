@@ -111,7 +111,7 @@ type client struct {
 	Options
 	RoundTripper
 	sync.RWMutex
-	channel     *channel
+	Sender
 	streams     map[uint32]*clientStream
 	streamID    uint32
 	dialContext func(ctx context.Context) (net.Conn, error)
@@ -128,7 +128,7 @@ func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	dialContext := func(ctx context.Context) (net.Conn, error) {
 		d := net.Dialer{
-			KeepAlive: time.Minute,
+			Timeout: defaultTimeout,
 		}
 		cc, err := d.DialContext(ctx, "tcp", endpoint)
 		if err != nil {
@@ -140,29 +140,30 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
+	ch := newChannel(cc, opts...)
 	rt := &client{
-		Options:     DefaultOptions(),
+		Sender:      ch,
 		dialContext: dialContext,
+		Options:     DefaultOptions(),
 		streams:     make(map[uint32]*clientStream),
 	}
 	for _, o := range opts {
 		o(&rt.Options)
 	}
-	rt.channel = newChannel(cc, opts...)
-	go rt.Handle(ctx)
+	go rt.Handle(ctx, ch)
 	return rt, nil
 }
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
-func (c *client) Handle(ctx context.Context) error {
+func (c *client) Handle(ctx context.Context, ch *channel) error {
 	defer c.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := c.interceptor(ctx); err != nil {
+			if err := c.interceptor(ctx, ch); err != nil {
 				return err
 			}
 		}
@@ -172,8 +173,8 @@ func (c *client) Handle(ctx context.Context) error {
 // interceptor reads one response frame, resolves the stream by its id and hands
 // the header and payload to it. A frame whose stream is already gone is
 // discarded so the next frame stays aligned to a boundary.
-func (c *client) interceptor(ctx context.Context) error {
-	h, err := c.channel.Recv()
+func (c *client) interceptor(ctx context.Context, ch *channel) error {
+	h, err := ch.Recv()
 	if err != nil {
 		return err
 	}
@@ -186,14 +187,14 @@ func (c *client) interceptor(ctx context.Context) error {
 	if s == nil {
 		// the stream is already gone; read the payload frame off the wire to
 		// keep the next frame on a boundary, then give the buffer back
-		p, err := c.channel.Recv()
+		p, err := ch.Recv()
 		if err != nil {
 			return err
 		}
 		putmbuf(p)
 		return nil
 	}
-	return s.UnaryInterceptor(ctx, c.channel, WithUnaryInterceptor(&opts))
+	return s.UnaryInterceptor(ctx, ch, WithUnaryInterceptor(&opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table
@@ -213,7 +214,7 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
-		channel:      c.channel,
+		Sender:       c.Sender,
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *api.Response, 1),
@@ -306,7 +307,7 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 		return nil, err
 	}
 
-	if err := s.channel.Send(h, req.Payload); err != nil {
+	if err := s.Sender.Send(h, req.Payload); err != nil {
 		return nil, err
 	}
 	return s.recv()
@@ -348,5 +349,5 @@ func (c *client) Close() error {
 		clear(c.streams)
 		c.maxStreams = 0
 	})
-	return c.channel.Close()
+	return c.Sender.Close()
 }

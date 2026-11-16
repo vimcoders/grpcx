@@ -42,7 +42,7 @@ import (
 // would panic if called.
 type clientStream struct {
 	ClientStream
-	channel      *channel
+	Sender
 	ctx          context.Context
 	id           uint32
 	c            chan *api.Response
@@ -115,7 +115,7 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	return s.channel.Send(h, b)
+	return s.Sender.Send(h, b)
 }
 
 // UnaryInterceptor reads the response payload straight off the channel,

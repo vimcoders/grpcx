@@ -48,6 +48,11 @@ type ServerStream interface {
 	grpc.ServerStream
 }
 
+type Sender interface {
+	Send(...[]byte) error
+	io.Closer
+}
+
 const (
 	// messageHeaderLength is the fixed frame header: a 4-byte payload length.
 	// The stream id travels inside the protobuf header frame, not the frame header.

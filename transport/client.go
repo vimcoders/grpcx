@@ -107,7 +107,6 @@ func DefaultOptions() Options {
 // client is the RoundTripper implementation: it owns the connection, the
 // stream table and the receive loop that demultiplexes responses.
 type client struct {
-	grpc.ClientConnInterface
 	Options
 	RoundTripper
 	sync.RWMutex

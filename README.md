@@ -36,6 +36,8 @@ docker compose run bench-5k
 docker compose run bench-1024k 
 ```
 
+`go test -bench` only reports the client side. To read what the server itself spends, set `GRPCX_STATS_ADDR` (e.g. `":9091"`) on either demo server; it then serves per-process counters at `/stats`: call count and peak in-flight, handler duration percentiles, heap allocation from `runtime/metrics`, container CPU from cgroup, and read/write syscall counters from `/proc/self/io`. Unset, the endpoint does not start and no interceptor is installed.
+
 ### Latency & Throughput
 
 | Payload | Concurrency | gRPC ns/op | grpcx ns/op | Speedup | gRPC QPS | grpcx QPS | gRPC allocs/op | grpcx allocs/op |

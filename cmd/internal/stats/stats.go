@@ -179,10 +179,7 @@ func percentile(p float64) float64 {
 	if total == 0 {
 		return 0
 	}
-	limit := int64(float64(total) * p)
-	if limit < 1 {
-		limit = 1
-	}
+	limit := max(int64(float64(total)*p), 1)
 	var seen int64
 	for i := range hist {
 		seen += hist[i].Load()

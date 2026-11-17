@@ -219,14 +219,13 @@ func WithUnaryCode(code codes.Code, desc string) CallOption {
 // never assigned, so SetHeader, SetTrailer and Context fall through to nil and
 // would panic if called.
 type unary struct {
-	ServerStream
 	Sender
 	Options
-	id               uint32
-	codec            encoding.Codec
-	desc             *grpc.ServiceDesc
-	imp              any
-	unaryInterceptor grpc.UnaryServerInterceptor
+	id       uint32
+	codec    encoding.Codec
+	desc     *grpc.ServiceDesc
+	imp      any
+	unaryInt grpc.UnaryServerInterceptor
 }
 
 // interceptor resolves the method from the decoded options, applies the
@@ -251,7 +250,7 @@ func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOpti
 		timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 		defer cancel()
-		reply, err := v.Handler(s.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, s.unaryInterceptor)
+		reply, err := v.Handler(s.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, s.unaryInt)
 		if err != nil {
 			return s.Send(&api.Empty{}, WithUnaryCode(status.Code(err), err.Error()))
 		}
@@ -276,4 +275,64 @@ func (s *unary) Send(m any, opts ...CallOption) error {
 		return err
 	}
 	return s.Sender.Send(h, b)
+}
+
+type serverStream struct {
+	ServerStream
+	Options
+	Sender
+	id        uint32
+	codec     encoding.Codec
+	desc      *grpc.ServiceDesc
+	imp       any
+	streamInt grpc.StreamServerInterceptor
+	c         chan *api.Request
+}
+
+func (s *serverStream) Interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
+	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
+	for _, v := range opts {
+		v.apply(&options)
+	}
+	p, err := recv.Recv()
+	if err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return status.Canceled.Err()
+	case s.c <- &api.Request{Options: &options, Payload: p}:
+	default:
+		return status.Canceled.Err()
+	}
+	return nil
+}
+
+func (s *serverStream) Send(m any, opts ...CallOption) error {
+	options := api.CallOptions{StreamID: s.id}
+	for _, v := range opts {
+		v.apply(&options)
+	}
+	h, err := encoding.Marshal(&options)
+	if err != nil {
+		return err
+	}
+	b, err := s.codec.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return s.Sender.Send(h, b)
+}
+
+func (s *serverStream) Recv(m any) error {
+	select {
+	case req, ok := <-s.c:
+		if !ok {
+			return status.Canceled.Err()
+		}
+		defer putmbuf(req.Payload)
+		return s.codec.Unmarshal(req.Payload, m)
+	default:
+		return status.Canceled.Err()
+	}
 }

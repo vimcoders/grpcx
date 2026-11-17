@@ -21,9 +21,12 @@ type ServerOption func(c *ServerOptions)
 // transport Options shared with the client side.
 type ServerOptions struct {
 	Options
-	desc             *grpc.ServiceDesc
-	imp              any
-	unaryInterceptor grpc.UnaryServerInterceptor
+	desc            *grpc.ServiceDesc
+	imp             any
+	unaryInt        grpc.UnaryServerInterceptor
+	streamInt       grpc.StreamServerInterceptor
+	chainUnaryInts  []grpc.UnaryServerInterceptor
+	chainStreamInts []grpc.StreamServerInterceptor
 }
 
 // DefaultServerOptions is the default configuration for a grpcx server: the
@@ -31,8 +34,11 @@ type ServerOptions struct {
 // service descriptor.
 var DefaultServerOptions = ServerOptions{
 	Options: DefaultOptions(),
-	unaryInterceptor: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
+	unaryInt: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
+	},
+	streamInt: func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		return handler(srv, ss)
 	},
 	desc: &grpc.ServiceDesc{},
 }
@@ -42,7 +48,7 @@ var DefaultServerOptions = ServerOptions{
 // handler to invoke.
 func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
 	return func(so *ServerOptions) {
-		so.unaryInterceptor = interceptor
+		so.unaryInt = interceptor
 	}
 }
 
@@ -123,13 +129,13 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return err
 	}
 	s := &unary{
-		Sender:           channel,
-		Options:          so.Options,
-		id:               opts.StreamID,
-		codec:            so.codec,
-		desc:             so.desc,
-		imp:              so.imp,
-		unaryInterceptor: so.unaryInterceptor,
+		Sender:   channel,
+		Options:  so.Options,
+		id:       opts.StreamID,
+		codec:    so.codec,
+		desc:     so.desc,
+		imp:      so.imp,
+		unaryInt: so.unaryInt,
 	}
 	return s.interceptor(ctx, channel, WithUnaryInterceptor(&opts))
 }

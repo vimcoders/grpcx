@@ -10,6 +10,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -35,6 +37,10 @@ const (
 var (
 	startedAt = time.Now()
 
+	// enabled is read once: the endpoint is configured through the container
+	// environment, and caching it keeps the enabled check out of the hot path.
+	enabled = os.Getenv(envAddr) != ""
+
 	calls       atomic.Int64
 	inflight    atomic.Int64
 	maxInflight atomic.Int64
@@ -46,7 +52,7 @@ var (
 
 // Enabled reports whether the metrics endpoint was requested.
 func Enabled() bool {
-	return os.Getenv(envAddr) != ""
+	return enabled
 }
 
 // Begin timestamps the start of a call. Pair it with End.
@@ -218,6 +224,9 @@ func cgroupCPUUsec() uint64 {
 		}
 		return value
 	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("stats: read cpu.stat: %v", err)
+	}
 	return 0
 }
 
@@ -250,6 +259,9 @@ func procIO() (rchar, wchar, syscr, syscw uint64) {
 			syscw = value
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("stats: read self io: %v", err)
+	}
 	return rchar, wchar, syscr, syscw
 }
 
@@ -276,8 +288,8 @@ func Serve() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			println("stats: endpoint failed: " + err.Error())
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("stats: endpoint failed: %v", err)
 		}
 	}()
 }

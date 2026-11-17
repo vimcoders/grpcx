@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"net"
+	"path"
 	"time"
 
 	"github.com/vimcoders/grpcx/generated/api"
@@ -18,15 +19,13 @@ type ServerOption func(c *ServerOptions)
 
 // ServerOptions holds the options for a grpcx server: the registered service
 // descriptor and implementation, the unary interceptor, plus the embedded
-// transport Options shared with the client side.
+// transport Options shared with the client side. Only unary methods are served,
+// so there is no stream interceptor to configure.
 type ServerOptions struct {
 	Options
-	desc            *grpc.ServiceDesc
-	imp             any
-	unaryInt        grpc.UnaryServerInterceptor
-	streamInt       grpc.StreamServerInterceptor
-	chainUnaryInts  []grpc.UnaryServerInterceptor
-	chainStreamInts []grpc.StreamServerInterceptor
+	desc     *grpc.ServiceDesc
+	imp      any
+	unaryInt grpc.UnaryServerInterceptor
 }
 
 // DefaultServerOptions is the default configuration for a grpcx server: the
@@ -36,9 +35,6 @@ var DefaultServerOptions = ServerOptions{
 	Options: DefaultOptions(),
 	unaryInt: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
 		return handler(ctx, req)
-	},
-	streamInt: func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		return handler(srv, ss)
 	},
 	desc: &grpc.ServiceDesc{},
 }
@@ -101,14 +97,14 @@ func WithServerBufSize(n int) ServerOption {
 // Handle serves the connection until it breaks: it creates the channel, then
 // loops reading one frame at a time and dispatching it through interceptor.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	channel := newChannel(c, WithBufSize(so.bufsize))
-	defer channel.Close()
+	ch := newChannel(c, WithBufSize(so.bufsize))
+	defer ch.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := so.interceptor(ctx, channel); err != nil {
+			if err := so.interceptor(ctx, ch, ch); err != nil {
 				return err
 			}
 		}
@@ -116,26 +112,34 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 }
 
 // interceptor reads one request frame, resolves the target method from the
-// header, and runs its unary handler. An unknown method is answered with
-// codes.Unimplemented.
-func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) error {
-	h, err := channel.Recv()
+// header, and dispatches it to the matching unary method handler, passing recv
+// for the request payload and send for the reply. Anything that does not
+// resolve to a registered unary method — an unknown name, or a stream method,
+// which grpcx does not serve — is answered with codes.Unimplemented.
+func (so *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sender) error {
+	p, err := recv.Recv()
 	if err != nil {
 		return err
 	}
-	defer putmbuf(h)
+	defer putmbuf(p)
 	var opts api.CallOptions
-	if err := encoding.Unmarshal(h, &opts); err != nil {
+	if err := encoding.Unmarshal(p, &opts); err != nil {
 		return err
 	}
-	s := &unary{
-		Sender:   channel,
-		Options:  so.Options,
-		id:       opts.StreamID,
-		codec:    so.codec,
-		desc:     so.desc,
-		imp:      so.imp,
-		unaryInt: so.unaryInt,
+	for _, v := range so.desc.Methods {
+		if opts.FullMethodName != path.Join("/", so.desc.ServiceName, v.MethodName) {
+			continue
+		}
+		s := &defaultMethodHandler{
+			Sender:   send,
+			Options:  so.Options,
+			id:       opts.StreamID,
+			imp:      so.imp,
+			unaryInt: so.unaryInt,
+			Handler:  v.Handler,
+		}
+		return s.Handle(ctx, recv, WithCallOption(&opts))
 	}
-	return s.interceptor(ctx, channel, WithUnaryInterceptor(&opts))
+	fallback := empty{id: opts.StreamID, codec: so.codec, Sender: send}
+	return fallback.Handle(ctx, recv, WithCallOption(&opts))
 }

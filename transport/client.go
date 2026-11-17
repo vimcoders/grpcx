@@ -184,12 +184,14 @@ func (c *client) interceptor(ctx context.Context, recv Receiver) error {
 		putmbuf(p)
 		return nil
 	}
-	return s.interceptor(ctx, recv, WithUnaryInterceptor(&opts))
+	return s.Handle(ctx, recv, WithCallOption(&opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table
 // and derives a cancellable context for it. It fails with
-// codes.ResourceExhausted once maxStreams is reached.
+// codes.ResourceExhausted once maxStreams is reached. Call options are ignored
+// here: Invoke and RoundTrip build and marshal the request header themselves,
+// so opts never reach the wire through this path.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
@@ -215,15 +217,11 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	return &s, nil
 }
 
-// NewStream opens a stream for the given method. Only unary calls are
-// supported: desc is ignored and the returned stream carries exactly one
-// request and one response.
+// NewStream is not implemented: grpcx carries unary calls only, so every
+// stream request is rejected with codes.Unimplemented. The method exists solely
+// to satisfy grpc.ClientConnInterface; desc, method and opts are all ignored.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	info := CallOptions{
-		FullMethodName: method,
-		Timeout:        c.timeout.Milliseconds(),
-	}
-	return c.createStream(ctx, &info)
+	return nil, status.Unimplemented.Err()
 }
 
 // deleteStream removes the stream from the table so no further frame is
@@ -268,7 +266,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err := s.Send(req, opts...); err != nil {
 		return err
 	}
-	return s.Recv(reply)
+	return s.RecvMsg(reply)
 }
 
 // RoundTrip sends an already framed request — header plus payload — and waits
@@ -321,7 +319,7 @@ func (c *client) Ping(ctx context.Context) error {
 	// The request carries no method name, so the server can only answer
 	// codes.Unimplemented. That answer is proof the connection is alive, so it
 	// counts as success; every other error is propagated.
-	if err := s.Recv(&api.Empty{}); err != nil && status.Code(err) != codes.Unimplemented {
+	if err := s.RecvMsg(&api.Empty{}); err != nil && status.Code(err) != codes.Unimplemented {
 		return err
 	}
 	return nil

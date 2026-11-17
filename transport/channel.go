@@ -29,7 +29,8 @@ import (
 )
 
 // buffers is the process-wide buffer pool every frame payload is allocated
-// from, so a 1MB payload is recycled instead of allocated per call.
+// from, so a payload is recycled instead of allocated per call. The pool tops
+// out at its largest size class (1MB); a frame above that is allocated fresh.
 var buffers = mem.DefaultBufferPool()
 
 // getmbuf returns a buffer from the pool, guaranteed to be at least size bytes
@@ -71,10 +72,11 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 	return x
 }
 
-// Recv reads one frame: an 8-byte header carrying the stream id and the
-// payload length, followed by the payload itself. The payload comes from the
-// pool and the caller must putmbuf it. A zero-length frame returns a nil
-// payload.
+// Recv reads one frame: a 4-byte header carrying the payload length, followed
+// by the payload itself. The stream id is not in the frame header; it travels
+// inside the protobuf header frame that Recv returns first. The payload comes
+// from the pool and the caller must putmbuf it. A zero-length frame returns a
+// nil payload.
 func (ch *channel) Recv() ([]byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -105,7 +107,9 @@ func (ch *channel) Recv() ([]byte, error) {
 }
 
 // Send writes the given byte slices as one or more frames, each prefixed with
-// an 8-byte header carrying streamID and that slice's length.
+// a 4-byte payload length. Callers pass the header slice and the payload slice
+// as separate frames; the stream id lives in the header slice, not the frame
+// header.
 //
 // With bufsize <= 0 every call goes straight to the connection. Otherwise the
 // frames are appended to a pending write buffer and flushed as soon as it grows

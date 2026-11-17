@@ -55,43 +55,28 @@ type RoundTripper interface {
 	io.Closer
 }
 
-// Stream is the message-level half of a stream: it sends and receives one
-// message at a time. grpcx carries unary calls only, so each stream carries
-// exactly one request and one response.
-type Stream interface {
-	Send(any, ...CallOption) error
-	Recv(any) error
-}
-
-// ClientStream is the client-side stream: the message level Stream plus the
-// grpc.ClientStream surface the generated stubs and interceptors are typed
-// against.
-type ClientStream interface {
-	Stream
-	grpc.ClientStream
-}
-
-// ServerStream is the server-side stream: the message level Stream plus the
-// grpc.ServerStream surface the generated handlers and interceptors are typed
-// against.
-type ServerStream interface {
-	Stream
-	grpc.ServerStream
-}
-
+// Sender writes frames onto one connection: every argument becomes a single
+// length-prefixed frame, so a caller sends the header and the payload as two
+// frames.
 type Sender interface {
 	Send(...[]byte) error
 }
 
+// Receiver reads one frame at a time with the length header already stripped.
+// The buffer is owned by the caller; package callers return it to the pool with
+// putmbuf.
 type Receiver interface {
 	Recv() ([]byte, error)
 }
 
+// SendCloser is a Sender that also closes the connection, flushing whatever
+// batching still holds before it does.
 type SendCloser interface {
 	Sender
 	io.Closer
 }
 
+// RecvCloser is a Receiver that also closes the connection.
 type RecvCloser interface {
 	Receiver
 	io.Closer

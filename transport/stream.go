@@ -19,7 +19,6 @@ package transport
 import (
 	"cmp"
 	"context"
-	"path"
 	"sync"
 	"time"
 
@@ -31,15 +30,15 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// clientStream is the client-side state of one unary call: the stream id, the
-// channel that carries it, the receive slot and the cleanup hooks. It embeds
-// ClientStream so the generated stubs and the interceptor chain see the
-// grpc.ClientStream surface they are typed against. Only Send, Recv, Context
-// and CloseSend are implemented here: the embedded grpc.ClientStream is never
-// assigned, so Header, Trailer, SendMsg and RecvMsg fall through to nil and
-// would panic if called.
+// clientStream is the client-side state of one call: the stream id, the
+// connection that carries it, the receive slot and the cleanup hooks. It embeds
+// grpc.ClientStream so the generated stubs and the interceptor chain see the
+// surface they are typed against. SendMsg, RecvMsg, Context and CloseSend are
+// implemented here, plus grpcx's own synchronous Send used by Invoke. Header and
+// Trailer are not: they fall through to the embedded interface, which is never
+// assigned, and would panic if called.
 type clientStream struct {
-	ClientStream
+	grpc.ClientStream
 	Sender
 	ctx          context.Context
 	id           uint32
@@ -74,9 +73,16 @@ func (s *clientStream) Close() error {
 	return nil
 }
 
+// SendMsg marshals m and writes it as one request frame, without extra call
+// options. It is the grpc.ClientStream shape of Send.
+func (s *clientStream) SendMsg(m any) error {
+	push := pusher{id: s.id, codec: s.codec, Sender: s.Sender}
+	return push.Push(m)
+}
+
 // Recv waits for the reply frame, checks its code and unmarshals its payload
 // into m.
-func (s *clientStream) Recv(m any) error {
+func (s *clientStream) RecvMsg(m any) error {
 	reply, err := s.recv()
 	if err != nil {
 		return err
@@ -92,34 +98,23 @@ func (s *clientStream) Recv(m any) error {
 	return nil
 }
 
+// Send marshals m and writes it as one request frame on the stream.
+func (s *clientStream) Send(m any, opts ...CallOption) error {
+	push := pusher{id: s.id, codec: s.codec, Sender: s.Sender}
+	return push.Push(m, opts...)
+}
+
 // Context returns the stream context, canceled when the stream is closed.
 func (s *clientStream) Context() context.Context {
 	return s.ctx
 }
 
-// Send marshals the header and the payload into two frames and writes them to
-// the channel under this stream's id. The header carries the id, so the two
-// frames stay addressable by the server.
-func (s *clientStream) Send(m any, opts ...CallOption) error {
-	options := api.CallOptions{StreamID: s.id}
-	for _, v := range opts {
-		v.apply(&options)
-	}
-	h, err := encoding.Marshal(&options)
-	if err != nil {
-		return err
-	}
-	b, err := s.codec.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return s.Sender.Send(h, b)
-}
-
-// interceptor reads the response payload straight off the channel, verifies
-// the stream id, and hands it to the waiting Recv. When the stream is already
-// canceled or gone, the payload is returned to the pool and the stream closed.
-func (s *clientStream) interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
+// Handle reads the response payload frame off the connection and hands it to
+// the waiting RecvMsg through the receive slot. When the call is already over —
+// ctx canceled, stream canceled, or the slot gone — the payload goes back to
+// the pool and the stream is closed, so the frame is still consumed and the
+// next frame stays on a boundary.
+func (s *clientStream) Handle(ctx context.Context, recv Receiver, opts ...CallOption) error {
 	var options api.CallOptions
 	for _, v := range opts {
 		v.apply(&options)
@@ -143,8 +138,10 @@ func (s *clientStream) interceptor(ctx context.Context, recv Receiver, opts ...C
 	return s.Close()
 }
 
-// recv blocks until the response slot is filled, the stream is canceled, or
-// the slot is closed because the connection went away.
+// recv blocks until the response slot is filled or the stream is canceled,
+// returning codes.Canceled when the call ends without a reply. The closed-slot
+// branch never fires today — nothing closes the slot — and only guards against a
+// future sender doing so.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():
@@ -184,10 +181,10 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.StreamID = cmp.Or(c.StreamID, opts.StreamID)
 }
 
-// WithUnaryInterceptor turns an already decoded request header into a
+// WithCallOption turns an already decoded request header into a
 // CallOption, so the server-side handler sees the call it was dispatched from
 // without re-parsing the frame.
-func WithUnaryInterceptor(readonly *api.CallOptions) CallOption {
+func WithCallOption(readonly *api.CallOptions) CallOption {
 	return &CallOptions{
 		FullMethodName: readonly.FullMethodName,
 		Service:        readonly.Service,
@@ -201,37 +198,36 @@ func WithUnaryInterceptor(readonly *api.CallOptions) CallOption {
 	}
 }
 
-// WithUnaryCode sets the response status code and its description, so a reply
-// can report a failure instead of a payload.
-func WithUnaryCode(code codes.Code, desc string) CallOption {
+// WithCallOptionCode sets the response status code and its description, so a
+// reply can report a failure instead of a payload.
+func WithCallOptionCode(code codes.Code, desc string) CallOption {
 	return &CallOptions{
 		Code: uint32(code),
 		Desc: desc,
 	}
 }
 
-// unary is the server-side view of one request: the stream id, the channel it
-// arrived on, the service descriptor to look the method up in, and the
-// interceptors to run. It embeds Options so the server-side settings, timeout
-// among them, apply to the call, and ServerStream so the handler and the
-// interceptor chain see the grpc.ServerStream surface they are typed against.
-// Only Send and Recv are implemented here: the embedded grpc.ServerStream is
-// never assigned, so SetHeader, SetTrailer and Context fall through to nil and
-// would panic if called.
-type unary struct {
+// defaultMethodHandler is the server-side view of one unary request: the stream id,
+// the sender it replies through, the service implementation and the method
+// handler resolved from the service descriptor, plus the interceptor to run.
+// It embeds Options so the server-side settings, the timeout among them,
+// apply. A unary request is a single payload already off the wire, so the
+// handler is called through grpc.MethodHandler with a decode function instead
+// of a grpc.ServerStream.
+type defaultMethodHandler struct {
 	Sender
 	Options
 	id       uint32
-	codec    encoding.Codec
-	desc     *grpc.ServiceDesc
 	imp      any
 	unaryInt grpc.UnaryServerInterceptor
+	Handler  grpc.MethodHandler
 }
 
-// interceptor resolves the method from the decoded options, applies the
-// metadata and timeout, runs the unary interceptor chain and writes the reply
-// back. An unknown method reports codes.Unimplemented.
-func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
+// Handle consumes the request payload, applies the call metadata and the
+// deadline, runs the unary interceptor chain over the generated method handler
+// and writes the reply back as one response frame. A handler error is reported
+// in the response header's status code instead of tearing the connection down.
+func (d *defaultMethodHandler) Handle(ctx context.Context, recv Receiver, opts ...CallOption) error {
 	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
 	for _, v := range opts {
 		v.apply(&options)
@@ -241,56 +237,32 @@ func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOpti
 		return err
 	}
 	defer putmbuf(p)
-	for _, v := range s.desc.Methods {
-		if options.FullMethodName != path.Join("/", s.desc.ServiceName, v.MethodName) {
-			continue
-		}
-		codec := s.codec
-		metadatas := metadata.Pairs(options.Metadatas...)
-		timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
-		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
-		defer cancel()
-		reply, err := v.Handler(s.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, s.unaryInt)
-		if err != nil {
-			return s.Send(&api.Empty{}, WithUnaryCode(status.Code(err), err.Error()))
-		}
-		return s.Send(reply)
+	codec := d.codec
+	metadatas := metadata.Pairs(options.Metadatas...)
+	timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout)
+	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
+	defer cancel()
+	push := pusher{id: d.id, codec: d.codec, Sender: d.Sender}
+	reply, err := d.Handler(d.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, d.unaryInt)
+	if err != nil {
+		return push.Push(&api.Empty{}, WithCallOptionCode(status.Code(err), err.Error()))
 	}
-	return s.Send(&api.Empty{}, WithUnaryCode(codes.Unimplemented, options.FullMethodName))
+	return push.Push(reply)
 }
 
-// Send marshals the header and the payload into two frames and writes the
-// reply on the channel.
-func (s *unary) Send(m any, opts ...CallOption) error {
-	options := api.CallOptions{StreamID: s.id}
-	for _, v := range opts {
-		v.apply(&options)
-	}
-	h, err := encoding.Marshal(&options)
-	if err != nil {
-		return err
-	}
-	b, err := s.codec.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return s.Sender.Send(h, b)
-}
-
-type serverStream struct {
-	ServerStream
-	Options
+// empty answers a method the registered service does not expose: an unknown
+// name, or a stream method, which grpcx does not serve.
+type empty struct {
 	Sender
-	id        uint32
-	codec     encoding.Codec
-	desc      *grpc.ServiceDesc
-	imp       any
-	streamInt grpc.StreamServerInterceptor
-	c         chan *api.Request
+	id    uint32
+	codec encoding.Codec
 }
 
-func (s *serverStream) Interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
-	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
+// Handle still reads the request payload before replying, so the connection
+// stays frame-aligned, then sends codes.Unimplemented carrying the requested
+// method name.
+func (e *empty) Handle(ctx context.Context, recv Receiver, opts ...CallOption) error {
+	options := api.CallOptions{}
 	for _, v := range opts {
 		v.apply(&options)
 	}
@@ -298,18 +270,24 @@ func (s *serverStream) Interceptor(ctx context.Context, recv Receiver, opts ...C
 	if err != nil {
 		return err
 	}
-	select {
-	case <-ctx.Done():
-		return status.Canceled.Err()
-	case s.c <- &api.Request{Options: &options, Payload: p}:
-	default:
-		return status.Canceled.Err()
-	}
-	return nil
+	defer putmbuf(p)
+	push := pusher{id: e.id, codec: e.codec, Sender: e.Sender}
+	return push.Push(&api.Empty{}, WithCallOptionCode(codes.Unimplemented, options.FullMethodName))
 }
 
-func (s *serverStream) Send(m any, opts ...CallOption) error {
-	options := api.CallOptions{StreamID: s.id}
+// pusher writes one response onto the connection: the marshalled call options
+// as the header frame and the marshalled message as the payload frame.
+type pusher struct {
+	Sender
+	id    uint32
+	codec encoding.Codec
+}
+
+// Push marshals m and the call options and writes them as one response: the
+// marshalled options as the header frame, the marshalled message as the payload
+// frame.
+func (p *pusher) Push(m any, opts ...CallOption) error {
+	options := api.CallOptions{StreamID: p.id, Code: uint32(codes.OK)}
 	for _, v := range opts {
 		v.apply(&options)
 	}
@@ -317,22 +295,9 @@ func (s *serverStream) Send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	b, err := s.codec.Marshal(m)
+	b, err := p.codec.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return s.Sender.Send(h, b)
-}
-
-func (s *serverStream) Recv(m any) error {
-	select {
-	case req, ok := <-s.c:
-		if !ok {
-			return status.Canceled.Err()
-		}
-		defer putmbuf(req.Payload)
-		return s.codec.Unmarshal(req.Payload, m)
-	default:
-		return status.Canceled.Err()
-	}
+	return p.Sender.Send(h, b)
 }

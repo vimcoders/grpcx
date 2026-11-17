@@ -7,7 +7,6 @@ import (
 	"github.com/vimcoders/grpcx"
 	"github.com/vimcoders/grpcx/cmd/internal/stats"
 	"github.com/vimcoders/grpcx/generated/api"
-	"github.com/vimcoders/grpcx/transport"
 )
 
 type StdHandler struct {
@@ -23,9 +22,9 @@ func main() {
 	ttServer.RegisterService(&api.EchoService_ServiceDesc, &StdHandler{})
 
 	stats.Serve()
-	var options []transport.ServerOption
+	var options []grpcx.ServerOption
 	if stats.Enabled() {
-		options = append(options, transport.UnaryServerInterceptor(stats.UnaryInterceptor()))
+		options = append(options, grpcx.UnaryServerInterceptor(stats.UnaryInterceptor()))
 	}
 
 	if err := ttServer.ListenAndServe(context.Background(), os.Getenv("PORT"), options...); err != nil {

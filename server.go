@@ -5,11 +5,47 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
+	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
 )
+
+// ServerOption configures a Server. It is an alias of transport.ServerOption,
+// so the two packages accept the same values.
+type ServerOption = transport.ServerOption
+
+// UnaryServerInterceptor sets the interceptor that wraps every unary call.
+func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOption {
+	return transport.UnaryServerInterceptor(interceptor)
+}
+
+// WithServerCodec sets the codec used to unmarshal requests and marshal
+// replies on the server side.
+func WithServerCodec(codec encoding.Codec) ServerOption {
+	return transport.WithServerCodec(codec)
+}
+
+// WithServerReadTimeout sets how long the server waits for the next frame
+// before giving up on the connection.
+func WithServerReadTimeout(d time.Duration) ServerOption {
+	return transport.WithServerReadTimeout(d)
+}
+
+// WithServerWriteTimeout sets how long the server waits for a write to flush
+// before failing the call.
+func WithServerWriteTimeout(d time.Duration) ServerOption {
+	return transport.WithServerWriteTimeout(d)
+}
+
+// WithServerBufSize caps the send buffer in blocks of defaultBufSize,
+// clamped to defaultMaxBufSize/defaultBufSize. A value of zero disables
+// batching and makes every Send synchronous.
+func WithServerBufSize(n int) ServerOption {
+	return transport.WithServerBufSize(n)
+}
 
 type Server struct {
 	transport.ServerOptions
@@ -18,13 +54,13 @@ type Server struct {
 	closed   context.CancelFunc
 }
 
-func NewServer(opt ...transport.ServerOption) *Server {
-	opts := transport.DefaultServerOptions
-	for i := range opt {
-		opt[i](&opts)
+func NewServer(opts ...ServerOption) *Server {
+	opt := transport.DefaultServerOptions
+	for _, v := range opts {
+		v(&opt)
 	}
 	return &Server{
-		ServerOptions: opts,
+		ServerOptions: opt,
 	}
 }
 

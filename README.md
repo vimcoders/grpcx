@@ -11,7 +11,7 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 - 健康检查
 - 元数据传递 mdtadata.MD
 - 低延迟 1KB echo 在 Intel i5-14600KF (Linux) 单连接 32–256 并行 worker 下平均延迟 8.2–8.6 微秒
-- 高性能 grpcx leads 1.45x~2.56x.
+- 高性能 grpcx leads 1.45x–2.56x.
 
 ### 帧格式
 
@@ -70,10 +70,10 @@ docker compose run bench-1024k
 
 ### Summary
 
-- **1KB**: grpcx leads at every concurrency level, speedup 1.64x~1.91x, peak QPS 121,669 at 64 workers.
-- **5KB**: grpcx leads at every concurrency level, speedup 1.45x~2.09x, peak QPS 78,266 at 16 workers.
-- **1MB**: grpcx leads at every concurrency level, speedup 1.66x~2.56x, latency 0.64~0.93 ms.
-- **Memory**: 27~29 allocs/op (vs gRPC 75~111) at every payload. B/op: 1KB 3.9~4.0KB vs 5.7~6.0KB, 5KB 12.3~12.4KB vs 10.0~10.5KB, 1MB 2.0~2.1MB vs 1.0~1.1MB. The 1MB gap is proto.Marshal allocating a fresh payload buffer on every call; every other phase is at parity with gRPC.
+- **1KB**: grpcx leads at every concurrency level, speedup 1.64x–1.91x, peak QPS 121,669 at 64 workers.
+- **5KB**: grpcx leads at every concurrency level, speedup 1.45x–2.09x, peak QPS 78,266 at 16 workers.
+- **1MB**: grpcx leads at every concurrency level, speedup 1.66x–2.56x, latency 0.64–0.93 ms.
+- **Memory**: 27–29 allocs/op (vs gRPC 75–111) at every payload. B/op: 1KB 3.9–4.0KB vs 5.7–6.0KB, 5KB 12.3–12.4KB vs 10.0–10.5KB, 1MB 2.0–2.1MB vs 1.0–1.1MB. The 1MB gap is proto.Marshal allocating a fresh payload buffer on every call; every other phase is at parity with gRPC.
 
 ### cleanup
 ```bash
@@ -93,7 +93,7 @@ grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计�
 | **服务治理层** | 可插拔 Resolver / Balancer<br>支持 etcd / Consul 等多种服务发现<br>丰富的负载均衡策略 | 内置 DNS 服务发现 + 基础负载均衡<br>内置连接池与健康检查 | gRPC 面向通用场景能力更全；grpcx 保留 K8s 内网核心能力 |
 | **元数据上下文层** | `grpc/metadata` 基于 HTTP/2 Header 传递 | `grpcx/metadata` 基于协议帧内嵌传递 | 业务使用方式完全一致，仅底层承载载体不同 |
 | **序列化层** | 默认 Protobuf 序列化，支持自定义 Codec | `grpcx/encoding` 模块，默认 Protobuf 序列化 | 序列化协议完全一致，复用 protoc 生成代码 |
-| **传输协议层** | HTTP/2 + gRPC 帧协议<br>标准公开协议，包含完整流控、拥塞控制能力 | ttrpc 轻量化二进制协议（源自 containerd）<br>仅保留核心帧封装与流复用能力 | **最核心差异层**，也是 1.5~2.5 倍性能优势的来源 |
+| **传输协议层** | HTTP/2 + gRPC 帧协议<br>标准公开协议，包含完整流控、拥塞控制能力 | ttrpc 轻量化二进制协议（源自 containerd）<br>仅保留核心帧封装与流复用能力 | **最核心差异层**，也是 1.5–2.6 倍性能优势的来源 |
 | **可观测性层** | OpenTelemetry 插件式扩展<br>链路追踪、指标、日志生态完善 | 内置 OpenTelemetry 链路追踪<br>集成在框架核心，开箱即用 | grpcx 面向云原生场景默认标配可观测能力 |
 | **网络IO层** | 基于 Go 标准库 `net/http2`<br>底层 TCP 传输 | 基于 Go 原生 `net.Conn`<br>底层 TCP 传输 | 均基于 TCP 传输，grpcx 绕过 HTTP/2 栈直接操作裸连接 |
 

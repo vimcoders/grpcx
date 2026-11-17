@@ -82,9 +82,9 @@ func (s *clientStream) Recv(m any) error {
 		return err
 	}
 	defer putmbuf(reply.Payload)
-	code := codes.Code(reply.Header.Code)
+	code := codes.Code(reply.Options.Code)
 	if code != codes.OK {
-		return status.Error(code, reply.Header.Desc)
+		return status.Error(code, reply.Options.Desc)
 	}
 	if err := s.codec.Unmarshal(reply.Payload, m); err != nil {
 		return err
@@ -101,11 +101,11 @@ func (s *clientStream) Context() context.Context {
 // the channel under this stream's id. The header carries the id, so the two
 // frames stay addressable by the server.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
-	header := api.Header{StreamID: s.id}
+	options := api.CallOptions{StreamID: s.id}
 	for _, v := range opts {
-		v.apply(&header)
+		v.apply(&options)
 	}
-	h, err := encoding.Marshal(&header)
+	h, err := encoding.Marshal(&options)
 	if err != nil {
 		return err
 	}
@@ -116,21 +116,20 @@ func (s *clientStream) Send(m any, opts ...CallOption) error {
 	return s.Sender.Send(h, b)
 }
 
-// UnaryInterceptor reads the response payload straight off the channel,
-// verifies the stream id, and hands it to the waiting Recv. When the stream is
-// already canceled or gone, the payload is returned to the pool and the stream
-// closed.
+// interceptor reads the response payload straight off the channel, verifies
+// the stream id, and hands it to the waiting Recv. When the stream is already
+// canceled or gone, the payload is returned to the pool and the stream closed.
 func (s *clientStream) interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
-	var h api.Header
+	var options api.CallOptions
 	for _, v := range opts {
-		v.apply(&h)
+		v.apply(&options)
 	}
 	p, err := recv.Recv()
 	if err != nil {
 		return err
 	}
 	response := &api.Response{
-		Header:  &h,
+		Options: &options,
 		Payload: p,
 	}
 	select {
@@ -160,21 +159,21 @@ func (s *clientStream) recv() (*api.Response, error) {
 
 // CallOption mutates the outgoing request header before it is marshalled.
 type CallOption interface {
-	apply(*api.Header)
+	apply(*api.CallOptions)
 }
 
 // CallOptions is the concrete CallOption: each non-zero field overrides its
 // counterpart in the header.
-type CallOptions api.Header
+type CallOptions api.CallOptions
 
 // apply merges c into opts field by field. Non-zero values in c win, except
 // Timeout, where the smaller of the two is kept so a short caller deadline is
 // never silently extended.
-func (c *CallOptions) apply(opts *api.Header) {
+func (c *CallOptions) apply(opts *api.CallOptions) {
 	if c.Timeout > 0 {
 		opts.Timeout = min(cmp.Or(opts.Timeout, c.Timeout), c.Timeout)
 	}
-	opts.Method = cmp.Or(c.Method, opts.Method)
+	opts.FullMethodName = cmp.Or(c.FullMethodName, opts.FullMethodName)
 	opts.Service = cmp.Or(c.Service, opts.Service)
 	opts.Length = cmp.Or(c.Length, opts.Length)
 	opts.Authority = cmp.Or(c.Authority, opts.Authority)
@@ -188,17 +187,17 @@ func (c *CallOptions) apply(opts *api.Header) {
 // WithUnaryInterceptor turns an already decoded request header into a
 // CallOption, so the server-side handler sees the call it was dispatched from
 // without re-parsing the frame.
-func WithUnaryInterceptor(readonly *api.Header) CallOption {
+func WithUnaryInterceptor(readonly *api.CallOptions) CallOption {
 	return &CallOptions{
-		Method:    readonly.Method,
-		Service:   readonly.Service,
-		Length:    readonly.Length,
-		Authority: readonly.Authority,
-		Timeout:   readonly.Timeout,
-		Metadatas: readonly.Metadatas,
-		Code:      readonly.Code,
-		Desc:      readonly.Desc,
-		StreamID:  readonly.StreamID,
+		FullMethodName: readonly.FullMethodName,
+		Service:        readonly.Service,
+		Length:         readonly.Length,
+		Authority:      readonly.Authority,
+		Timeout:        readonly.Timeout,
+		Metadatas:      readonly.Metadatas,
+		Code:           readonly.Code,
+		Desc:           readonly.Desc,
+		StreamID:       readonly.StreamID,
 	}
 }
 
@@ -230,13 +229,13 @@ type unary struct {
 	unaryInterceptor grpc.UnaryServerInterceptor
 }
 
-// UnaryInterceptor resolves the method from the decoded header, applies the
+// interceptor resolves the method from the decoded options, applies the
 // metadata and timeout, runs the unary interceptor chain and writes the reply
 // back. An unknown method reports codes.Unimplemented.
 func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOption) error {
-	opt := api.Header{Code: uint32(codes.OK), Desc: codes.OK.String()}
+	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
 	for _, v := range opts {
-		v.apply(&opt)
+		v.apply(&options)
 	}
 	p, err := recv.Recv()
 	if err != nil {
@@ -244,12 +243,12 @@ func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOpti
 	}
 	defer putmbuf(p)
 	for _, v := range s.desc.Methods {
-		if opt.Method != path.Join("/", s.desc.ServiceName, v.MethodName) {
+		if options.FullMethodName != path.Join("/", s.desc.ServiceName, v.MethodName) {
 			continue
 		}
 		codec := s.codec
-		metadatas := metadata.Pairs(opt.Metadatas...)
-		timeout := cmp.Or(time.Duration(opt.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
+		metadatas := metadata.Pairs(options.Metadatas...)
+		timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, s.timeout, defaultTimeout)
 		timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 		defer cancel()
 		reply, err := v.Handler(s.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, s.unaryInterceptor)
@@ -258,17 +257,17 @@ func (s *unary) interceptor(ctx context.Context, recv Receiver, opts ...CallOpti
 		}
 		return s.Send(reply)
 	}
-	return s.Send(&api.Empty{}, WithUnaryCode(codes.Unimplemented, opt.Method))
+	return s.Send(&api.Empty{}, WithUnaryCode(codes.Unimplemented, options.FullMethodName))
 }
 
 // Send marshals the header and the payload into two frames and writes the
 // reply on the channel.
 func (s *unary) Send(m any, opts ...CallOption) error {
-	header := api.Header{StreamID: s.id}
+	options := api.CallOptions{StreamID: s.id}
 	for _, v := range opts {
-		v.apply(&header)
+		v.apply(&options)
 	}
-	h, err := encoding.Marshal(&header)
+	h, err := encoding.Marshal(&options)
 	if err != nil {
 		return err
 	}

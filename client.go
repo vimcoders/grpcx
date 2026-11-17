@@ -1,6 +1,7 @@
 package grpcx
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"time"
@@ -128,11 +129,12 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return nil
 }
 
-// RoundTrip picks a backend by the method in req.Header and sends the framed
-// request through it.
+// RoundTrip picks a backend by the full method name in req.Options and sends
+// the framed request through it.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
+	options := cmp.Or(req.Options, &api.CallOptions{})
 	info := balancer.PickInfo{
-		FullMethodName: req.Header.Method,
+		FullMethodName: options.FullMethodName,
 	}
 	rt, err := c.Pick(ctx, info)
 	if err != nil {

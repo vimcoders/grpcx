@@ -21,36 +21,26 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type Header struct {
+type Empty struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Service       string                 `protobuf:"bytes,1,opt,name=Service,proto3" json:"Service,omitempty"`
-	Method        string                 `protobuf:"bytes,2,opt,name=Method,proto3" json:"Method,omitempty"`
-	Timeout       int64                  `protobuf:"varint,3,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
-	Metadatas     []string               `protobuf:"bytes,4,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
-	Code          uint32                 `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
-	Desc          string                 `protobuf:"bytes,6,opt,name=Desc,proto3" json:"Desc,omitempty"`
-	Length        uint32                 `protobuf:"varint,7,opt,name=Length,proto3" json:"Length,omitempty"`
-	Authority     string                 `protobuf:"bytes,8,opt,name=Authority,proto3" json:"Authority,omitempty"`
-	Closed        bool                   `protobuf:"varint,9,opt,name=Closed,proto3" json:"Closed,omitempty"`
-	StreamID      uint32                 `protobuf:"varint,10,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Header) Reset() {
-	*x = Header{}
+func (x *Empty) Reset() {
+	*x = Empty{}
 	mi := &file_api_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Header) String() string {
+func (x *Empty) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Header) ProtoMessage() {}
+func (*Empty) ProtoMessage() {}
 
-func (x *Header) ProtoReflect() protoreflect.Message {
+func (x *Empty) ProtoReflect() protoreflect.Message {
 	mi := &file_api_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -62,75 +52,121 @@ func (x *Header) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Header.ProtoReflect.Descriptor instead.
-func (*Header) Descriptor() ([]byte, []int) {
+// Deprecated: Use Empty.ProtoReflect.Descriptor instead.
+func (*Empty) Descriptor() ([]byte, []int) {
 	return file_api_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Header) GetService() string {
+type CallOptions struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Service        string                 `protobuf:"bytes,1,opt,name=Service,proto3" json:"Service,omitempty"`
+	FullMethodName string                 `protobuf:"bytes,2,opt,name=FullMethodName,proto3" json:"FullMethodName,omitempty"`
+	Timeout        int64                  `protobuf:"varint,3,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
+	Metadatas      []string               `protobuf:"bytes,4,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
+	Code           uint32                 `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
+	Desc           string                 `protobuf:"bytes,6,opt,name=Desc,proto3" json:"Desc,omitempty"`
+	Length         uint32                 `protobuf:"varint,7,opt,name=Length,proto3" json:"Length,omitempty"`
+	Authority      string                 `protobuf:"bytes,8,opt,name=Authority,proto3" json:"Authority,omitempty"`
+	Closed         bool                   `protobuf:"varint,9,opt,name=Closed,proto3" json:"Closed,omitempty"`
+	StreamID       uint32                 `protobuf:"varint,10,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CallOptions) Reset() {
+	*x = CallOptions{}
+	mi := &file_api_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CallOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CallOptions) ProtoMessage() {}
+
+func (x *CallOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CallOptions.ProtoReflect.Descriptor instead.
+func (*CallOptions) Descriptor() ([]byte, []int) {
+	return file_api_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CallOptions) GetService() string {
 	if x != nil {
 		return x.Service
 	}
 	return ""
 }
 
-func (x *Header) GetMethod() string {
+func (x *CallOptions) GetFullMethodName() string {
 	if x != nil {
-		return x.Method
+		return x.FullMethodName
 	}
 	return ""
 }
 
-func (x *Header) GetTimeout() int64 {
+func (x *CallOptions) GetTimeout() int64 {
 	if x != nil {
 		return x.Timeout
 	}
 	return 0
 }
 
-func (x *Header) GetMetadatas() []string {
+func (x *CallOptions) GetMetadatas() []string {
 	if x != nil {
 		return x.Metadatas
 	}
 	return nil
 }
 
-func (x *Header) GetCode() uint32 {
+func (x *CallOptions) GetCode() uint32 {
 	if x != nil {
 		return x.Code
 	}
 	return 0
 }
 
-func (x *Header) GetDesc() string {
+func (x *CallOptions) GetDesc() string {
 	if x != nil {
 		return x.Desc
 	}
 	return ""
 }
 
-func (x *Header) GetLength() uint32 {
+func (x *CallOptions) GetLength() uint32 {
 	if x != nil {
 		return x.Length
 	}
 	return 0
 }
 
-func (x *Header) GetAuthority() string {
+func (x *CallOptions) GetAuthority() string {
 	if x != nil {
 		return x.Authority
 	}
 	return ""
 }
 
-func (x *Header) GetClosed() bool {
+func (x *CallOptions) GetClosed() bool {
 	if x != nil {
 		return x.Closed
 	}
 	return false
 }
 
-func (x *Header) GetStreamID() uint32 {
+func (x *CallOptions) GetStreamID() uint32 {
 	if x != nil {
 		return x.StreamID
 	}
@@ -139,7 +175,7 @@ func (x *Header) GetStreamID() uint32 {
 
 type Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Header        *Header                `protobuf:"bytes,1,opt,name=Header,proto3" json:"Header,omitempty"`
+	Options       *CallOptions           `protobuf:"bytes,1,opt,name=Options,proto3" json:"Options,omitempty"`
 	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -147,7 +183,7 @@ type Request struct {
 
 func (x *Request) Reset() {
 	*x = Request{}
-	mi := &file_api_proto_msgTypes[1]
+	mi := &file_api_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -159,7 +195,7 @@ func (x *Request) String() string {
 func (*Request) ProtoMessage() {}
 
 func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[1]
+	mi := &file_api_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -172,12 +208,12 @@ func (x *Request) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Request.ProtoReflect.Descriptor instead.
 func (*Request) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{1}
+	return file_api_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *Request) GetHeader() *Header {
+func (x *Request) GetOptions() *CallOptions {
 	if x != nil {
-		return x.Header
+		return x.Options
 	}
 	return nil
 }
@@ -191,7 +227,7 @@ func (x *Request) GetPayload() []byte {
 
 type Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Header        *Header                `protobuf:"bytes,1,opt,name=Header,proto3" json:"Header,omitempty"`
+	Options       *CallOptions           `protobuf:"bytes,1,opt,name=Options,proto3" json:"Options,omitempty"`
 	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -199,7 +235,7 @@ type Response struct {
 
 func (x *Response) Reset() {
 	*x = Response{}
-	mi := &file_api_proto_msgTypes[2]
+	mi := &file_api_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -211,7 +247,7 @@ func (x *Response) String() string {
 func (*Response) ProtoMessage() {}
 
 func (x *Response) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[2]
+	mi := &file_api_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -224,12 +260,12 @@ func (x *Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Response.ProtoReflect.Descriptor instead.
 func (*Response) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{2}
+	return file_api_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *Response) GetHeader() *Header {
+func (x *Response) GetOptions() *CallOptions {
 	if x != nil {
-		return x.Header
+		return x.Options
 	}
 	return nil
 }
@@ -241,50 +277,15 @@ func (x *Response) GetPayload() []byte {
 	return nil
 }
 
-type Empty struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Empty) Reset() {
-	*x = Empty{}
-	mi := &file_api_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Empty) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Empty) ProtoMessage() {}
-
-func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Empty.ProtoReflect.Descriptor instead.
-func (*Empty) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{3}
-}
-
 var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
-	"\tapi.proto\x12\x03api\"\x84\x02\n" +
-	"\x06Header\x12\x18\n" +
-	"\aService\x18\x01 \x01(\tR\aService\x12\x16\n" +
-	"\x06Method\x18\x02 \x01(\tR\x06Method\x12\x18\n" +
+	"\tapi.proto\x12\x03api\"\a\n" +
+	"\x05Empty\"\x99\x02\n" +
+	"\vCallOptions\x12\x18\n" +
+	"\aService\x18\x01 \x01(\tR\aService\x12&\n" +
+	"\x0eFullMethodName\x18\x02 \x01(\tR\x0eFullMethodName\x12\x18\n" +
 	"\aTimeout\x18\x03 \x01(\x03R\aTimeout\x12\x1c\n" +
 	"\tMetadatas\x18\x04 \x03(\tR\tMetadatas\x12\x12\n" +
 	"\x04Code\x18\x05 \x01(\rR\x04Code\x12\x12\n" +
@@ -293,14 +294,13 @@ const file_api_proto_rawDesc = "" +
 	"\tAuthority\x18\b \x01(\tR\tAuthority\x12\x16\n" +
 	"\x06Closed\x18\t \x01(\bR\x06Closed\x12\x1a\n" +
 	"\bStreamID\x18\n" +
-	" \x01(\rR\bStreamID\"H\n" +
-	"\aRequest\x12#\n" +
-	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
-	"\aPayload\x18\x02 \x01(\fR\aPayload\"I\n" +
-	"\bResponse\x12#\n" +
-	"\x06Header\x18\x01 \x01(\v2\v.api.HeaderR\x06Header\x12\x18\n" +
-	"\aPayload\x18\x02 \x01(\fR\aPayload\"\a\n" +
-	"\x05EmptyB\bZ\x06./;apib\x06proto3"
+	" \x01(\rR\bStreamID\"O\n" +
+	"\aRequest\x12*\n" +
+	"\aOptions\x18\x01 \x01(\v2\x10.api.CallOptionsR\aOptions\x12\x18\n" +
+	"\aPayload\x18\x02 \x01(\fR\aPayload\"P\n" +
+	"\bResponse\x12*\n" +
+	"\aOptions\x18\x01 \x01(\v2\x10.api.CallOptionsR\aOptions\x12\x18\n" +
+	"\aPayload\x18\x02 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_api_proto_rawDescOnce sync.Once
@@ -316,14 +316,14 @@ func file_api_proto_rawDescGZIP() []byte {
 
 var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_api_proto_goTypes = []any{
-	(*Header)(nil),   // 0: api.Header
-	(*Request)(nil),  // 1: api.Request
-	(*Response)(nil), // 2: api.Response
-	(*Empty)(nil),    // 3: api.Empty
+	(*Empty)(nil),       // 0: api.Empty
+	(*CallOptions)(nil), // 1: api.CallOptions
+	(*Request)(nil),     // 2: api.Request
+	(*Response)(nil),    // 3: api.Response
 }
 var file_api_proto_depIdxs = []int32{
-	0, // 0: api.Request.Header:type_name -> api.Header
-	0, // 1: api.Response.Header:type_name -> api.Header
+	1, // 0: api.Request.Options:type_name -> api.CallOptions
+	1, // 1: api.Response.Options:type_name -> api.CallOptions
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

@@ -169,7 +169,7 @@ func (c *client) interceptor(ctx context.Context, recv Receiver) error {
 		return err
 	}
 	defer putmbuf(h)
-	var opts api.Header
+	var opts api.CallOptions
 	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}
@@ -220,8 +220,8 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 // request and one response.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	info := CallOptions{
-		Method:  method,
-		Timeout: c.timeout.Milliseconds(),
+		FullMethodName: method,
+		Timeout:        c.timeout.Milliseconds(),
 	}
 	return c.createStream(ctx, &info)
 }
@@ -245,8 +245,8 @@ func (c *client) getStream(sid uint32) *clientStream {
 // the collected metadata and deadline, then waits for the reply.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
 	info := CallOptions{
-		Method:  method,
-		Timeout: c.timeout.Milliseconds(),
+		FullMethodName: method,
+		Timeout:        c.timeout.Milliseconds(),
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		for k, v := range medatas {
@@ -275,12 +275,12 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // for the matching response. It bypasses the codec, so the caller owns the
 // marshalling of both the header and the payload.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	header := cmp.Or(req.Header, &api.Header{})
+	options := cmp.Or(req.Options, &api.CallOptions{})
 	if dl, ok := ctx.Deadline(); ok {
 		opt := CallOptions{
 			Timeout: time.Until(dl).Milliseconds(),
 		}
-		opt.apply(header)
+		opt.apply(options)
 	}
 	s, err := c.createStream(ctx)
 	if err != nil {
@@ -291,8 +291,8 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 		StreamID: s.id,
 		Timeout:  c.timeout.Milliseconds(),
 	}
-	info.apply(header)
-	h, err := encoding.Marshal(header)
+	info.apply(options)
+	h, err := encoding.Marshal(options)
 	if err != nil {
 		return nil, err
 	}

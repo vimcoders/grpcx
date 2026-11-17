@@ -118,7 +118,7 @@ func (so *ServerOptions) interceptor(ctx context.Context, channel *channel) erro
 		return err
 	}
 	defer putmbuf(h)
-	var opts api.Header
+	var opts api.CallOptions
 	if err := encoding.Unmarshal(h, &opts); err != nil {
 		return err
 	}

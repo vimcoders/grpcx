@@ -23,7 +23,7 @@ func main() {
 		options = append(options, grpcx.UnaryServerInterceptor(stats.UnaryInterceptor()))
 	}
 	ttServer := grpcx.NewServer(options...)
-	ttServer.RegisterService(&api.EchoService_ServiceDesc, &StdHandler{})
+	api.RegisterEchoServiceServer(ttServer, &StdHandler{})
 	stats.Serve()
 
 	if err := ttServer.ListenAndServe(context.Background(), os.Getenv("PORT")); err != nil {

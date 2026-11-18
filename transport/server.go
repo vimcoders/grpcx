@@ -27,7 +27,7 @@ type ServerOptions struct {
 	desc     *grpc.ServiceDesc
 	imp      any
 	unaryInt grpc.UnaryServerInterceptor
-	handler  Handler
+	Handler
 }
 
 // DefaultServerOptions is the default configuration for a grpcx server: the
@@ -104,7 +104,7 @@ func WithServerBufSize(n int) ServerOption {
 func WithServerHandler(h Handler) ServerOption {
 	return func(so *ServerOptions) {
 		if h != nil {
-			so.handler = h
+			so.Handler = h
 		}
 	}
 }
@@ -113,8 +113,8 @@ func WithServerHandler(h Handler) ServerOption {
 // runs that one, otherwise it wraps the connection in a channel and loops
 // dispatching one call at a time through interceptor.
 func (s *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	if s.handler != nil {
-		return s.handler.Handle(ctx, c)
+	if s.Handler != nil {
+		return s.Handler.Handle(ctx, c)
 	}
 	ch := newChannel(c, WithBufSize(s.bufsize))
 	defer ch.Close()

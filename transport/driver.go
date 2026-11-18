@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"math"
+	"net"
 	"time"
 
 	"github.com/vimcoders/grpcx/generated/api"
@@ -80,4 +81,16 @@ type SendCloser interface {
 type RecvCloser interface {
 	Receiver
 	io.Closer
+}
+
+// Handler serves one accepted connection. It owns the framing decisions for
+// every call it answers: the built-in handler reads one request header frame
+// plus its payload frame and dispatches it to a registered unary method, while a
+// replacement — a proxy forwarding frames verbatim, or another protocol layered
+// on the same framing — takes over that loop instead.
+//
+// Handle is called once per accepted connection and returns when the connection
+// breaks or ctx is canceled; returning an error closes the connection.
+type Handler interface {
+	Handle(ctx context.Context, c net.Conn) error
 }

@@ -47,6 +47,27 @@ func WithServerBufSize(n int) ServerOption {
 	return transport.WithServerBufSize(n)
 }
 
+// Handler serves one accepted connection at the transport level: it reads and
+// writes frames directly, so a replacement owns the framing of every call.
+// The built-in handler dispatches unary calls to the registered service.
+type Handler = transport.Handler
+
+// WithServerHandler replaces the built-in per-connection handler with h, which
+// is how a proxy or an alternative protocol runs on the same listener. A nil
+// Handler keeps the built-in one.
+func WithServerHandler(h Handler) ServerOption {
+	return transport.WithServerHandler(h)
+}
+
+// NewServerWithHandler returns a server that serves every accepted connection
+// with h instead of the built-in unary dispatcher. Such a server does not need
+// RegisterService: the handler decides what each connection answers.
+func NewServerWithHandler(h Handler) *Server {
+	return NewServer(WithServerHandler(h))
+}
+
+// Server accepts connections and serves each one with the built-in unary
+// dispatcher unless a Handler is installed.
 type Server struct {
 	transport.ServerOptions
 	wg       sync.WaitGroup
@@ -54,13 +75,16 @@ type Server struct {
 	closed   context.CancelFunc
 }
 
+// NewServer returns a server configured by opts. Options not passed here are
+// never applied later, so register the service and install the interceptor at
+// construction time.
 func NewServer(opts ...ServerOption) *Server {
-	opt := transport.DefaultServerOptions
+	defaultOptions := transport.DefaultServerOptions
 	for _, v := range opts {
-		v(&opt)
+		v(&defaultOptions)
 	}
 	return &Server{
-		ServerOptions: opt,
+		ServerOptions: defaultOptions,
 	}
 }
 
@@ -72,6 +96,8 @@ func (s *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
 	transport.RegisterService(sd, ss)(&s.ServerOptions)
 }
 
+// Close stops accepting, closes the listener and waits for the connection
+// handlers to return.
 func (s *Server) Close() error {
 	if s.closed != nil {
 		s.closed()
@@ -83,10 +109,9 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) ListenAndServe(ctx context.Context, addr string, opt ...transport.ServerOption) error {
-	for i := range opt {
-		opt[i](&s.ServerOptions)
-	}
+// ListenAndServe accepts connections on addr and serves each one in its own
+// goroutine until the listener fails or ctx is canceled.
+func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err

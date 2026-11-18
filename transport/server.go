@@ -18,14 +18,16 @@ import (
 type ServerOption func(c *ServerOptions)
 
 // ServerOptions holds the options for a grpcx server: the registered service
-// descriptor and implementation, the unary interceptor, plus the embedded
-// transport Options shared with the client side. Only unary methods are served,
-// so there is no stream interceptor to configure.
+// descriptor and implementation, the unary interceptor, the handler that serves
+// each connection, plus the embedded transport Options shared with the client
+// side. The built-in handler serves unary methods only, so there is no stream
+// interceptor to configure.
 type ServerOptions struct {
 	Options
 	desc     *grpc.ServiceDesc
 	imp      any
 	unaryInt grpc.UnaryServerInterceptor
+	handler  Handler
 }
 
 // DefaultServerOptions is the default configuration for a grpcx server: the
@@ -94,17 +96,34 @@ func WithServerBufSize(n int) ServerOption {
 	}
 }
 
-// Handle serves the connection until it breaks: it creates the channel, then
-// loops reading one frame at a time and dispatching it through interceptor.
-func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	ch := newChannel(c, WithBufSize(so.bufsize))
+// WithServerHandler replaces the built-in per-connection handler with h. The
+// built-in one resolves a request to a registered unary method and answers
+// anything else with codes.Unimplemented; a replacement owns every frame read
+// from and written to the connection, which is how a proxy or an alternative
+// protocol runs on the same listener. A nil Handler keeps the built-in one.
+func WithServerHandler(h Handler) ServerOption {
+	return func(so *ServerOptions) {
+		if h != nil {
+			so.handler = h
+		}
+	}
+}
+
+// Handle serves the connection until it breaks: when a Handler is installed it
+// runs that one, otherwise it wraps the connection in a channel and loops
+// dispatching one call at a time through interceptor.
+func (s *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
+	if s.handler != nil {
+		return s.handler.Handle(ctx, c)
+	}
+	ch := newChannel(c, WithBufSize(s.bufsize))
 	defer ch.Close()
 	for {
 		select {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := so.interceptor(ctx, ch, ch); err != nil {
+			if err := s.interceptor(ctx, ch, ch); err != nil {
 				return err
 			}
 		}
@@ -116,7 +135,7 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 // for the request payload and send for the reply. Anything that does not
 // resolve to a registered unary method — an unknown name, or a stream method,
 // which grpcx does not serve — is answered with codes.Unimplemented.
-func (so *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sender) error {
+func (s *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sender) error {
 	p, err := recv.Recv()
 	if err != nil {
 		return err
@@ -126,20 +145,20 @@ func (so *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Se
 	if err := encoding.Unmarshal(p, &opts); err != nil {
 		return err
 	}
-	for _, v := range so.desc.Methods {
-		if opts.FullMethodName != path.Join("/", so.desc.ServiceName, v.MethodName) {
+	for _, v := range s.desc.Methods {
+		if opts.FullMethodName != path.Join("/", s.desc.ServiceName, v.MethodName) {
 			continue
 		}
 		s := &defaultMethodHandler{
 			Sender:   send,
-			Options:  so.Options,
+			Options:  s.Options,
 			id:       opts.StreamID,
-			imp:      so.imp,
-			unaryInt: so.unaryInt,
+			imp:      s.imp,
+			unaryInt: s.unaryInt,
 			Handler:  v.Handler,
 		}
 		return s.Handle(ctx, recv, WithCallOption(&opts))
 	}
-	fallback := empty{id: opts.StreamID, codec: so.codec, Sender: send}
-	return fallback.Handle(ctx, recv, WithCallOption(&opts))
+	unimplemented := empty{id: opts.StreamID, codec: s.codec, Sender: send}
+	return unimplemented.Handle(ctx, recv, WithCallOption(&opts))
 }

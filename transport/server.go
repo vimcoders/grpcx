@@ -6,7 +6,6 @@ import (
 	"path"
 	"time"
 
-	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 
 	"github.com/vimcoders/grpcx/encoding"
@@ -136,29 +135,24 @@ func (s *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 // resolve to a registered unary method — an unknown name, or a stream method,
 // which grpcx does not serve — is answered with codes.Unimplemented.
 func (s *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sender) error {
-	p, err := recv.Recv()
+	header, err := DecodeCallOption(recv)
 	if err != nil {
 		return err
 	}
-	defer putmbuf(p)
-	var opts api.CallOptions
-	if err := encoding.Unmarshal(p, &opts); err != nil {
-		return err
-	}
 	for _, v := range s.desc.Methods {
-		if opts.FullMethodName != path.Join("/", s.desc.ServiceName, v.MethodName) {
+		if header.FullMethodName != path.Join("/", s.desc.ServiceName, v.MethodName) {
 			continue
 		}
 		s := &defaultMethodHandler{
 			Sender:   send,
 			Options:  s.Options,
-			id:       opts.StreamID,
+			id:       header.StreamID,
 			imp:      s.imp,
 			unaryInt: s.unaryInt,
 			Handler:  v.Handler,
 		}
-		return s.Handle(ctx, recv, WithCallOption(&opts))
+		return s.Handle(ctx, recv, WithCallOption(header))
 	}
-	unimplemented := empty{id: opts.StreamID, codec: s.codec, Sender: send}
-	return unimplemented.Handle(ctx, recv, WithCallOption(&opts))
+	unimplemented := empty{id: header.StreamID, codec: s.codec, Sender: send}
+	return unimplemented.Handle(ctx, recv, WithCallOption(header))
 }

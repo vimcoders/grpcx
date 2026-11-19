@@ -164,16 +164,11 @@ func (c *client) Handle(ctx context.Context, recv Receiver) error {
 // the header and payload to it. A frame whose stream is already gone is
 // discarded so the next frame stays aligned to a boundary.
 func (c *client) interceptor(ctx context.Context, recv Receiver) error {
-	h, err := recv.Recv()
+	header, err := DecodeCallOption(recv)
 	if err != nil {
 		return err
 	}
-	defer putmbuf(h)
-	var opts api.CallOptions
-	if err := encoding.Unmarshal(h, &opts); err != nil {
-		return err
-	}
-	s := c.getStream(opts.StreamID)
+	s := c.getStream(header.StreamID)
 	if s == nil {
 		// the stream is already gone; read the payload frame off the wire to
 		// keep the next frame on a boundary, then give the buffer back
@@ -184,7 +179,7 @@ func (c *client) interceptor(ctx context.Context, recv Receiver) error {
 		putmbuf(p)
 		return nil
 	}
-	return s.Handle(ctx, recv, WithCallOption(&opts))
+	return s.Handle(ctx, recv, WithCallOption(header))
 }
 
 // createStream allocates the next stream id, registers it in the stream table

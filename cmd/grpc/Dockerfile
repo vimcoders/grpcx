@@ -1,4 +1,8 @@
 FROM golang:1.27.3 AS builder
+# 官方镜像默认 GOTOOLCHAIN=local，go.mod 要求 go 1.27.4 时由容器自动拉取对应工具链
+ENV GOPROXY=https://goproxy.cn,direct \
+    GOSUMDB=sum.golang.google.cn \
+    GOTOOLCHAIN=auto
 RUN mkdir -p /build
 WORKDIR /build
 RUN go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy,direct && go env -w GOSUMDB=sum.golang.google.cn

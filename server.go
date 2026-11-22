@@ -69,7 +69,10 @@ func NewServerWithHandler(h Handler) *Server {
 // Server accepts connections and serves each one with the built-in unary
 // dispatcher unless a Handler is installed.
 type Server struct {
-	transport.ServerOptions
+	transport.Handler
+	// options is kept unexported so registration stays a method on Server:
+	// Handler is the only surface a caller can reach into.
+	options  *transport.ServerOptions
 	wg       sync.WaitGroup
 	listener net.Listener
 	closed   context.CancelFunc
@@ -84,16 +87,16 @@ func NewServer(opts ...ServerOption) *Server {
 		v(&defaultOptions)
 	}
 	return &Server{
-		ServerOptions: defaultOptions,
+		Handler: &defaultOptions,
+		options: &defaultOptions,
 	}
 }
 
-// RegisterService registers a service and its implementation to the gRPC
-// server. It is called from the IDL generated code. This must be called before
-// invoking Serve. If ss is non-nil (for legacy code), its type is checked to
-// ensure it implements sd.HandlerType.
+// RegisterService registers the service and its implementation. It is called
+// from the IDL generated code before ListenAndServe; a nil descriptor or a nil
+// implementation leaves the already registered one in place.
 func (s *Server) RegisterService(sd *grpc.ServiceDesc, ss any) {
-	transport.RegisterService(sd, ss)(&s.ServerOptions)
+	transport.RegisterService(sd, ss)(s.options)
 }
 
 // Close stops accepting, closes the listener and waits for the connection

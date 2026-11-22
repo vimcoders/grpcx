@@ -128,15 +128,14 @@ func (so *ServerOptions) interceptor(ctx context.Context, ch Channel) error {
 		s := &defaultMethodHandler{
 			Sender:   ch,
 			Options:  so.Options,
-			id:       options.StreamID,
 			imp:      so.imp,
 			unaryInt: so.unaryInt,
 			Handler:  v.Handler,
 		}
 		return s.Handle(ctx, ch, WithCallOptions(options))
 	}
-	unimplemented := empty{id: options.StreamID, codec: so.codec, Sender: ch}
-	return unimplemented.Handle(ctx, ch, WithCallOptions(options))
+	e := empty{Codec: so.codec, Sender: ch}
+	return e.Handle(ctx, ch, WithCallOptions(options))
 }
 
 func (so *ServerOptions) RegisterService(sd *grpc.ServiceDesc, ss any) {

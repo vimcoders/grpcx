@@ -83,14 +83,11 @@ type RecvCloser interface {
 	io.Closer
 }
 
-// Handler serves one accepted connection. It owns the framing decisions for
-// every call it answers: the built-in handler reads one request header frame
-// plus its payload frame and dispatches it to a registered unary method, while a
-// replacement — a proxy forwarding frames verbatim, or another protocol layered
-// on the same framing — takes over that loop instead.
-//
-// Handle is called once per accepted connection and returns when the connection
-// breaks or ctx is canceled; returning an error closes the connection.
+// Handler serves one accepted connection. Handle is called once per accepted
+// connection, owns every frame read from and written to it, and returns when
+// the connection breaks or ctx is canceled; returning an error closes the
+// connection. ServerOptions implements it, which is what a Server embeds to
+// expose the per-connection entry point.
 type Handler interface {
 	Handle(ctx context.Context, c net.Conn) error
 }
@@ -102,3 +99,8 @@ type Channel interface {
 	Sender
 	Recver
 }
+
+// ServiceRegistrar is the registration half of the gRPC server interface.
+// ServerOptions implements it, so a Server can embed it and keep
+// RegisterService a promoted method without owning a field for it.
+type ServiceRegistrar = grpc.ServiceRegistrar

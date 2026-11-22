@@ -91,11 +91,11 @@ grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计�
 | **客户端接口层** | `grpc.ClientConnInterface` 标准接口<br>`grpc.Dial()` 丰富配置项 | 完整实现 `grpc.ClientConnInterface` 接口<br>`grpcx.Dial()` 精简核心配置 | 接口完全兼容，业务代码无需修改即可替换 |
 | **服务端接口层** | `grpc.Server` + `RegisterService()` 注册服务 | `grpcx.Server` + `RegisterService()` 直接接收 `grpc.ServiceDesc` | 编程模型完全对齐，学习成本极低 |
 | **核心RPC调度层** | 基于 HTTP/2 Stream 映射 RPC 调用<br>支持一元 / 客户端流 / 服务端流 / 双向流 | 自研 4 字节长度帧 + protobuf 调用头实现 RPC 调度<br>当前支持一元 RPC，一元语义与 gRPC 完全对齐（流式待实现） | 一元调用语义一致，仅底层流载体不同 |
-| **扩展拦截器层** | 标准一元 / 流式拦截器接口<br>丰富的第三方拦截器生态 | 独立实现拦截器体系<br>服务端一元拦截器，客户端一元拦截器（流式拦截器仅为接口占位）<br>连接级 `transport.Handler` 可整体替换，用于代理或自定义协议 | 设计思想一致，无法直接复用 gRPC 第三方拦截器 |
+| **扩展拦截器层** | 标准一元 / 流式拦截器接口<br>丰富的第三方拦截器生态 | 独立实现拦截器体系<br>服务端一元拦截器，客户端一元拦截器（流式拦截器仅为接口占位）<br>连接级 `transport.Handler` 由 `grpcx.Server` 内嵌，对外暴露单连接的 `Handle` | 设计思想一致，无法直接复用 gRPC 第三方拦截器 |
 | **服务治理层** | 可插拔 Resolver / Balancer<br>支持 etcd / Consul 等多种服务发现<br>丰富的负载均衡策略 | 内置 DNS 服务发现 + 基础负载均衡<br>内置连接池与健康检查 | gRPC 面向通用场景能力更全；grpcx 保留 K8s 内网核心能力 |
 | **元数据上下文层** | `grpc/metadata` 基于 HTTP/2 Header 传递 | `grpcx/metadata` 基于协议帧内嵌传递 | 业务使用方式完全一致，仅底层承载载体不同 |
 | **序列化层** | 默认 Protobuf 序列化，支持自定义 Codec | `grpcx/encoding` 模块，默认 Protobuf 序列化 | 序列化协议完全一致，复用 protoc 生成代码 |
-| **传输协议层** | HTTP/2 + gRPC 帧协议<br>标准公开协议，包含完整流控、拥塞控制能力 | 4 字节长度帧 + protobuf 调用头（transport 源自 containerd ttrpc）<br>仅保留核心帧封装与 StreamID 复用 | **最核心差异层**，也是 1.45–2.92 倍性能优势的来源 |
+| **传输协议层** | HTTP/2 + gRPC 帧协议<br>标准公开协议，包含完整流控、拥塞控制能力 | 4 字节长度帧 + protobuf 调用头（transport 源自 containerd ttrpc）<br>仅保留核心帧封装与 StreamID 复用 | **最核心差异层**，也是 1.43–2.54 倍性能优势的来源 |
 | **可观测性层** | OpenTelemetry 插件式扩展<br>链路追踪、指标、日志生态完善 | 内置 OpenTelemetry 链路追踪<br>集成在框架核心，开箱即用 | grpcx 面向云原生场景默认标配可观测能力 |
 | **网络IO层** | 基于 Go 标准库 `net/http2`<br>底层 TCP 传输 | 基于 Go 原生 `net.Conn`<br>底层 TCP 传输 | 均基于 TCP 传输，grpcx 绕过 HTTP/2 栈直接操作裸连接 |
 

@@ -76,7 +76,7 @@ func (s *clientStream) Close() error {
 // SendMsg marshals m and writes it as one request frame, without extra call
 // options. It is the grpc.ClientStream shape of Send.
 func (s *clientStream) SendMsg(m any) error {
-	send := sender{id: s.id, codec: s.codec, Sender: s.Sender}
+	send := sender{id: s.id, Codec: s.codec, Sender: s.Sender}
 	return send.send(m)
 }
 
@@ -100,7 +100,7 @@ func (s *clientStream) RecvMsg(m any) error {
 
 // Send marshals m and writes it as one request frame on the stream.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
-	send := sender{id: s.id, codec: s.codec, Sender: s.Sender}
+	send := sender{id: s.id, Codec: s.codec, Sender: s.Sender}
 	return send.send(m, opts...)
 }
 
@@ -258,7 +258,7 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout)
 	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 	defer cancel()
-	s := sender{id: d.id, codec: d.codec, Sender: d.Sender}
+	s := sender{id: d.id, Codec: d.codec, Sender: d.Sender}
 	reply, err := d.Handler(d.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, d.unaryInt)
 	if err != nil {
 		return s.send(&api.Empty{}, WithCallOptionCode(status.Code(err), err.Error()))
@@ -287,7 +287,7 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 		return err
 	}
 	defer putmbuf(p)
-	s := sender{id: e.id, codec: e.codec, Sender: e.Sender}
+	s := sender{id: e.id, Codec: e.codec, Sender: e.Sender}
 	return s.send(&api.Empty{}, WithCallOptionCode(codes.Unimplemented, options.FullMethodName))
 }
 
@@ -297,8 +297,8 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 // why it carries neither verb in its shape.
 type sender struct {
 	Sender
-	id    uint32
-	codec encoding.Codec
+	encoding.Codec
+	id uint32
 }
 
 // send marshals m together with the call options and writes the header frame
@@ -313,7 +313,7 @@ func (s *sender) send(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	b, err := s.codec.Marshal(m)
+	b, err := s.Marshal(m)
 	if err != nil {
 		return err
 	}

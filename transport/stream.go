@@ -76,8 +76,8 @@ func (s *clientStream) Close() error {
 // SendMsg marshals m and writes it as one request frame, without extra call
 // options. It is the grpc.ClientStream shape of Send.
 func (s *clientStream) SendMsg(m any) error {
-	push := pusher{id: s.id, codec: s.codec, Sender: s.Sender}
-	return push.Push(m)
+	send := sender{id: s.id, codec: s.codec, Sender: s.Sender}
+	return send.send(m)
 }
 
 // Recv waits for the reply frame, checks its code and unmarshals its payload
@@ -100,8 +100,8 @@ func (s *clientStream) RecvMsg(m any) error {
 
 // Send marshals m and writes it as one request frame on the stream.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
-	push := pusher{id: s.id, codec: s.codec, Sender: s.Sender}
-	return push.Push(m, opts...)
+	send := sender{id: s.id, codec: s.codec, Sender: s.Sender}
+	return send.send(m, opts...)
 }
 
 // Context returns the stream context, canceled when the stream is closed.
@@ -258,12 +258,12 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout)
 	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 	defer cancel()
-	push := pusher{id: d.id, codec: d.codec, Sender: d.Sender}
+	s := sender{id: d.id, codec: d.codec, Sender: d.Sender}
 	reply, err := d.Handler(d.imp, timeoutCtx, func(in any) error { return codec.Unmarshal(p, in) }, d.unaryInt)
 	if err != nil {
-		return push.Push(&api.Empty{}, WithCallOptionCode(status.Code(err), err.Error()))
+		return s.send(&api.Empty{}, WithCallOptionCode(status.Code(err), err.Error()))
 	}
-	return push.Push(reply)
+	return s.send(reply)
 }
 
 // empty answers a method the registered service does not expose: an unknown
@@ -287,23 +287,25 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 		return err
 	}
 	defer putmbuf(p)
-	push := pusher{id: e.id, codec: e.codec, Sender: e.Sender}
-	return push.Push(&api.Empty{}, WithCallOptionCode(codes.Unimplemented, options.FullMethodName))
+	s := sender{id: e.id, codec: e.codec, Sender: e.Sender}
+	return s.send(&api.Empty{}, WithCallOptionCode(codes.Unimplemented, options.FullMethodName))
 }
 
-// pusher writes one response onto the connection: the marshalled call options
-// as the header frame and the marshalled message as the payload frame.
-type pusher struct {
+// sender writes one message onto the connection as a pair of frames: the
+// marshalled call options as the header, the marshalled message as the payload.
+// The client uses it to send a request, the server to send a reply, which is
+// why it carries neither verb in its shape.
+type sender struct {
 	Sender
 	id    uint32
 	codec encoding.Codec
 }
 
-// Push marshals m and the call options and writes them as one response: the
-// marshalled options as the header frame, the marshalled message as the payload
-// frame.
-func (p *pusher) Push(m any, opts ...CallOption) error {
-	options := api.CallOptions{StreamID: p.id, Code: uint32(codes.OK)}
+// send marshals m together with the call options and writes the header frame
+// followed by the payload frame, in that order, so the peer stays on a frame
+// boundary.
+func (s *sender) send(m any, opts ...CallOption) error {
+	options := api.CallOptions{StreamID: s.id, Code: uint32(codes.OK)}
 	for _, v := range opts {
 		v.apply(&options)
 	}
@@ -311,9 +313,9 @@ func (p *pusher) Push(m any, opts ...CallOption) error {
 	if err != nil {
 		return err
 	}
-	b, err := p.codec.Marshal(m)
+	b, err := s.codec.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return p.Sender.Send(h, b)
+	return s.Sender.Send(h, b)
 }

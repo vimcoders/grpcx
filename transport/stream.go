@@ -181,10 +181,10 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.StreamID = cmp.Or(c.StreamID, opts.StreamID)
 }
 
-// DecodeCallOption reads the request header frame off recv and returns the
+// decodeCallOptions reads the request header frame off recv and returns the
 // header the wire actually carried. Callers use it for dispatch and hand it to
-// WithCallOption when the handler should see the same metadata and deadline.
-func DecodeCallOption(recv Receiver) (*api.CallOptions, error) {
+// WithCallOptions when the handler should see the same metadata and deadline.
+func decodeCallOptions(recv Receiver) (*api.CallOptions, error) {
 	p, err := recv.Recv()
 	if err != nil {
 		return nil, err
@@ -197,10 +197,10 @@ func DecodeCallOption(recv Receiver) (*api.CallOptions, error) {
 	return &header, nil
 }
 
-// WithCallOption turns an already decoded request header into a CallOption,
-// so the server-side handler sees the call it was dispatched from without
-// re-parsing the frame.
-func WithCallOption(readonly *api.CallOptions) CallOption {
+// WithCallOptions turns an already decoded request header into a CallOption,
+// so the handler sees the call it was dispatched from without re-parsing the
+// frame.
+func WithCallOptions(readonly *api.CallOptions) CallOption {
 	return &CallOptions{
 		FullMethodName: readonly.FullMethodName,
 		Service:        readonly.Service,

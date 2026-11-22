@@ -135,7 +135,7 @@ func (s *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 // resolve to a registered unary method — an unknown name, or a stream method,
 // which grpcx does not serve — is answered with codes.Unimplemented.
 func (s *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sender) error {
-	header, err := DecodeCallOption(recv)
+	header, err := decodeCallOptions(recv)
 	if err != nil {
 		return err
 	}
@@ -151,8 +151,8 @@ func (s *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sen
 			unaryInt: s.unaryInt,
 			Handler:  v.Handler,
 		}
-		return s.Handle(ctx, recv, WithCallOption(header))
+		return s.Handle(ctx, recv, WithCallOptions(header))
 	}
 	unimplemented := empty{id: header.StreamID, codec: s.codec, Sender: send}
-	return unimplemented.Handle(ctx, recv, WithCallOption(header))
+	return unimplemented.Handle(ctx, recv, WithCallOptions(header))
 }

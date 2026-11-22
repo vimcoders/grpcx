@@ -122,7 +122,7 @@ func (s *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		default:
-			if err := s.interceptor(ctx, ch, ch); err != nil {
+			if err := s.interceptor(ctx, ch); err != nil {
 				return err
 			}
 		}
@@ -130,12 +130,12 @@ func (s *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 }
 
 // interceptor reads one request frame, resolves the target method from the
-// header, and dispatches it to the matching unary method handler, passing recv
-// for the request payload and send for the reply. Anything that does not
+// header, and dispatches it to the matching unary method handler, handing it the
+// same channel for the request payload and the reply. Anything that does not
 // resolve to a registered unary method — an unknown name, or a stream method,
 // which grpcx does not serve — is answered with codes.Unimplemented.
-func (s *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sender) error {
-	options, err := decodeCallOptions(recv)
+func (s *ServerOptions) interceptor(ctx context.Context, ch Channel) error {
+	options, err := decodeCallOptions(ch)
 	if err != nil {
 		return err
 	}
@@ -144,15 +144,15 @@ func (s *ServerOptions) interceptor(ctx context.Context, recv Receiver, send Sen
 			continue
 		}
 		s := &defaultMethodHandler{
-			Sender:   send,
+			Sender:   ch,
 			Options:  s.Options,
 			id:       options.StreamID,
 			imp:      s.imp,
 			unaryInt: s.unaryInt,
 			Handler:  v.Handler,
 		}
-		return s.Handle(ctx, recv, WithCallOptions(options))
+		return s.Handle(ctx, ch, WithCallOptions(options))
 	}
-	unimplemented := empty{id: options.StreamID, codec: s.codec, Sender: send}
-	return unimplemented.Handle(ctx, recv, WithCallOptions(options))
+	unimplemented := empty{id: options.StreamID, codec: s.codec, Sender: ch}
+	return unimplemented.Handle(ctx, ch, WithCallOptions(options))
 }

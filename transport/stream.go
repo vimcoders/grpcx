@@ -114,7 +114,7 @@ func (s *clientStream) Context() context.Context {
 // ctx canceled, stream canceled, or the slot gone — the payload goes back to
 // the pool and the stream is closed, so the frame is still consumed and the
 // next frame stays on a boundary.
-func (s *clientStream) Handle(ctx context.Context, recv Receiver, opts ...CallOption) error {
+func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	var options api.CallOptions
 	for _, v := range opts {
 		v.apply(&options)
@@ -184,7 +184,7 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 // decodeCallOptions reads the request header frame off recv and returns the
 // header the wire actually carried. Callers use it for dispatch and hand it to
 // WithCallOptions when the handler should see the same metadata and deadline.
-func decodeCallOptions(recv Receiver) (*api.CallOptions, error) {
+func decodeCallOptions(recv Recver) (*api.CallOptions, error) {
 	p, err := recv.Recv()
 	if err != nil {
 		return nil, err
@@ -243,7 +243,7 @@ type defaultMethodHandler struct {
 // deadline, runs the unary interceptor chain over the generated method handler
 // and writes the reply back as one response frame. A handler error is reported
 // in the response header's status code instead of tearing the connection down.
-func (d *defaultMethodHandler) Handle(ctx context.Context, recv Receiver, opts ...CallOption) error {
+func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
 	for _, v := range opts {
 		v.apply(&options)
@@ -277,7 +277,7 @@ type empty struct {
 // Handle still reads the request payload before replying, so the connection
 // stays frame-aligned, then sends codes.Unimplemented carrying the requested
 // method name.
-func (e *empty) Handle(ctx context.Context, recv Receiver, opts ...CallOption) error {
+func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	options := api.CallOptions{}
 	for _, v := range opts {
 		v.apply(&options)

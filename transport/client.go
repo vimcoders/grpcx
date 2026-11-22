@@ -146,7 +146,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
-func (c *client) Handle(ctx context.Context, recv Receiver) error {
+func (c *client) Handle(ctx context.Context, recv Recver) error {
 	defer c.Close()
 	for {
 		select {
@@ -163,7 +163,7 @@ func (c *client) Handle(ctx context.Context, recv Receiver) error {
 // interceptor reads one response frame, resolves the stream by its id and hands
 // the header and payload to it. A frame whose stream is already gone is
 // discarded so the next frame stays aligned to a boundary.
-func (c *client) interceptor(ctx context.Context, recv Receiver) error {
+func (c *client) interceptor(ctx context.Context, recv Recver) error {
 	options, err := decodeCallOptions(recv)
 	if err != nil {
 		return err

@@ -63,10 +63,10 @@ type Sender interface {
 	Send(...[]byte) error
 }
 
-// Receiver reads one frame at a time with the length header already stripped.
+// Recver reads one frame at a time with the length header already stripped.
 // The buffer is owned by the caller; package callers return it to the pool with
 // putmbuf.
-type Receiver interface {
+type Recver interface {
 	Recv() ([]byte, error)
 }
 
@@ -77,9 +77,9 @@ type SendCloser interface {
 	io.Closer
 }
 
-// RecvCloser is a Receiver that also closes the connection.
+// RecvCloser is a Recver that also closes the connection.
 type RecvCloser interface {
-	Receiver
+	Recver
 	io.Closer
 }
 
@@ -93,4 +93,12 @@ type RecvCloser interface {
 // breaks or ctx is canceled; returning an error closes the connection.
 type Handler interface {
 	Handle(ctx context.Context, c net.Conn) error
+}
+
+// Channel is one connection seen as both ends of the framing: a handler reads
+// the request frame with Recv and writes the reply frame with Send, on the same
+// connection, so the two are passed together rather than as separate halves.
+type Channel interface {
+	Sender
+	Recver
 }

@@ -29,7 +29,8 @@ const Name = "proto"
 // Codec is an alias for encoding.Codec.
 type Codec encoding.Codec
 
-// GetCodec returns a new instance of the proto codec.
+// codec is the proto codec: protobuf for a proto.Message, encoding/json
+// otherwise.
 type codec struct{}
 
 // Name implements [encoding.Codec].
@@ -66,10 +67,12 @@ func GetCodec(contentSubtype string) encoding.Codec {
 
 // Marshal implements [encoding.Codec].
 func Marshal(msg any) ([]byte, error) {
-	return defaultCodec.Marshal(msg)
+	codec := GetCodec(Name)
+	return codec.Marshal(msg)
 }
 
 // Unmarshal implements [encoding.Codec].
 func Unmarshal(p []byte, msg any) error {
-	return defaultCodec.Unmarshal(p, msg)
+	codec := GetCodec(Name)
+	return codec.Unmarshal(p, msg)
 }

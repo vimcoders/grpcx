@@ -168,3 +168,57 @@ func TestCloneIsIndependent(t *testing.T) {
 		t.Fatalf("mutating the clone changed the original")
 	}
 }
+
+// TestAppendToContextDoesNotMutateParent pins the copy-on-append contract: a
+// context keeps the metadata it was created with, whatever is appended to a
+// context derived from it.
+func TestAppendToContextDoesNotMutateParent(t *testing.T) {
+	parent := WithMetadata(context.Background(), Pairs("a", "1"))
+	child := AppendToContext(parent, "B", "2")
+
+	parentMD, ok := GetMetadata(parent)
+	if !ok {
+		t.Fatalf("parent lost its metadata")
+	}
+	if _, exists := parentMD["b"]; exists {
+		t.Fatalf("AppendToContext wrote into the parent map: %v", parentMD)
+	}
+	if v := mustGet(t, parentMD, "a"); v != "1" {
+		t.Fatalf("parent a = %q, want 1", v)
+	}
+
+	childMD, ok := GetMetadata(child)
+	if !ok {
+		t.Fatalf("child has no metadata")
+	}
+	if v := mustGet(t, childMD, "b"); v != "2" {
+		t.Fatalf("child b = %q, want 2", v)
+	}
+	if v := mustGet(t, childMD, "a"); v != "1" {
+		t.Fatalf("child lost the inherited entry")
+	}
+}
+
+// TestAppendToContextOnNilMetadata checks that a nil MD carried in the context
+// is treated as empty instead of panicking on a write to a nil map.
+func TestAppendToContextOnNilMetadata(t *testing.T) {
+	ctx := AppendToContext(WithMetadata(context.Background(), MD(nil)), "K", "v")
+
+	md, ok := GetMetadata(ctx)
+	if !ok || md == nil {
+		t.Fatalf("GetMetadata after append on nil MD = %v, %v", md, ok)
+	}
+	if v := mustGet(t, md, "k"); v != "v" {
+		t.Fatalf("k = %q, want v", v)
+	}
+}
+
+// TestAppendToContextEmptyKeepsEntries covers appending nothing: the derived
+// context still carries the inherited entries.
+func TestAppendToContextEmptyKeepsEntries(t *testing.T) {
+	ctx := AppendToContext(WithMetadata(context.Background(), Pairs("a", "1")))
+
+	if v, ok := GetMetadataValue(ctx, "a"); !ok || v != "1" {
+		t.Fatalf("GetMetadataValue(a) = %q, %v; want 1, true", v, ok)
+	}
+}

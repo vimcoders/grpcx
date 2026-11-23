@@ -99,6 +99,11 @@ func WithMetadata(ctx context.Context, md MD) context.Context {
 // AppendToContext returns a new context with the provided kv merged
 // with any existing metadata in the context. Please refer to the documentation
 // of Pairs for a description of kv.
+//
+// The existing metadata map is cloned before the new pairs are written, so a
+// context derived with AppendToContext never changes the metadata of the
+// context it was built from. A nil MD carried in the context is treated as
+// empty.
 func AppendToContext(ctx context.Context, kv ...string) context.Context {
 	if len(kv)%2 == 1 {
 		panic(fmt.Sprintf("metadata: AppendToContext got an odd number of input pairs for metadata: %d", len(kv)))
@@ -106,6 +111,10 @@ func AppendToContext(ctx context.Context, kv ...string) context.Context {
 	md, ok := GetMetadata(ctx)
 	if !ok {
 		return WithMetadata(ctx, Pairs(kv...))
+	}
+	md = md.Clone()
+	if md == nil {
+		md = make(MD, len(kv)/2)
 	}
 	for i := 0; i+1 < len(kv); i += 2 {
 		md[strings.ToLower(kv[i])] = kv[i+1]

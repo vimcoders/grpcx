@@ -349,8 +349,10 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close tears the transport down once: it closes every live stream, empties
-// the table and closes the underlying connection.
+// Close tears the transport down once: it closes every live stream and then the
+// underlying connection. The stream table and the configured stream limit are
+// left as they are: zeroing the limit would lift it instead of ending the
+// transport, so a closed connection would silently accept unlimited streams.
 func (c *client) Close() error {
 	c.Once.Do(func() {
 		c.Lock()
@@ -360,8 +362,6 @@ func (c *client) Close() error {
 			// is what reports a problem.
 			_ = s.Close()
 		}
-		clear(c.streams)
-		c.maxStreams = 0
 	})
 	return c.SendCloser.Close()
 }

@@ -283,6 +283,40 @@ func TestMaxStreamsLimitsConcurrentCalls(t *testing.T) {
 	}
 }
 
+// TestCloseKeepsStreamLimit pins that Close ends the transport without touching
+// the configured limit: setting maxStreams to zero would mean "no cap" and let a
+// closed connection keep allocating streams.
+func TestCloseKeepsStreamLimit(t *testing.T) {
+	addr := startTestServer(t, &testEcho{})
+	rt := dialTestClient(t, addr, WithMaxStreams(4))
+
+	c, ok := rt.(*client)
+	if !ok {
+		t.Fatalf("RoundTripper is %T, want *client", rt)
+	}
+
+	open, err := c.createStream(t.Context())
+	if err != nil {
+		t.Fatalf("createStream: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	c.RLock()
+	limit, registered := c.maxStreams, len(c.streams)
+	c.RUnlock()
+	if limit != 4 {
+		t.Fatalf("maxStreams after Close = %d, want 4", limit)
+	}
+	if registered == 0 {
+		t.Fatal("Close wiped the stream table, want it left as it was")
+	}
+	if open.id == 0 {
+		t.Fatal("stream id = 0, want a real id")
+	}
+}
+
 // TestNewStreamUnimplemented pins the documented gap: grpcx serves unary calls
 // only, so the streaming entry point refuses every request.
 func TestNewStreamUnimplemented(t *testing.T) {

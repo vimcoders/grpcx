@@ -45,8 +45,8 @@ func Pairs(kv ...string) MD {
 		panic(fmt.Sprintf("metadata: Pairs got the odd number of input pairs for metadata: %d", len(kv)))
 	}
 	var md = make(MD)
-	for i := 0; i < len(kv); i += 2 {
-		md[kv[i]] = kv[i+1]
+	for i := 0; i+1 < len(kv); i += 2 {
+		md[strings.ToLower(kv[i])] = kv[i+1]
 	}
 	return md
 }
@@ -107,8 +107,8 @@ func AppendToContext(ctx context.Context, kv ...string) context.Context {
 	if !ok {
 		return WithMetadata(ctx, Pairs(kv...))
 	}
-	for i := 0; i < len(kv); i += 2 {
-		md[kv[i]] = kv[i+1]
+	for i := 0; i+1 < len(kv); i += 2 {
+		md[strings.ToLower(kv[i])] = kv[i+1]
 	}
 	return WithMetadata(ctx, md)
 }

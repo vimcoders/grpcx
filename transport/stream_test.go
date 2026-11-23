@@ -101,7 +101,7 @@ func TestWithCallOptionsCopiesFields(t *testing.T) {
 func TestSenderWritesHeaderBeforePayload(t *testing.T) {
 	sink := &frameSink{}
 	s := sender{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
-	if err := s.send(&api.EchoRequest{Message: "hi"}, &CallOptions{FullMethodName: "/m", StreamID: 4}); err != nil {
+	if err := s.send(&api.EchoRequest{Message: "hi"}, 4, &CallOptions{FullMethodName: "/m"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
@@ -124,6 +124,25 @@ func TestSenderWritesHeaderBeforePayload(t *testing.T) {
 	}
 	if payload.Message != "hi" {
 		t.Fatalf("payload = %q, want %q", payload.Message, "hi")
+	}
+}
+
+// TestSenderStreamIDWinsOverOptions locks the routing invariant of the
+// explicit stream id parameter: an id smuggled in through options must not
+// move the frame onto another stream.
+func TestSenderStreamIDWinsOverOptions(t *testing.T) {
+	sink := &frameSink{}
+	s := sender{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
+	if err := s.send(&api.EchoRequest{Message: "hi"}, 5, &CallOptions{StreamID: 42}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	var header api.CallOptions
+	if err := encoding.Unmarshal(sink.Frames()[0], &header); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if header.StreamID != 5 {
+		t.Fatalf("StreamID = %d, want the explicit 5", header.StreamID)
 	}
 }
 

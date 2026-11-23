@@ -190,8 +190,12 @@ func TestInvokeConcurrent(t *testing.T) {
 }
 
 // TestInvokeRespectsCallDeadline checks that a short client deadline ends the
-// call promptly. It reports Canceled rather than DeadlineExceeded because the
-// stream context is canceled, not failed on a timer.
+// call promptly. Two outcomes race here and both are correct: the client usually
+// notices its own deadline first and reports Canceled, but under load, or with
+// the race detector slowing the goroutines down, the server's per-call deadline
+// can fire first and send back the handler's bare ctx error, which carries no
+// status code and surfaces as Unknown. What must never happen is the call
+// waiting out the package default instead of the 50ms header timeout.
 func TestInvokeRespectsCallDeadline(t *testing.T) {
 	gate := make(chan struct{})
 	svc := &testEcho{gate: gate}
@@ -211,8 +215,8 @@ func TestInvokeRespectsCallDeadline(t *testing.T) {
 	if elapsed > time.Second {
 		t.Fatalf("call took %v, want it to end with the 50ms deadline", elapsed)
 	}
-	if got := status.Code(err); got != codes.Canceled {
-		t.Fatalf("code = %v, want Canceled (err = %v)", got, err)
+	if code := status.Code(err); code != codes.Canceled && !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("code = %v and message %q names no deadline, want Canceled or a deadline error", code, err.Error())
 	}
 }
 

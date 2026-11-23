@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,5 +223,122 @@ func TestChannelSendReportsWriteError(t *testing.T) {
 	}
 	if !conn.closed {
 		t.Fatal("connection left open after a failed write")
+	}
+}
+
+// countingWriteConn accepts every write and counts them, standing in for a peer
+// that keeps reading while the channel is closed.
+type countingWriteConn struct {
+	net.Conn
+	writes atomic.Int64
+	closed atomic.Bool
+}
+
+func (c *countingWriteConn) Write(p []byte) (int, error) {
+	c.writes.Add(1)
+	return len(p), nil
+}
+
+func (c *countingWriteConn) SetWriteDeadline(time.Time) error { return nil }
+
+func (c *countingWriteConn) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+// TestChannelCloseIsIdempotent pins both halves of the close contract: the flush
+// failure a Close runs into is reported, and every later Close replays that same
+// result instead of re-running against a connection that is already gone.
+func TestChannelCloseIsIdempotent(t *testing.T) {
+	conn := &failingWriteConn{}
+	ch := newChannel(conn, WithBufSize(1))
+
+	// Small enough to stay batched, so Close is the one that has to flush it and
+	// is the one that hits the refusal.
+	if err := ch.Send([]byte("header"), []byte("payload")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	first := ch.Close()
+	if !errors.Is(first, errTestWriteRefused) {
+		t.Fatalf("first Close = %v, want it to carry %v", first, errTestWriteRefused)
+	}
+	// A second run against the closed connection would report the close error, not
+	// the refused flush, so carrying the refusal proves the result was cached.
+	second := ch.Close()
+	if !errors.Is(second, errTestWriteRefused) {
+		t.Fatalf("second Close = %v, want the cached refusal %v", second, errTestWriteRefused)
+	}
+}
+
+// TestChannelCloseIsIdempotentOnSuccess is the same contract on the happy path:
+// a second Close returns the cached nil and does not touch the connection again.
+func TestChannelCloseIsIdempotentOnSuccess(t *testing.T) {
+	conn := &countingWriteConn{}
+	ch := newChannel(conn, WithBufSize(1))
+
+	if err := ch.Send([]byte("header"), []byte("payload")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := ch.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := ch.Close(); err != nil {
+		t.Fatalf("second Close = %v, want nil", err)
+	}
+	if !conn.closed.Load() {
+		t.Fatal("connection left open after Close")
+	}
+}
+
+// TestChannelSendAfterCloseFails pins that a closed channel refuses frames
+// instead of buffering them: otherwise batching would let Send report success
+// for bytes the flush timer can only fail to write later.
+func TestChannelSendAfterCloseFails(t *testing.T) {
+	conn := &countingWriteConn{}
+	ch := newChannel(conn, WithBufSize(1))
+
+	if err := ch.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	before := conn.writes.Load()
+	err := ch.Send([]byte("header"), []byte("payload"))
+	if err == nil {
+		t.Fatal("send after Close succeeded, want a failure")
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("send = %v, want it to wrap %v", err, net.ErrClosed)
+	}
+	if code := status.Code(err); code != codes.Canceled {
+		t.Fatalf("send code = %v, want %v", code, codes.Canceled)
+	}
+	if got := conn.writes.Load(); got != before {
+		t.Fatalf("writes = %d, want %d: a closed channel must not write", got, before)
+	}
+}
+
+// TestChannelCloseWhileSending puts the flush timer, a sending goroutine and
+// Close on the same buffer at the same time. What it asserts is only that at
+// least one frame made it out; its real job is to give the race detector a
+// window in which the three paths meet, so a missing lock fails the build.
+func TestChannelCloseWhileSending(t *testing.T) {
+	conn := &countingWriteConn{}
+	ch := newChannel(conn, WithBufSize(1))
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for range 100 {
+				_ = ch.Send([]byte("header"), []byte("payload"))
+			}
+		})
+	}
+	// Give the flush timer a chance to arm before Close races it.
+	time.Sleep(2 * time.Millisecond)
+	_ = ch.Close()
+	wg.Wait()
+
+	if conn.writes.Load() == 0 {
+		t.Fatal("no frame reached the connection, want at least one flush")
 	}
 }

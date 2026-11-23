@@ -53,9 +53,12 @@ func putmbuf(p []byte) {
 type channel struct {
 	Options
 	net.Conn
-	br *bufio.Reader
-	bw net.Buffers
-	t  *time.Timer
+	br        *bufio.Reader
+	bw        net.Buffers
+	t         *time.Timer
+	closed    bool
+	closeOnce sync.Once
+	closeErr  error
 	sync.Mutex
 }
 
@@ -129,6 +132,11 @@ func (ch *channel) Send(p ...[]byte) error {
 
 	ch.Lock()
 	defer ch.Unlock()
+	// A closed channel keeps no frame: buffering one would let Send report
+	// success for data that the flush timer can only fail to write later.
+	if ch.closed {
+		return errors.Join(net.ErrClosed, status.Canceled.Err())
+	}
 	var n int
 	ch.bw = append(ch.bw, bw...)
 	for _, b := range ch.bw {
@@ -178,12 +186,28 @@ func (ch *channel) Send(p ...[]byte) error {
 }
 
 // Close stops the flush timer, writes out whatever batching still holds, then
-// closes the connection. A flush failure is reported as-is; the connection is
-// closed either way.
+// closes the connection. It runs once and every later call returns the same
+// result: the flush timer, a sending goroutine and Close itself all touch the
+// buffer and the timer, so the state is taken under the same lock and the
+// outcome is cached instead of being recomputed against a dead connection.
+// A flush failure is reported as-is; the connection is closed either way.
 func (ch *channel) Close() error {
+	ch.closeOnce.Do(func() {
+		ch.closeErr = ch.close()
+	})
+	return ch.closeErr
+}
+
+// close is the one-shot body of Close: it must be called under the lock so it
+// cannot interleave with a Send or with the flush timer callback.
+func (ch *channel) close() error {
+	ch.Lock()
+	defer ch.Unlock()
 	if ch.t != nil {
 		ch.t.Stop()
+		ch.t = nil
 	}
+	ch.closed = true
 	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 		_ = ch.Conn.Close()
 		return err

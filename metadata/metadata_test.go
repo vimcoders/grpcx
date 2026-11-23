@@ -62,6 +62,7 @@ func TestPairsMixedCaseKeysCollapse(t *testing.T) {
 }
 
 func TestPairsPanicsOnOddInput(t *testing.T) {
+	//nolint:staticcheck // the odd argument count is the input under test.
 	wantPanic(t, "Pairs", func() { Pairs("only-key") })
 }
 
@@ -119,6 +120,7 @@ func TestAppendToContextOnEmptyContext(t *testing.T) {
 
 func TestAppendToContextPanicsOnOddInput(t *testing.T) {
 	wantPanic(t, "AppendToContext", func() {
+		//nolint:staticcheck // the odd argument count is the input under test.
 		AppendToContext(context.Background(), "dangling")
 	})
 }

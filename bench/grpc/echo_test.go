@@ -22,7 +22,7 @@ func Benchmark1K(b *testing.B) {
 	if err != nil {
 		b.Fatalf("dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := api.NewEchoServiceClient(conn)
 	req := &api.EchoRequest{Message: strings.Repeat("a", 1024)}
@@ -46,7 +46,7 @@ func Benchmark5K(b *testing.B) {
 	if err != nil {
 		b.Fatalf("dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := api.NewEchoServiceClient(conn)
 	req := &api.EchoRequest{Message: strings.Repeat("a", 5120)}
@@ -70,7 +70,7 @@ func Benchmark1024K(b *testing.B) {
 	if err != nil {
 		b.Fatalf("dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := api.NewEchoServiceClient(conn)
 	req := &api.EchoRequest{Message: strings.Repeat("a", 1024*1024)}

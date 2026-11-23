@@ -18,6 +18,9 @@ package transport
 import (
 	"cmp"
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -140,14 +143,34 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(&rt.Options)
 	}
-	go rt.Handle(ctx, ch)
+	go func() {
+		if err := rt.Handle(ctx, ch); !errExpectedExit(err) {
+			slog.Error("transport: receive loop exited", "endpoint", endpoint, "error", err)
+		}
+	}()
 	return rt, nil
+}
+
+// errExpectedExit reports whether err is a normal way for a connection to end:
+// the peer closed it, the transport was closed from our side, or the context it
+// ran under was canceled. Anything else is worth logging, because the receive
+// loop stopping means no reply on that connection can be delivered any more.
+func errExpectedExit(err error) bool {
+	if err == nil {
+		return true
+	}
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, context.Canceled) ||
+		status.Code(err) == codes.Canceled
 }
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
 func (c *client) Handle(ctx context.Context, recv Recver) error {
-	defer c.Close()
+	// The receive loop is the owner of the connection; a close error here has
+	// nobody left to report to, and the loop's own error is what it returns.
+	defer func() { _ = c.Close() }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -257,7 +280,9 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	if err != nil {
 		return err
 	}
-	defer s.CloseSend()
+	// The half-close is best effort: a failure to send it is already covered by
+	// whatever error the call returns.
+	defer func() { _ = s.CloseSend() }()
 	if err := s.Send(req, opts...); err != nil {
 		return err
 	}
@@ -279,7 +304,9 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	if err != nil {
 		return nil, err
 	}
-	defer s.CloseSend()
+	// The half-close is best effort: a failure to send it is already covered by
+	// whatever error the call returns.
+	defer func() { _ = s.CloseSend() }()
 	info := CallOptions{
 		StreamID: s.id,
 		Timeout:  c.timeout.Milliseconds(),
@@ -307,7 +334,9 @@ func (c *client) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer s.CloseSend()
+	// The half-close is best effort: a failure to send it is already covered by
+	// whatever error the call returns.
+	defer func() { _ = s.CloseSend() }()
 	if err := s.Send(&api.Empty{}); err != nil {
 		return err
 	}
@@ -327,7 +356,9 @@ func (c *client) Close() error {
 		c.Lock()
 		defer c.Unlock()
 		for _, s := range c.streams {
-			s.Close()
+			// Closing a stream is local bookkeeping; the connection close below
+			// is what reports a problem.
+			_ = s.Close()
 		}
 		clear(c.streams)
 		c.maxStreams = 0

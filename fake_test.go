@@ -107,14 +107,6 @@ func (r *fakeRT) Close() error {
 	return nil
 }
 
-func (r *fakeRT) invocations() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]string, len(r.invoked))
-	copy(out, r.invoked)
-	return out
-}
-
 func (r *fakeRT) roundTrips() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -43,22 +43,18 @@ func startTestServer(t *testing.T, svc api.EchoServiceServer, opts ...ServerOpti
 		wg.Wait()
 	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer c.Close()
+			wg.Go(func() {
+				defer func() { _ = c.Close() }()
 				_ = so.Handle(ctx, c)
-			}()
+			})
 		}
-	}()
+	})
 
 	return ln.Addr().String()
 }
@@ -160,11 +156,9 @@ func TestInvokeConcurrent(t *testing.T) {
 
 	errs := make(chan error, goroutines*perGoroutine)
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+	for g := range goroutines {
+		wg.Go(func() {
+			for i := range perGoroutine {
 				msg := fmt.Sprintf("g%d-%d", g, i)
 				reply, err := cc.Echo(t.Context(), &api.EchoRequest{Message: msg})
 				if err != nil {
@@ -176,7 +170,7 @@ func TestInvokeConcurrent(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -282,7 +276,7 @@ func TestMaxStreamsLimitsConcurrentCalls(t *testing.T) {
 	if _, err := c.createStream(t.Context()); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("second stream error = %v, want ResourceExhausted", err)
 	}
-	first.CloseSend()
+	_ = first.CloseSend()
 
 	if _, err := c.createStream(t.Context()); err != nil {
 		t.Fatalf("stream after release: %v", err)

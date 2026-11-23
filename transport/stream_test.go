@@ -175,8 +175,7 @@ func TestClientStreamSendAppendsOwnStreamID(t *testing.T) {
 // and Context hands back the stream context, not the caller's.
 func TestClientStreamSendMsgAndContext(t *testing.T) {
 	sink := &frameSink{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	s := &clientStream{
 		Sender: sink,
 		ctx:    ctx,

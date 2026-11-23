@@ -19,7 +19,9 @@ package transport
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -66,7 +68,7 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 	}
 	x := &channel{
 		Conn:    c,
-		br:      bufio.NewReaderSize(c, messageLengthMax),
+		br:      bufio.NewReaderSize(c, min(messageLengthMax, readBufSize)),
 		Options: defaultOptions,
 	}
 	return x
@@ -138,7 +140,12 @@ func (ch *channel) Send(p ...[]byte) error {
 			return err
 		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-			return ch.Conn.Close()
+			// A frame that never reached the wire is a failed call, not a
+			// successful one. Report the write error as Unavailable and close the
+			// connection, so neither this call nor the next one is told a
+			// truncated frame was delivered.
+			_ = ch.Conn.Close()
+			return errors.Join(err, status.Unavailable.Err())
 		}
 		if ch.t != nil {
 			ch.t.Stop()
@@ -159,6 +166,10 @@ func (ch *channel) Send(p ...[]byte) error {
 			return
 		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
+			// A background flush has no caller to return to; the connection is
+			// closed so the failure surfaces on the next call, and it is logged
+			// so it is not lost entirely.
+			slog.Error("transport: background flush failed", "error", err)
 			_ = ch.Conn.Close()
 		}
 	})
@@ -167,17 +178,20 @@ func (ch *channel) Send(p ...[]byte) error {
 }
 
 // Close stops the flush timer, writes out whatever batching still holds, then
-// closes the connection.
+// closes the connection. A flush failure is reported as-is; the connection is
+// closed either way.
 func (ch *channel) Close() error {
-	defer ch.Conn.Close()
 	if ch.t != nil {
 		ch.t.Stop()
 	}
 	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
+		_ = ch.Conn.Close()
 		return err
 	}
-	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return err
+	_, werr := ch.bw.WriteTo(ch.Conn)
+	cerr := ch.Conn.Close()
+	if werr != nil {
+		return werr
 	}
-	return nil
+	return cerr
 }

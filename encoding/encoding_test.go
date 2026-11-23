@@ -35,7 +35,6 @@ func TestName(t *testing.T) {
 // TestCodecImplementsInterface pins the two implementations the transport
 // relies on: the registered codec and the Codec alias it stores.
 func TestCodecImplementsInterface(t *testing.T) {
-	var _ grpcencoding.Codec = GetCodec(Name)
 	var _ grpcencoding.Codec = (*codec)(nil)
 	var _ grpcencoding.Codec = Codec(GetCodec(Name))
 }

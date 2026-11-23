@@ -1,3 +1,19 @@
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package resolver
 
 import (
@@ -12,33 +28,41 @@ import (
 // Address is an alias for resolver.Address.
 type Address resolver.Address
 
-// Resolver is the interface for resolving a target into a list of addresses.
+// Resolver turns a target into the list of addresses it currently resolves to.
 type Resolver interface {
-	Resolve(url.URL) ([]Address, error)
-	Watch(context.Context, url.URL) (<-chan []Address, error)
+	// Resolve looks the target up. The context bounds the lookup, so a caller
+	// with a deadline or a cancellation never waits on a stuck DNS server.
+	Resolve(context.Context, url.URL) ([]Address, error)
+	// Close releases the resources the resolver holds.
 	Close() error
 }
 
-// dnsResolver is a resolver that resolves a target into a list of addresses using DNS.
+// dnsResolver resolves a target through the process DNS configuration.
 type dnsResolver struct{}
 
-// Resolve resolves a target into a list of addresses using DNS.
+// lookupHost is net.DefaultResolver.LookupHost, indirected so a test can answer
+// without touching the network and pin that the caller's context reaches it.
+var lookupHost = net.DefaultResolver.LookupHost
+
+// newDNSResolver returns a resolver that answers from DNS.
 func newDNSResolver() *dnsResolver {
 	return &dnsResolver{}
 }
 
-// Resolve resolves a target into a list of addresses using DNS.
-func (d *dnsResolver) Resolve(u url.URL) ([]Address, error) {
+// Resolve looks the host of u up and pairs every address with the port u
+// carries. An empty host, or a host that resolves to nothing, is an error rather
+// than an empty list, so a caller never dials zero backends by accident.
+func (d *dnsResolver) Resolve(ctx context.Context, u url.URL) ([]Address, error) {
 	hostName := u.Hostname()
 	if hostName == "" {
 		return nil, errors.New("resolver: empty host")
 	}
-	ips, err := net.LookupHost(hostName)
+	ips, err := lookupHost(ctx, hostName)
 	if err != nil {
 		return nil, err
 	}
 
-	var addrs []Address
+	addrs := make([]Address, 0, len(ips))
 	for _, ip := range ips {
 		addrs = append(addrs, Address{
 			Addr:       net.JoinHostPort(ip, u.Port()),
@@ -51,44 +75,13 @@ func (d *dnsResolver) Resolve(u url.URL) ([]Address, error) {
 	return addrs, nil
 }
 
-// Watch watches for changes to the list of addresses for a target. It returns a channel that will receive updates to the list of addresses. The channel will be closed when the context is canceled or when the resolver is closed.
-func (d *dnsResolver) Watch(ctx context.Context, u url.URL) (<-chan []Address, error) {
-	// TODO: Implement a watcher that periodically resolves the target and sends updates to the channel when the list of addresses changes.
-	return nil, nil
-}
-
-// Close closes the resolver and releases any resources associated with it.
+// Close releases the resources of the resolver. The DNS resolver holds none.
 func (d *dnsResolver) Close() error {
 	return nil
 }
 
-// Builder is the interface for building a resolver.
-type Builder interface {
-	Build() (Resolver, error)
-	Scheme() string
-}
-
-// GetResolver returns a resolver for the given scheme. If no resolver is registered for the scheme, it returns a DNS resolver.
-func GetResolver(scheme string) Resolver {
+// GetResolver returns a resolver for the given scheme. DNS is the only one
+// implemented, so every scheme resolves through DNS for now.
+func GetResolver(string) Resolver {
 	return newDNSResolver()
 }
-
-// func addressesEqual(a, b []Address) bool {
-// 	if len(a) != len(b) {
-// 		return false
-// 	}
-// 	as := make([]string, len(a))
-// 	bs := make([]string, len(b))
-// 	for i := range a {
-// 		as[i] = a[i].Addr
-// 		bs[i] = b[i].Addr
-// 	}
-// 	sort.Strings(as)
-// 	sort.Strings(bs)
-// 	for i := range as {
-// 		if as[i] != bs[i] {
-// 			return false
-// 		}
-// 	}
-// 	return true
-// }

@@ -19,6 +19,12 @@ const (
 	// messageLengthMax caps a single frame payload, aligned with the standard
 	// gRPC default.
 	messageLengthMax = 4 * 1024 * 1024
+	// readBufSize is how much the per-connection reader buffers ahead. It is
+	// deliberately far below messageLengthMax: the reader only has to cover the
+	// frame header and the small payloads that arrive in bursts, because a read
+	// larger than the buffer bypasses it and goes straight into the frame
+	// buffer. Sizing it at messageLengthMax cost 4MB of heap per connection.
+	readBufSize = 64 * 1024
 	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
 	// settles on, so it is the shortest useful flush delay.
 	defaultFlushInterval = time.Millisecond

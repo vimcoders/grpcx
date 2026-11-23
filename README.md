@@ -4,7 +4,6 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 
 ## 特点
 - 兼容 `grpc.ClientConnInterface` 和 `grpc.ServiceDesc`
-- 内置 OpenTelemetry 链路追踪
 - 面向 K8s 微服务设计
 - 连接池
 - 负载均衡 DNS解析
@@ -96,7 +95,7 @@ grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计�
 | **元数据上下文层** | `grpc/metadata` 基于 HTTP/2 Header 传递 | `grpcx/metadata` 基于协议帧内嵌传递 | 业务使用方式完全一致，仅底层承载载体不同 |
 | **序列化层** | 默认 Protobuf 序列化，支持自定义 Codec | `grpcx/encoding` 模块，默认 Protobuf 序列化 | 序列化协议完全一致，复用 protoc 生成代码 |
 | **传输协议层** | HTTP/2 + gRPC 帧协议<br>标准公开协议，包含完整流控、拥塞控制能力 | 4 字节长度帧 + protobuf 调用头（transport 源自 containerd ttrpc）<br>仅保留核心帧封装与 StreamID 复用 | **最核心差异层**，也是 1.50–2.50 倍性能优势的来源 |
-| **可观测性层** | OpenTelemetry 插件式扩展<br>链路追踪、指标、日志生态完善 | 内置 OpenTelemetry 链路追踪<br>集成在框架核心，开箱即用 | grpcx 面向云原生场景默认标配可观测能力 |
+| **可观测性层** | OpenTelemetry 插件式扩展<br>链路追踪、指标、日志生态完善 | 未内置链路追踪<br>跟踪信息由业务通过 `metadata.MD` 自行透传（`bench/grpcx` 中演示了 span 与 propagator 的用法） | gRPC 生态开箱可用；grpcx 需业务侧自行接入 |
 | **网络IO层** | 基于 Go 标准库 `net/http2`<br>底层 TCP 传输 | 基于 Go 原生 `net.Conn`<br>底层 TCP 传输 | 均基于 TCP 传输，grpcx 绕过 HTTP/2 栈直接操作裸连接 |
 
 > 设计本质：grpcx 不是 gRPC 的分支或魔改版本，而是一套完整独立的 RPC 实现。它保留了 gRPC 成熟的核心语义与编程模型，只替换了为通用性而设计的重型传输层，从而在 K8s 内网场景下获得极致的性能表现。

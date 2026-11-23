@@ -53,7 +53,8 @@ type clientStream struct {
 // stream frame is intentionally not sent: grpcx only carries unary calls, so
 // there is no stream to terminate.
 func (s *clientStream) CloseSend() error {
-	defer s.Close()
+	// CloseSend always reports success, so the close error is only cleanup.
+	defer func() { _ = s.Close() }()
 	s.Once.Do(func() {
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)

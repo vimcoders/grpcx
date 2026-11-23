@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"io"
+	"maps"
 	"net"
 	"sync"
 	"testing"
@@ -153,9 +154,7 @@ func (e *testEcho) Echo(ctx context.Context, in *api.EchoRequest) (*api.EchoResp
 		if e.values == nil {
 			e.values = make(map[string]string, len(md))
 		}
-		for k, v := range md {
-			e.values[k] = v
-		}
+		maps.Copy(e.values, md)
 	}
 	e.mu.Unlock()
 

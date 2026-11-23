@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"context"
+	"log/slog"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"github.com/vimcoders/grpcx/transport"
 
 	"github.com/vimcoders/grpcx/resolver"
+	"google.golang.org/grpc/codes"
 )
 
 const (
@@ -34,7 +36,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 		},
 		resolveContext: func(ctx context.Context) (int, error) {
 			resolver := resolver.GetResolver("dns")
-			address, err := resolver.Resolve(url.URL{Scheme: "dns", Host: endpoint})
+			address, err := resolver.Resolve(ctx, url.URL{Scheme: "dns", Host: endpoint})
 			if err != nil {
 				return 0, err
 			}
@@ -54,12 +56,20 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	for range podCount {
 		rt, err := x.dialContext(childCtx)
 		if err != nil {
-			x.Close()
+			// Build is already failing with err; the half-built round robin is
+			// discarded, and its close error cannot change that.
+			_ = x.Close()
 			return nil, err
 		}
 		x.rts = append(x.rts, rt)
 	}
-	go x.Keepalive(childCtx, opts...)
+	go func() {
+		// The keepalive loop ends with the balancer's context, so only an
+		// unexpected exit is worth reporting.
+		if err := x.Keepalive(childCtx, opts...); status.Code(err) != codes.Canceled {
+			slog.Error("balancer: keepalive exited", "endpoint", endpoint, "error", err)
+		}
+	}()
 	// Return the round robin balancer.
 	return &x, nil
 }
@@ -109,11 +119,19 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 		case <-ctx.Done():
 			return status.Canceled.Err()
 		case <-ticker.C:
-			_ = rr.Ping(ctx)
+			// A failed ping is expected while pods churn: the connection that
+			// answered it is replaced below. Report it at debug level only.
+			if err := rr.Ping(ctx); err != nil {
+				slog.Debug("balancer: keepalive ping failed", "error", err)
+			}
 		}
 	}
 }
 
+// Ping re-resolves the endpoint, drops round trippers that no longer answer,
+// dials replacements up to the number of pods the endpoint resolves to, and
+// returns each surviving round tripper's ping result. It is the periodic health
+// pass behind Keepalive.
 func (rr *RoundRobin) Ping(ctx context.Context) error {
 	// Resolve the endpoint to get the addresses.
 	podCount, err := rr.resolveContext(ctx)

@@ -98,7 +98,9 @@ func WithServerBufSize(n int) ServerOption {
 // channel and loops dispatching one call at a time through interceptor.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	ch := newChannel(c, WithBufSize(so.bufsize))
-	defer ch.Close()
+	// The connection is being torn down either way, so only the handler's own
+	// error is worth returning.
+	defer func() { _ = ch.Close() }()
 	for {
 		select {
 		case <-ctx.Done():
@@ -138,6 +140,9 @@ func (so *ServerOptions) interceptor(ctx context.Context, ch Channel) error {
 	return e.Handle(ctx, ch, WithCallOptions(options))
 }
 
+// RegisterService records the service description and implementation the
+// connection serves. A server holds one service: a later registration replaces
+// the earlier one, because the dispatch table has a single entry.
 func (so *ServerOptions) RegisterService(sd *grpc.ServiceDesc, ss any) {
 	if sd != nil {
 		so.desc = sd

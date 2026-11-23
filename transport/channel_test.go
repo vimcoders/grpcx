@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -180,5 +181,45 @@ func TestChannelRecvTruncatedFrame(t *testing.T) {
 	_, err := recver.Recv()
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("recv truncated = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
+// errTestWriteRefused is the write error failingWriteConn returns.
+var errTestWriteRefused = errors.New("test: write refused")
+
+// failingWriteConn accepts the deadline calls a channel makes and fails every
+// write, the way a connection whose peer already went away does. Close succeeds,
+// which is what used to hide the failure: the old code returned Close's error.
+type failingWriteConn struct {
+	net.Conn
+	closed bool
+}
+
+func (c *failingWriteConn) Write([]byte) (int, error)        { return 0, errTestWriteRefused }
+func (c *failingWriteConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *failingWriteConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+// TestChannelSendReportsWriteError pins that a frame which never reached the wire
+// is reported as a failed call carrying codes.Unavailable, and that the
+// connection is closed so the next send cannot pretend it succeeded either.
+func TestChannelSendReportsWriteError(t *testing.T) {
+	conn := &failingWriteConn{}
+	sender := newChannel(conn)
+
+	err := sender.Send([]byte("header"), []byte("payload"))
+	if err == nil {
+		t.Fatal("send succeeded, want the write error")
+	}
+	if !errors.Is(err, errTestWriteRefused) {
+		t.Fatalf("send = %v, want it to wrap %v", err, errTestWriteRefused)
+	}
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Fatalf("send code = %v, want %v", code, codes.Unavailable)
+	}
+	if !conn.closed {
+		t.Fatal("connection left open after a failed write")
 	}
 }

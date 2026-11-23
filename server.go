@@ -148,7 +148,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	s.mu.Lock()
 	s.listener, s.closed = listener, closed
 	s.mu.Unlock()
-	defer s.Close()
+	// Whatever ended the loop, every tracked connection is drained on the way
+	// out; the loop's own error is what the caller sees.
+	defer func() { _ = s.Close() }()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

@@ -251,16 +251,15 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout)
 	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 	defer cancel()
-	id := options.StreamID
 	info := &CallOptions{Code: uint32(codes.OK)}
 	s := sender{Codec: d.codec, Sender: d.Sender}
 	dec := func(in any) error { return codec.Unmarshal(p, in) }
 	reply, err := d.Handler(d.imp, timeoutCtx, dec, d.unaryInt)
 	if err != nil {
 		info.Code, info.Desc = uint32(status.Code(err)), err.Error()
-		return s.send(&api.Empty{}, id, info)
+		return s.send(&api.Empty{}, options.StreamID, info)
 	}
-	return s.send(reply, id, info)
+	return s.send(reply, options.StreamID, info)
 }
 
 // empty answers a method the registered service does not expose: an unknown

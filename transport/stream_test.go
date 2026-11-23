@@ -101,7 +101,7 @@ func TestWithCallOptionsCopiesFields(t *testing.T) {
 func TestSenderWritesHeaderBeforePayload(t *testing.T) {
 	sink := &frameSink{}
 	s := sender{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
-	if err := s.send(&api.EchoRequest{Message: "hi"}, 4, &CallOptions{FullMethodName: "/m"}); err != nil {
+	if err := s.send(4, &api.EchoRequest{Message: "hi"}, &CallOptions{FullMethodName: "/m"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestSenderWritesHeaderBeforePayload(t *testing.T) {
 func TestSenderStreamIDWinsOverOptions(t *testing.T) {
 	sink := &frameSink{}
 	s := sender{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
-	if err := s.send(&api.EchoRequest{Message: "hi"}, 5, &CallOptions{StreamID: 42}); err != nil {
+	if err := s.send(5, &api.EchoRequest{Message: "hi"}, &CallOptions{StreamID: 42}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 

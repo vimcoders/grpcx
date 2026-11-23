@@ -77,7 +77,7 @@ func (s *clientStream) Close() error {
 // options. It is the grpc.ClientStream shape of Send.
 func (s *clientStream) SendMsg(m any) error {
 	send := sender{Codec: s.codec, Sender: s.Sender}
-	return send.send(m, s.id)
+	return send.send(s.id, m)
 }
 
 // Recv waits for the reply frame, checks its code and unmarshals its payload
@@ -103,7 +103,7 @@ func (s *clientStream) RecvMsg(m any) error {
 // onto another stream by passing an id of its own.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
 	send := sender{Codec: s.codec, Sender: s.Sender}
-	return send.send(m, s.id, opts...)
+	return send.send(s.id, m, opts...)
 }
 
 // Context returns the stream context, canceled when the stream is closed.
@@ -257,9 +257,9 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	reply, err := d.Handler(d.imp, timeoutCtx, dec, d.unaryInt)
 	if err != nil {
 		info.Code, info.Desc = uint32(status.Code(err)), err.Error()
-		return s.send(&api.Empty{}, options.StreamID, info)
+		return s.send(options.StreamID, &api.Empty{}, info)
 	}
-	return s.send(reply, options.StreamID, info)
+	return s.send(options.StreamID, reply, info)
 }
 
 // empty answers a method the registered service does not expose: an unknown
@@ -284,7 +284,7 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 	defer putmbuf(p)
 	s := sender{Codec: e.Codec, Sender: e.Sender}
 	code, desc := uint32(codes.Unimplemented), options.FullMethodName
-	return s.send(&api.Empty{}, options.StreamID, &CallOptions{Code: code, Desc: desc})
+	return s.send(options.StreamID, &api.Empty{}, &CallOptions{Code: code, Desc: desc})
 }
 
 // sender writes one message onto the connection as a pair of frames: the
@@ -296,11 +296,11 @@ type sender struct {
 	encoding.Codec
 }
 
-// send marshals m together with the call options and writes the header frame
-// followed by the payload frame, in that order, so the peer stays on a frame
-// boundary. streamID is the stream the frame belongs to and always wins over any
-// id carried inside opts, so a caller cannot route the frame elsewhere.
-func (s *sender) send(m any, streamID uint32, opts ...CallOption) error {
+// send writes m on stream streamID: it marshals the call options and m together
+// and writes the header frame followed by the payload frame, in that order, so
+// the peer stays on a frame boundary. streamID always wins over any id carried
+// inside opts, so a caller cannot route the message elsewhere.
+func (s *sender) send(streamID uint32, m any, opts ...CallOption) error {
 	options := api.CallOptions{}
 	for _, v := range opts {
 		v.apply(&options)

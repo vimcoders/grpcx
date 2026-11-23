@@ -115,6 +115,7 @@ type client struct {
 	SendCloser
 	streams  map[uint32]*clientStream
 	streamID uint32
+	closed   bool
 	sync.Once
 	sync.RWMutex
 }
@@ -205,20 +206,23 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 	return s.Handle(ctx, recv, WithCallOptions(options))
 }
 
-// createStream allocates the next stream id, registers it in the stream table
-// and derives a cancellable context for it. It fails with
-// codes.ResourceExhausted once maxStreams is reached. Call options are ignored
-// here: Invoke and RoundTrip build and marshal the request header themselves,
-// so opts never reach the wire through this path.
+// createStream registers the next free stream id and derives a cancellable
+// context for it. It fails with codes.Canceled once the transport is closed, and
+// with codes.ResourceExhausted once maxStreams is reached. Call options are
+// ignored here: Invoke and RoundTrip build and marshal the request header
+// themselves, so opts never reach the wire through this path.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
+	if c.closed {
+		return nil, status.Canceled.Err()
+	}
 	if c.maxStreams > 0 && len(c.streams) >= int(c.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}
-	streamID := c.streamID + 1
-	if _, ok := c.streams[streamID]; ok {
-		return nil, status.ResourceExhausted.Err()
+	streamID, err := c.nextStreamID()
+	if err != nil {
+		return nil, err
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	s := clientStream{
@@ -231,8 +235,27 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 		codec:        c.codec,
 	}
 	c.streams[s.id] = &s
-	c.streamID = streamID
 	return &s, nil
+}
+
+// nextStreamID hands out the next free stream id. The counter stays monotonic
+// across ordinary calls, and on wrap it walks forward past ids that are still in
+// the table, so a connection that has served more than 2^32 calls keeps working
+// instead of answering ResourceExhausted forever. The walk is bounded by the
+// number of live streams, which is the most ids that can be taken, so one free
+// id is guaranteed to turn up.
+func (c *client) nextStreamID() (uint32, error) {
+	for range len(c.streams) + 1 {
+		c.streamID++
+		if c.streamID == 0 {
+			// Zero means "no stream" in the wire header, so it is never handed out.
+			c.streamID = 1
+		}
+		if _, ok := c.streams[c.streamID]; !ok {
+			return c.streamID, nil
+		}
+	}
+	return 0, status.ResourceExhausted.Err()
 }
 
 // NewStream is not implemented: grpcx carries unary calls only, so every
@@ -350,18 +373,19 @@ func (c *client) Ping(ctx context.Context) error {
 }
 
 // Close tears the transport down once: it closes every live stream, empties
-// the table and closes the underlying connection.
+// the table and closes the underlying connection. Streams requested afterwards
+// are refused rather than quietly allocated against a dead connection.
 func (c *client) Close() error {
 	c.Once.Do(func() {
 		c.Lock()
 		defer c.Unlock()
+		c.closed = true
 		for _, s := range c.streams {
 			// Closing a stream is local bookkeeping; the connection close below
 			// is what reports a problem.
 			_ = s.Close()
 		}
 		clear(c.streams)
-		c.maxStreams = 0
 	})
 	return c.SendCloser.Close()
 }

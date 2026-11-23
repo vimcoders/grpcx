@@ -9,11 +9,11 @@ go env -w GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy,direct &
 echo 💡 安装代码自动补全 gopls
 go install golang.org/x/tools/gopls@latest
 echo 🧹 安装代码规范检测 golangci-lint v2
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 echo 🛡️ 安装依赖漏洞扫描 govulncheck
-go install golang.org/x/vuln/cmd/govulncheck@latest
+go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
 echo 🕵️ 安装变量遮蔽检查 shadow
-go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@latest
+go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@v0.53.0
 echo 📦 安装 gRPC 代码生成工具
 go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest

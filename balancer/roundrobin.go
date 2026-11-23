@@ -82,7 +82,7 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 	if len(rts) == 0 {
 		return nil, status.ResourceExhausted.Err()
 	}
-	idx := rr.count.Add(defaultStep) % uint32(len(rts))
+	idx := (rr.count.Add(defaultStep) - 1) % uint32(len(rts))
 	return rts[idx], nil
 }
 

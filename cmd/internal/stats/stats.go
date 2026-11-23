@@ -269,6 +269,21 @@ func Serve() {
 		return
 	}
 
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           statsHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("stats: endpoint failed: %v", err)
+		}
+	}()
+}
+
+// statsHandler serves the snapshot as JSON. It is split out of Serve so the
+// response can be exercised without binding a port.
+func statsHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
 		var snap snapshot
@@ -278,15 +293,5 @@ func Serve() {
 		encoder.SetIndent("", "  ")
 		_ = encoder.Encode(&snap)
 	})
-
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("stats: endpoint failed: %v", err)
-		}
-	}()
+	return mux
 }

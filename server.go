@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
+	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
@@ -61,9 +62,16 @@ type ServiceRegistrar = transport.ServiceRegistrar
 type Server struct {
 	Handler
 	ServiceRegistrar
-	wg       sync.WaitGroup
+	wg sync.WaitGroup
+
+	// mu guards the fields below: ListenAndServe installs the listener and the
+	// cancel function from the serving goroutine while Close reads them from the
+	// caller's, and both walk the set of open connections.
+	mu       sync.Mutex
 	listener net.Listener
 	closed   context.CancelFunc
+	conns    map[net.Conn]struct{}
+	closing  bool
 }
 
 // NewServer returns a server configured by opts. Options not passed here are
@@ -80,17 +88,53 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 }
 
-// Close stops accepting, closes the listener and waits for the connection
-// handlers to return.
+// Close stops accepting, closes the listener, closes every connection still
+// being served and waits for the handlers to return. Closing the connections is
+// what makes shutdown prompt: a handler parked in a read would otherwise sit
+// there until its read timeout.
 func (s *Server) Close() error {
-	if s.closed != nil {
-		s.closed()
+	s.mu.Lock()
+	closed, listener := s.closed, s.listener
+	s.closing = true
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
 	}
-	if s.listener != nil {
-		s.listener.Close()
+	s.mu.Unlock()
+
+	if closed != nil {
+		closed()
+	}
+	if listener != nil {
+		_ = listener.Close()
+	}
+	for _, conn := range conns {
+		_ = conn.Close()
 	}
 	s.wg.Wait()
 	return nil
+}
+
+// trackConn registers an accepted connection so Close can close it. It reports
+// false once Close has run, in which case the caller must not serve the
+// connection.
+func (s *Server) trackConn(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing {
+		return false
+	}
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]struct{})
+	}
+	s.conns[conn] = struct{}{}
+	return true
+}
+
+func (s *Server) untrackConn(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.conns, conn)
 }
 
 // ListenAndServe accepts connections on addr and serves each one in its own
@@ -100,16 +144,22 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	s.listener = listener
 	cancelCtx, closed := context.WithCancel(ctx)
-	s.closed = closed
+	s.mu.Lock()
+	s.listener, s.closed = listener, closed
+	s.mu.Unlock()
 	defer s.Close()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			return err
 		}
+		if !s.trackConn(conn) {
+			_ = conn.Close()
+			return status.Canceled.Err()
+		}
 		s.wg.Go(func() {
+			defer s.untrackConn(conn)
 			if err := s.Handle(cancelCtx, conn); err != nil {
 				slog.Error("ListenAndServe", "exited", err.Error())
 			}

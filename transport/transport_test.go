@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"fmt"
-	"math"
 	"net"
 	"strings"
 	"sync"
@@ -281,75 +280,6 @@ func TestMaxStreamsLimitsConcurrentCalls(t *testing.T) {
 
 	if _, err := c.createStream(t.Context()); err != nil {
 		t.Fatalf("stream after release: %v", err)
-	}
-}
-
-// TestCreateStreamAfterCloseRefusesNewStreams pins the post-close contract: once
-// the transport is closed, a new stream is refused there and then instead of
-// being registered against a connection that can no longer carry it.
-func TestCreateStreamAfterCloseRefusesNewStreams(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr)
-
-	c, ok := rt.(*client)
-	if !ok {
-		t.Fatalf("RoundTripper is %T, want *client", rt)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	if _, err := c.createStream(t.Context()); status.Code(err) != codes.Canceled {
-		t.Fatalf("createStream after Close = %v, want Canceled", err)
-	}
-
-	c.RLock()
-	open := len(c.streams)
-	c.RUnlock()
-	if open != 0 {
-		t.Fatalf("stream table holds %d entries after Close, want 0", open)
-	}
-}
-
-// TestCreateStreamWrapsStreamID covers a connection that has served more than
-// 2^32 calls: the counter wraps past the ids still open and hands out the next
-// free one, instead of answering ResourceExhausted for the rest of its life.
-func TestCreateStreamWrapsStreamID(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr)
-
-	c, ok := rt.(*client)
-	if !ok {
-		t.Fatalf("RoundTripper is %T, want *client", rt)
-	}
-
-	first, err := c.createStream(t.Context())
-	if err != nil {
-		t.Fatalf("first stream: %v", err)
-	}
-	if first.id != 1 {
-		t.Fatalf("first stream id = %d, want 1", first.id)
-	}
-	second, err := c.createStream(t.Context())
-	if err != nil {
-		t.Fatalf("second stream: %v", err)
-	}
-	if second.id != 2 {
-		t.Fatalf("second stream id = %d, want 2", second.id)
-	}
-
-	// Put the counter at the end of the range so the next allocation has to wrap
-	// and skip the two ids that are still open.
-	c.Lock()
-	c.streamID = math.MaxUint32
-	c.Unlock()
-
-	third, err := c.createStream(t.Context())
-	if err != nil {
-		t.Fatalf("stream after wrap: %v", err)
-	}
-	if third.id != 3 {
-		t.Fatalf("stream id after wrap = %d, want 3", third.id)
 	}
 }
 

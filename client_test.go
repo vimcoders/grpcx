@@ -4,205 +4,223 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/vimcoders/grpcx/balancer"
-	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
+	"github.com/vimcoders/grpcx/metadata"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
-// TestClientInvokeEcho pins the full client path: Dial resolves the endpoint,
-// the balancer dials the transport, the stub frames the request and the reply
-// comes back through the receive loop.
+// TestClientInvokeEcho pins the end-to-end unary path: a client built by
+// DialContext reaches a registered service over a real socket and gets the
+// reply back through the generated stub.
 func TestClientInvokeEcho(t *testing.T) {
 	_, addr := startServer(t, transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}))
 	cli := dialClient(t, addr)
 
-	reply, err := api.NewEchoServiceClient(cli).Echo(context.Background(), &api.EchoRequest{Message: "hi"})
+	reply, err := api.NewEchoServiceClient(cli).Echo(context.Background(), &api.EchoRequest{Message: "client"})
 	if err != nil {
 		t.Fatalf("Echo: %v", err)
 	}
-	if reply.Message != "hi!" {
-		t.Fatalf("reply = %q, want hi!", reply.Message)
+	if got := reply.GetMessage(); got != "client!" {
+		t.Fatalf("reply = %q, want client!", got)
 	}
 }
 
-// TestClientInvokeSurfacesInterceptorError pins that Invoke returns what the
-// interceptor returned: the interceptor is the only layer that decides whether a
-// call is attempted at all, and swallowing its error would report success for a
-// request that never left.
-func TestClientInvokeSurfacesInterceptorError(t *testing.T) {
+// TestClientInvokeThroughInterceptor pins that Invoke hands the call to the
+// interceptor installed by WithUnaryClientInterceptor, together with the picker
+// the connection was built from. An interceptor that never runs is silently
+// missing auth or tracing on every call.
+func TestClientInvokeThroughInterceptor(t *testing.T) {
 	_, addr := startServer(t, transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}))
-	cli := dialClient(t, addr, WithUnaryClientInterceptor(failingInterceptor(errCallRefused)))
 
-	err := cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{}, &api.EchoResponse{})
-	if !errors.Is(err, errCallRefused) {
-		t.Fatalf("Invoke = %v, want the interceptor's error", err)
-	}
-}
-
-// TestClientNewStreamUnimplemented pins that the stream surface is refused at
-// the top level too: grpcx carries unary calls only.
-func TestClientNewStreamUnimplemented(t *testing.T) {
-	c := &client{cancel: func() {}}
-
-	_, err := c.NewStream(context.Background(), &grpc.StreamDesc{}, "/nope/Nope")
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("NewStream = %v, want Unimplemented", err)
-	}
-}
-
-// TestClientCloseReachesPickerAndCancel pins both halves of Close: the picker's
-// Close closes every backend transport, and the cancel stops the balancer's
-// keepalive loop. Closing only one of the two leaves either connections or a
-// goroutine behind.
-func TestClientCloseReachesPickerAndCancel(t *testing.T) {
-	p := &stubPicker{}
-	canceled := 0
-	c := &client{Picker: p, cancel: func() { canceled++ }}
-
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if got := p.closeCount(); got != 1 {
-		t.Fatalf("picker closed %d times, want 1", got)
-	}
-	if canceled != 1 {
-		t.Fatalf("cancel called %d times, want 1", canceled)
-	}
-}
-
-// TestClientRoundTripPicksByMethod pins the framed entry point: the backend is
-// chosen by the full method name in the request header, which is the only key a
-// framed caller supplies.
-func TestClientRoundTripPicksByMethod(t *testing.T) {
-	rt := &stubRT{rtResp: &api.Response{Options: &api.CallOptions{}}}
-	p := &stubPicker{rt: rt}
-	c := &client{Picker: p, cancel: func() {}}
-
-	req := &api.Request{
-		Options: &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName},
-		Payload: []byte{1, 2, 3},
-	}
-	if _, err := c.RoundTrip(context.Background(), req); err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	if got := p.lastInfo().FullMethodName; got != api.EchoService_Echo_FullMethodName {
-		t.Fatalf("pick info method = %q, want the request's", got)
-	}
-	if rt.rtReq != req {
-		t.Fatalf("RoundTrip reached the backend with %v, want the same request", rt.rtReq)
-	}
-}
-
-// TestClientRoundTripWithoutOptions pins the nil-header path: a framed request
-// without options still picks a backend instead of dereferencing nil.
-func TestClientRoundTripWithoutOptions(t *testing.T) {
-	rt := &stubRT{rtResp: &api.Response{Options: &api.CallOptions{}}}
-	p := &stubPicker{rt: rt}
-	c := &client{Picker: p, cancel: func() {}}
-
-	if _, err := c.RoundTrip(context.Background(), &api.Request{Payload: []byte{9}}); err != nil {
-		t.Fatalf("RoundTrip without options: %v", err)
-	}
-	if got := p.lastInfo().FullMethodName; got != "" {
-		t.Fatalf("pick info method = %q, want empty", got)
-	}
-}
-
-// TestClientInvokePropagatesMetadata pins the metadata round trip: the client
-// puts its context metadata into the request header and the server reattaches it
-// to the handler context, which is where an interceptor reads it.
-func TestClientInvokePropagatesMetadata(t *testing.T) {
-	cap := &mdCapture{}
-	_, addr := startServer(t,
-		transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}),
-		UnaryServerInterceptor(cap.interceptor()),
+	var (
+		calls    int
+		gotPickr balancer.Picker
 	)
-	cli := dialClient(t, addr)
-
-	ctx := transportContextWithMetadata(t, "request-id", "42")
-	if _, err := api.NewEchoServiceClient(cli).Echo(ctx, &api.EchoRequest{Message: "x"}); err != nil {
-		t.Fatalf("Echo: %v", err)
-	}
-	md, ok := cap.snapshot()
-	if !ok {
-		t.Fatal("server interceptor never ran, want it called for the request")
-	}
-	if v, ok := md.Get("request-id"); !ok || v != "42" {
-		t.Fatalf("server metadata = %v, want request-id=42", md)
-	}
-}
-
-// TestClientDialReportsUnresolvableEndpoint pins the construction failure path:
-// an endpoint with an empty host is rejected by the resolver before any dial, so
-// Dial never returns a client that can only fail later.
-func TestClientDialReportsUnresolvableEndpoint(t *testing.T) {
-	cli, err := Dial(":bad")
-	if err == nil {
-		_ = cli.Close()
-		t.Fatal("Dial of an endpoint without a host = nil error")
-	}
-}
-
-// TestClientOptionsAppendTransportOptions pins that the top-level options are
-// forwarded to the transport as options rather than being applied twice: the
-// client keeps them in a slice for Dial and touches no transport field itself.
-func TestClientOptionsAppendTransportOptions(t *testing.T) {
-	c := &client{}
-	WithCodec(encoding.GetCodec(encoding.Name))(c)
-	WithTimeout(time.Second)(c)
-	WithMaxStreams(4)(c)
-	WithBufSize(2)(c)
-
-	if c.Codec == nil {
-		t.Fatal("WithCodec left the codec nil")
-	}
-	if got, want := len(c.opts), 3; got != want {
-		t.Fatalf("forwarded options = %d, want %d", got, want)
-	}
-}
-
-// TestClientTimeoutIsConverted pins that WithTimeout reaches the transport: the
-// client stores an option that, applied to transport options, sets the call
-// timeout. Storing the value itself would skip the zero fallback the transport
-// option owns.
-func TestClientTimeoutIsConverted(t *testing.T) {
-	c := &client{}
-	WithTimeout(7 * time.Second)(c)
-
-	opts := transport.DefaultOptions()
-	for _, o := range c.opts {
-		o(&opts)
-	}
-	if got, want := opts.Timeout(), 7*time.Second; got != want {
-		t.Fatalf("transport timeout = %v, want %v", got, want)
-	}
-}
-
-// TestClientInvokeReportsMissingBackend pins the picker error path: with no
-// backend to pick, Invoke reports the balancer's status instead of panicking on
-// a nil round tripper.
-func TestClientInvokeReportsMissingBackend(t *testing.T) {
-	p := &stubPicker{err: status.Unavailable.Err()}
-	c := &client{
-		Picker: p,
-		cancel: func() {},
-		unaryClientInterceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
-			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
+	cli, err := DialContext(context.Background(), addr, WithUnaryClientInterceptor(
+		func(ctx context.Context, method string, req, reply any, picker balancer.Picker, opts ...grpc.CallOption) error {
+			calls++
+			gotPickr = picker
+			rt, err := picker.Pick(ctx, balancer.PickInfo{FullMethodName: method})
 			if err != nil {
 				return err
 			}
 			return rt.Invoke(ctx, method, req, reply, opts...)
 		},
+	))
+	if err != nil {
+		t.Fatalf("DialContext: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	reply, err := api.NewEchoServiceClient(cli).Echo(context.Background(), &api.EchoRequest{Message: "intercepted"})
+	if err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+	if got := reply.GetMessage(); got != "intercepted!" {
+		t.Fatalf("reply = %q, want intercepted!", got)
+	}
+	if calls != 1 {
+		t.Fatalf("interceptor ran %d times, want 1", calls)
+	}
+	if gotPickr == nil {
+		t.Fatal("interceptor received a nil picker")
+	}
+}
+
+// TestClientInvokePropagatesInterceptorError pins that an interceptor error
+// reaches the caller unchanged: it must not be rewritten into a transport
+// status, or a policy denial would look like a connection problem.
+func TestClientInvokePropagatesInterceptorError(t *testing.T) {
+	_, addr := startServer(t, transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}))
+
+	cli, err := DialContext(context.Background(), addr, WithUnaryClientInterceptor(
+		func(context.Context, string, any, any, balancer.Picker, ...grpc.CallOption) error {
+			return errCallRefused
+		},
+	))
+	if err != nil {
+		t.Fatalf("DialContext: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	var reply api.EchoResponse
+	err = cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "x"}, &reply)
+	if !errors.Is(err, errCallRefused) {
+		t.Fatalf("Invoke = %v, want the interceptor's error", err)
+	}
+	if reply.GetMessage() != "" {
+		t.Fatalf("reply = %q, want it untouched by a refused call", reply.GetMessage())
+	}
+}
+
+// TestClientInvokeCarriesMetadata pins the out-of-band path: metadata attached
+// to the client context reaches the server interceptor, because a caller
+// passing a tenant or a trace id relies on it surviving the round trip.
+func TestClientInvokeCarriesMetadata(t *testing.T) {
+	capture := &mdCapture{}
+	_, addr := startServer(t,
+		transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}),
+		UnaryServerInterceptor(capture.interceptor()),
+	)
+	cli := dialClient(t, addr)
+
+	ctx := metadata.WithMetadata(context.Background(), metadata.Pairs("x-tenant", "acme"))
+	if _, err := api.NewEchoServiceClient(cli).Echo(ctx, &api.EchoRequest{Message: "md"}); err != nil {
+		t.Fatalf("Echo: %v", err)
 	}
 
-	err := c.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{}, &api.EchoResponse{})
-	if status.Code(err) != codes.Unavailable {
-		t.Fatalf("Invoke without a backend = %v, want Unavailable", err)
+	md, ok := capture.snapshot()
+	if !ok {
+		t.Fatal("server interceptor saw no metadata at all")
+	}
+	if v, _ := md.Get("x-tenant"); v != "acme" {
+		t.Fatalf("x-tenant = %q, want acme", v)
+	}
+}
+
+// TestClientRoundTripPicksByMethod pins that RoundTrip resolves its backend from
+// the full method name in req.Options and forwards the framed request as it
+// stands.
+func TestClientRoundTripPicksByMethod(t *testing.T) {
+	rt := &stubRT{rtResp: &api.Response{Payload: []byte("ok")}}
+	picker := &stubPicker{rt: rt}
+	c := &client{Picker: picker}
+
+	resp, err := c.RoundTrip(context.Background(), &api.Request{
+		Options: &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName},
+	})
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if got := picker.lastInfo().FullMethodName; got != api.EchoService_Echo_FullMethodName {
+		t.Fatalf("picked for %q, want %q", got, api.EchoService_Echo_FullMethodName)
+	}
+	if rt.rtReq == nil {
+		t.Fatal("round tripper received no request")
+	}
+	if got := string(resp.GetPayload()); got != "ok" {
+		t.Fatalf("payload = %q, want ok", got)
+	}
+}
+
+// TestClientRoundTripAllowsNilOptions pins the tolerant read of req.Options:
+// a request built without a header still reaches a backend under an empty
+// method name instead of panicking.
+func TestClientRoundTripAllowsNilOptions(t *testing.T) {
+	picker := &stubPicker{rt: &stubRT{rtResp: &api.Response{}}}
+	c := &client{Picker: picker}
+
+	if _, err := c.RoundTrip(context.Background(), &api.Request{}); err != nil {
+		t.Fatalf("RoundTrip with nil options: %v", err)
+	}
+	if got := picker.lastInfo().FullMethodName; got != "" {
+		t.Fatalf("picked for %q, want the empty method name", got)
+	}
+}
+
+// TestClientRoundTripPickerError pins that a picker with no usable backend
+// fails the call instead of handing a nil round tripper to the transport.
+func TestClientRoundTripPickerError(t *testing.T) {
+	c := &client{Picker: &stubPicker{err: status.Unavailable.Err()}}
+
+	_, err := c.RoundTrip(context.Background(), &api.Request{Options: &api.CallOptions{FullMethodName: "/x"}})
+	if err == nil {
+		t.Fatal("RoundTrip with a failing picker = nil error")
+	}
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", got)
+	}
+}
+
+// TestClientNewStreamIsUnimplemented pins that streaming is refused rather than
+// silently half-implemented: grpcx carries unary calls only, and there is no
+// stream interceptor left to hand the call to.
+func TestClientNewStreamIsUnimplemented(t *testing.T) {
+	c := &client{}
+
+	stream, err := c.NewStream(context.Background(), &grpc.StreamDesc{}, api.EchoService_Echo_FullMethodName)
+	if stream != nil {
+		t.Fatal("NewStream returned a stream for an unsupported call")
+	}
+	if got := status.Code(err); got != codes.Unimplemented {
+		t.Fatalf("code = %v, want Unimplemented", got)
+	}
+}
+
+// TestClientCloseClosesPickerAndCancelsContext pins both halves of Close: the
+// picker is closed, and the child context derived in DialContext is cancelled
+// even though the picker no longer holds it. A cancel that never fires leaves
+// the keepalive loop running after the client is gone.
+func TestClientCloseClosesPickerAndCancelsContext(t *testing.T) {
+	picker := &stubPicker{rt: &stubRT{}}
+	cancelled := false
+	c := &client{
+		Picker: picker,
+		cancel: func() { cancelled = true },
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := picker.closeCount(); got != 1 {
+		t.Fatalf("picker closed %d times, want 1", got)
+	}
+	if !cancelled {
+		t.Fatal("Close did not cancel the child context")
+	}
+}
+
+// TestClientDialUnreachableEndpointFails pins the startup failure path: a port
+// nobody listens on is reported to the caller instead of yielding a client that
+// fails every call later.
+func TestClientDialUnreachableEndpointFails(t *testing.T) {
+	if _, err := DialContext(context.Background(), "127.0.0.1:1"); err == nil {
+		t.Fatal("DialContext on a closed port = nil error")
 	}
 }

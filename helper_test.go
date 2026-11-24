@@ -13,9 +13,15 @@ import (
 	"github.com/vimcoders/grpcx/metadata"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
+
+// errCallRefused is the error a client interceptor returns when it refuses a
+// call. Tests assert it reaches the caller unchanged, because an interceptor's
+// error must not be rewritten into a transport status.
+var errCallRefused = status.Error(codes.PermissionDenied, "test: call refused")
 
 // echoStub is the service the top-level tests register. It answers every call
 // with a fixed suffix so a test can tell a reply from its request.
@@ -54,6 +60,12 @@ func (p *stubPicker) lastInfo() balancer.PickInfo {
 	return p.last
 }
 
+func (p *stubPicker) closeCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closes
+}
+
 func (p *stubPicker) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -61,26 +73,17 @@ func (p *stubPicker) Close() error {
 	return nil
 }
 
-func (p *stubPicker) closeCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.closes
-}
-
-// stubRT is a RoundTripper that records the framed call it served. It lets a
+// stubRT is a RoundTripper that records the framed request it served. It lets a
 // client test assert what reached the transport without a live server.
 type stubRT struct {
-	mu       sync.Mutex
-	rtReq    *api.Request
-	rtResp   *api.Response
-	invokeEr error
-	pingErr  error
+	mu      sync.Mutex
+	rtReq   *api.Request
+	rtResp  *api.Response
+	pingErr error
 }
 
 func (s *stubRT) Invoke(context.Context, string, any, any, ...grpc.CallOption) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.invokeEr
+	return nil
 }
 
 func (s *stubRT) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
@@ -118,9 +121,38 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
+// waitListening blocks until addr accepts connections. freeAddr only reserves
+// the port and releases it, and ListenAndServe binds inside its own goroutine,
+// so a dial issued right after startServer can reach a port nobody listens on
+// yet. The probe retries instead of reading Server.listener: that field is
+// published without a lock, so touching it here would be a data race the -race
+// job reports.
+func waitListening(t *testing.T, addr string, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, err := net.Dial("tcp", addr)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		select {
+		case e := <-done:
+			t.Fatalf("ListenAndServe on %s returned before it listened: %v", addr, e)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("address %s did not start listening within 2s", addr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // startServer runs a Server on a reserved loopback address and returns it with
-// the address. Cleanup cancels the serve loop and closes the server, which also
-// closes any connection a test left open.
+// the address. Cleanup cancels the serve loop and closes the server. Serve does
+// not close the connections it serves on its own, so a test that dials in relies
+// on its own client cleanup running first: client cleanups are registered after
+// this one and therefore run before it.
 func startServer(t *testing.T, opts ...ServerOption) (*Server, string) {
 	t.Helper()
 	srv := NewServer(opts...)
@@ -128,7 +160,7 @@ func startServer(t *testing.T, opts ...ServerOption) (*Server, string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe(ctx, addr) }()
-	waitListening(t, srv, addr, done)
+	waitListening(t, addr, done)
 
 	t.Cleanup(func() {
 		cancel()
@@ -145,35 +177,10 @@ func startServer(t *testing.T, opts ...ServerOption) (*Server, string) {
 	return srv, addr
 }
 
-// waitListening blocks until addr accepts connections. freeAddr only reserves
-// the port and releases it, and ListenAndServe binds inside its own goroutine,
-// so a dial issued right after startServer can reach a port nobody listens on
-// yet. The listener field is published once net.Listen has returned — at that
-// point the socket is already listening — so waiting on it is a readiness
-// signal that costs no probe connection.
-func waitListening(t *testing.T, srv *Server, addr string, done <-chan error) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		srv.mu.Lock()
-		listening := srv.listener != nil
-		srv.mu.Unlock()
-		if listening {
-			return
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("ListenAndServe on %s returned before it listened: %v", addr, err)
-		default:
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("address %s did not start listening within 2s", addr)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-// dialClient connects to addr and closes the client when the test ends.
+// dialClient connects to addr and closes the client when the test ends. The
+// cleanup runs before startServer's, so the connection is gone before the
+// server is closed: with no per-connection registry left on Server, closing a
+// client is what wakes the handler parked in a read.
 func dialClient(t *testing.T, addr string, opts ...Option) ClientConnInterface {
 	t.Helper()
 	cli, err := DialContext(context.Background(), addr, opts...)
@@ -207,19 +214,24 @@ func (c *mdCapture) snapshot() (metadata.MD, bool) {
 	return c.md, c.got
 }
 
-// failingInterceptor is a client interceptor that refuses every call, used to
-// pin that Invoke surfaces it instead of dialing past it.
-func failingInterceptor(err error) UnaryClientInterceptor {
-	return func(context.Context, string, any, any, balancer.Picker, ...grpc.CallOption) error {
-		return err
+// countingInterceptor records how often the server interceptor ran, so a test
+// can assert the option installed at construction time is the one in effect.
+type countingInterceptor struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingInterceptor) interceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		c.mu.Lock()
+		c.n++
+		c.mu.Unlock()
+		return handler(ctx, req)
 	}
 }
 
-// transportContextWithMetadata attaches a metadata pair to ctx, which is how a
-// caller hands out-of-band values to an interceptor.
-func transportContextWithMetadata(t *testing.T, key, value string) context.Context {
-	t.Helper()
-	return metadata.WithMetadata(context.Background(), metadata.Pairs(key, value))
+func (c *countingInterceptor) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
-
-var errCallRefused = status.Error(codes.PermissionDenied, "test: call refused")

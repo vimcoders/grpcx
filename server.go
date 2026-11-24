@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
-	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
@@ -66,14 +65,10 @@ type Server struct {
 	ServiceRegistrar
 	wg sync.WaitGroup
 
-	// mu guards the fields below: ListenAndServe installs the listener and the
-	// cancel function from the serving goroutine while Close reads them from the
-	// caller's, and both walk the set of open connections.
-	mu       sync.Mutex
+	// listener is written once by the serving goroutine with no lock around it.
+	// Nothing reads it: Close waits on the handler group only, so this field just
+	// records what ListenAndServe bound.
 	listener net.Listener
-	closed   context.CancelFunc
-	conns    map[net.Conn]struct{}
-	closing  bool
 }
 
 // NewServer returns a server configured by opts. Options not passed here are
@@ -90,82 +85,42 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 }
 
-// Close stops accepting, closes the listener, closes every connection still
-// being served and waits for the handlers to return. Closing the connections is
-// what makes shutdown prompt: a handler parked in a read would otherwise sit
-// there until its read timeout.
+// Close waits for the handlers to return and reports nil. It does not stop the
+// serve loop and does not close the connections: the listener keeps accepting,
+// and a handler parked in a read comes back only when its read timeout fires or
+// the peer hangs up—up to the configured read timeout, 30s by default. What
+// stops the loop is ListenAndServe's ctx and the AfterFunc it installs, not this
+// call.
+//
+// Close is safe on a Server that never ran ListenAndServe: there is no handler
+// to wait for, and it returns nil immediately. Every call returns nil.
 func (s *Server) Close() error {
-	s.mu.Lock()
-	closed, listener := s.closed, s.listener
-	s.closing = true
-	conns := make([]net.Conn, 0, len(s.conns))
-	for conn := range s.conns {
-		conns = append(conns, conn)
-	}
-	s.mu.Unlock()
-
-	if closed != nil {
-		closed()
-	}
-	if listener != nil {
-		_ = listener.Close()
-	}
-	for _, conn := range conns {
-		_ = conn.Close()
-	}
 	s.wg.Wait()
 	return nil
 }
 
-// trackConn registers an accepted connection so Close can close it. It reports
-// false once Close has run, in which case the caller must not serve the
-// connection.
-func (s *Server) trackConn(conn net.Conn) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closing {
-		return false
-	}
-	if s.conns == nil {
-		s.conns = make(map[net.Conn]struct{})
-	}
-	s.conns[conn] = struct{}{}
-	return true
-}
-
-func (s *Server) untrackConn(conn net.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.conns, conn)
-}
-
 // ListenAndServe accepts connections on addr and serves each one in its own
-// goroutine until the listener fails or ctx is canceled.
+// goroutine until the listener fails or ctx is canceled. An AfterFunc closes the
+// listener when ctx is done, which is what wakes the loop out of Accept; the
+// closed listener then surfaces as the returned error, so a canceled context
+// comes back as net.ErrClosed rather than nil. The ctx also reaches the
+// handlers, so they see the same cancellation.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	cancelCtx, closed := context.WithCancel(ctx)
-	s.mu.Lock()
-	s.listener, s.closed = listener, closed
-	s.mu.Unlock()
-	// Whatever ended the loop, every tracked connection is drained on the way
-	// out; the loop's own error is what the caller sees.
-	defer func() { _ = s.Close() }()
+	s.listener = listener
+	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	defer func() { _ = stop() }()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			return err
 		}
-		if !s.trackConn(conn) {
-			_ = conn.Close()
-			return status.Canceled.Err()
-		}
 		s.wg.Go(func() {
-			defer s.untrackConn(conn)
-			if err := s.Handle(cancelCtx, conn); err != nil {
-				slog.Debug("ListenAndServe: handler exited", "error", err)
+			if err := s.Handle(ctx, conn); err != nil {
+				slog.Debug("listenAndServe: exited", "error", err)
 			}
 		})
 	}

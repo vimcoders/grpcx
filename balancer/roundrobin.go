@@ -12,7 +12,6 @@ import (
 	"github.com/vimcoders/grpcx/transport"
 
 	"github.com/vimcoders/grpcx/resolver"
-	"google.golang.org/grpc/codes"
 )
 
 const (
@@ -23,34 +22,28 @@ const (
 )
 
 // rrBuilder is the builder of round robin balancer.
-type rrBuilder struct{}
+type rrBuilder struct {
+	dial    func(context.Context) (transport.RoundTripper, error)
+	resolve func(context.Context) ([]resolver.Address, error)
+}
 
 // Build builds a round robin balancer.
 func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
 	// Create a round robin balancer.
 	var x = RoundRobin{
-		dial: func(childCtx context.Context) (transport.RoundTripper, error) {
-			return transport.DialContext(childCtx, endpoint, opts...)
-		},
-		resolve: func(childCtx context.Context) (int, error) {
-			resolver := resolver.GetResolver("dns")
-			address, err := resolver.Resolve(childCtx, url.URL{Scheme: "dns", Host: endpoint})
-			if err != nil {
-				return 0, err
-			}
-			return len(address), nil
-		},
+		dial:    b.dial,
+		resolve: b.resolve,
 	}
 	// Resolve the endpoint to get the addresses.
-	podCount, err := x.resolve(ctx)
+	ips, err := x.resolve(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if podCount == 0 {
+	if len(ips) == 0 {
 		return nil, status.Unavailable.Err()
 	}
 	// Dial to each address and create a round tripper for each.
-	for range podCount {
+	for range ips {
 		rt, err := x.dial(ctx)
 		if err != nil {
 			// Build is already failing with err; the half-built round robin is
@@ -63,8 +56,8 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	go func() {
 		// The keepalive loop ends with the balancer's context, so only an
 		// unexpected exit is worth reporting.
-		if err := x.Keepalive(ctx, opts...); status.Code(err) != codes.Canceled {
-			slog.Error("balancer: keepalive exited", "endpoint", endpoint, "error", err)
+		if err := x.Keepalive(ctx, opts...); err != nil {
+			slog.Debug("balancer: keepalive exited", "endpoint", endpoint, "error", err)
 		}
 	}()
 	// Return the round robin balancer.
@@ -74,9 +67,9 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 // RoundRobin is a round robin balancer.
 type RoundRobin struct {
 	rts     []transport.RoundTripper
-	count   atomic.Uint32
+	step    atomic.Uint32
 	dial    func(context.Context) (transport.RoundTripper, error)
-	resolve func(context.Context) (int, error)
+	resolve func(context.Context) ([]resolver.Address, error)
 	sync.RWMutex
 }
 
@@ -88,7 +81,7 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 	if len(rts) == 0 {
 		return nil, status.ResourceExhausted.Err()
 	}
-	idx := (rr.count.Add(defaultStep) - 1) % uint32(len(rts))
+	idx := rr.step.Add(defaultStep) % uint32(len(rts))
 	return rts[idx], nil
 }
 
@@ -96,7 +89,19 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 // endpoint to the number of backends, dials one round tripper per backend and
 // starts the keepalive loop under ctx.
 func DialContext(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
-	var b rrBuilder
+	b := rrBuilder{
+		dial: func(childCtx context.Context) (transport.RoundTripper, error) {
+			return transport.DialContext(childCtx, endpoint, opts...)
+		},
+		resolve: func(childCtx context.Context) ([]resolver.Address, error) {
+			resolver := resolver.GetResolver("dns")
+			address, err := resolver.Resolve(childCtx, url.URL{Scheme: "dns", Host: endpoint})
+			if err != nil {
+				return nil, err
+			}
+			return address, nil
+		},
+	}
 	p, err := b.Build(ctx, endpoint, opts...)
 	if err != nil {
 		return nil, err
@@ -134,7 +139,7 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 // pass behind Keepalive.
 func (rr *RoundRobin) Ping(ctx context.Context) error {
 	// Resolve the endpoint to get the addresses.
-	podCount, err := rr.resolve(ctx)
+	ips, err := rr.resolve(ctx)
 	if err != nil {
 		return err
 	}
@@ -146,14 +151,14 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 			_ = rt.Close()
 			continue
 		}
-		if len(rts) >= podCount {
+		if len(rts) >= len(ips) {
 			_ = rt.Close()
 			continue
 		}
 		rts = append(rts, rt)
 	}
 	// Create new round trippers for any new addresses.
-	for i := len(rts); i < podCount; i++ {
+	for i := len(rts); i < len(ips); i++ {
 		rt, err := rr.dial(ctx)
 		if err != nil {
 			continue

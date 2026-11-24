@@ -92,7 +92,9 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 	return rts[idx], nil
 }
 
-// DialContext dials a round robin balancer.
+// DialContext builds a round robin balancer for endpoint: it resolves the
+// endpoint to the number of backends, dials one round tripper per backend and
+// starts the keepalive loop under ctx.
 func DialContext(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
 	var b rrBuilder
 	p, err := b.Build(ctx, endpoint, opts...)
@@ -102,7 +104,9 @@ func DialContext(ctx context.Context, endpoint string, opts ...transport.Option)
 	return p, nil
 }
 
-// Keepalive keeps the round robin balancer alive.
+// Keepalive pings every backend once per keepalive period until ctx is canceled.
+// A failed ping is logged at debug level: pods churn, and the ping itself drops
+// the dead backend and dials a replacement.
 func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) error {
 	defaultOptions := transport.DefaultOptions()
 	for _, opt := range opts {
@@ -169,7 +173,10 @@ func (rr *RoundRobin) clone() []transport.RoundTripper {
 	return append([]transport.RoundTripper{}, rr.rts...)
 }
 
-// Close closes the round robin balancer.
+// Close closes every backend round tripper it currently holds. It takes a
+// snapshot first, so a concurrent Ping replacing the slice cannot race it, and a
+// second call closes the remaining backends again only if one was added in
+// between.
 func (rr *RoundRobin) Close() error {
 	for _, rt := range rr.clone() {
 		_ = rt.Close()

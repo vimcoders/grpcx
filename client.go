@@ -67,20 +67,23 @@ func WithBufSize(n int) Option {
 }
 
 // client is the ClientConnInterface implementation: it holds the codec, the
-// interceptors, the transport options and the balancer picker.
+// unary interceptor, the transport options, the balancer picker and the cancel
+// function that stops the balancer's keepalive loop.
 type client struct {
 	balancer.Picker
 	encoding.Codec
 	unaryClientInterceptor UnaryClientInterceptor
 	opts                   []transport.Option
 	cancel                 context.CancelFunc // Cancelled on close.
-
 }
 
-// DialContext builds a client for endpoint: it installs the default
-// interceptors, applies the options, dials through the balancer and keeps the
-// resulting picker.
+// DialContext builds a client for endpoint: it installs the default unary
+// interceptor, applies the options, derives a child context that Close cancels,
+// dials through the balancer and keeps the resulting picker.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
+	// The child context lives as long as the client: Close cancels it to stop
+	// the keepalive loop, and the balancer's own dial and resolve calls run
+	// under it.
 	childCtx, cancel := context.WithCancel(ctx)
 	c := client{
 		cancel: cancel,
@@ -96,7 +99,6 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 	for _, o := range opts {
 		o(&c)
 	}
-	// Create a child context that can be canceled when the balancer is closed.
 	c.opts = append(c.opts, transport.WithCodec(c.Codec))
 	picker, err := balancer.DialContext(childCtx, endpoint, c.opts...)
 	if err != nil {
@@ -133,13 +135,16 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	return rt.RoundTrip(ctx, req)
 }
 
-// NewStream opens a stream through the stream client interceptor. grpcx carries
-// unary calls only, so the returned stream cannot actually carry frames.
+// NewStream rejects every streaming call with codes.Unimplemented: grpcx
+// carries unary calls only, and there is no stream client interceptor to hand
+// the call to. desc, method and opts are all ignored.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, status.Unimplemented.Err()
 }
 
-// Close closes the balancer, which closes every backend transport.
+// Close closes the balancer, which closes every backend transport, then cancels
+// the child context derived in DialContext so the keepalive loop stops even
+// after the picker is gone.
 func (c *client) Close() error {
 	defer c.cancel()
 	return c.Picker.Close()

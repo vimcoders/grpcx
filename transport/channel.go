@@ -75,9 +75,10 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 
 // Recv reads one frame: a 4-byte header carrying the payload length, followed
 // by the payload itself. The stream id is not in the frame header; it travels
-// inside the protobuf header frame that Recv returns first. The payload comes
-// from the pool and the caller must putmbuf it. A zero-length frame returns a
-// nil payload.
+// inside the protobuf header frame that Recv returns first. Each of the two
+// reads is armed with its own readTimeout, so a large payload cannot spend the
+// deadline the header was read under. The payload comes from the pool and the
+// caller must putmbuf it. A zero-length frame returns a nil payload.
 func (ch *channel) Recv() ([]byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -117,9 +118,10 @@ func (ch *channel) Recv() ([]byte, error) {
 //
 // With bufsize <= 0 every call goes straight to the connection. Otherwise the
 // frames are appended to a pending write buffer and flushed as soon as it grows
-// past bufsize, or by a timer after flushInterval, whichever comes first. A write
-// that fails is reported as Unavailable; the connection is left in place for the
-// next call to discover.
+// past bufsize, or by a timer after flushInterval, whichever comes first. The
+// timer does not arm a deadline of its own: it writes under the deadline the last
+// Send installed. A write that fails is reported as Unavailable; the connection
+// is left in place for the next call to discover.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -174,7 +176,8 @@ func (ch *channel) Send(p ...[]byte) error {
 // dropped rather than written out, and the flush timer is left running: if it
 // fires after this call its write fails silently against the closed socket.
 // Close takes no lock of its own. The client calls it from sync.Once, after every
-// stream has been cancelled.
+// stream has been cancelled; the server calls it from a defer when the connection
+// ends.
 func (ch *channel) Close() error {
 	return ch.Conn.Close()
 }

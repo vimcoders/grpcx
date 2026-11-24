@@ -30,13 +30,15 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // WithServerReadTimeout sets how long the server waits for the next frame
-// before giving up on the connection.
+// before giving up on the connection. It reaches every accepted connection
+// through transport.WithReadTimeout.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return transport.WithServerReadTimeout(d)
 }
 
 // WithServerWriteTimeout sets how long the server waits for a write to flush
-// before failing the call.
+// before failing the call. It reaches every accepted connection through
+// transport.WithWriteTimeout.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return transport.WithServerWriteTimeout(d)
 }

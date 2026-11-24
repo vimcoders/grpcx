@@ -297,10 +297,10 @@ type sender struct {
 	encoding.Codec
 }
 
-// send writes m on stream streamID: it marshals the call options and m together
-// and writes the header frame followed by the payload frame, in that order, so
-// the peer stays on a frame boundary. streamID always wins over any id carried
-// inside opts, so a caller cannot route the message elsewhere.
+// send writes m on stream streamID: it marshals the call options and m
+// separately, then writes the header frame followed by the payload frame, in
+// that order, so the peer stays on a frame boundary. streamID always wins over
+// any id carried inside opts, so a caller cannot route the message elsewhere.
 func (s *sender) send(streamID uint32, m any, opts ...CallOption) error {
 	options := api.CallOptions{}
 	for _, v := range opts {

@@ -13,6 +13,8 @@ import (
 // connection was built from, and returns the error the caller sees.
 type UnaryClientInterceptor func(ctx context.Context, method string, req any, reply any, balance balancer.Picker, opts ...grpc.CallOption) error
 
-// StreamClientInterceptor runs around a streaming call. grpcx serves unary calls
-// only, so a registered interceptor of this kind is never invoked.
+// StreamClientInterceptor is the streaming counterpart of
+// UnaryClientInterceptor. grpcx carries unary calls only and has no option to
+// install one, so the type is kept for source compatibility and is never
+// invoked.
 type StreamClientInterceptor func(ctx context.Context, desc *grpc.StreamDesc, balance balancer.Picker, method string, opts ...grpc.CallOption) (grpc.ClientStream, error)

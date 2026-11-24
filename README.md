@@ -6,11 +6,21 @@ k8s微服务通信方案，传输层transport部分源码来自k8s容器运行�
 - 兼容 `grpc.ClientConnInterface` 和 `grpc.ServiceDesc`
 - 面向 K8s 微服务设计
 - 连接池
-- 负载均衡 DNS解析
+- 负载均衡默认交给 K8s（DNS 只用于连接池定容）
 - 健康检查
 - 元数据传递 mdtadata.MD
 - 低延迟 1KB echo 在 Intel i5-14600KF (Linux) 单连接 32–256 并行 worker 下平均延迟 8.74–8.88 微秒
 - 高性能 grpcx leads 1.50x–2.50x.
+
+## 负载均衡：默认交给 K8s
+
+grpcx 不做请求级调度，负载均衡默认由 K8s 完成：
+
+- **连接池定容看 DNS**：客户端把服务名解析成几个地址，就建几条连接；解析为空不建池，直接返回 `Unavailable`。
+- **落到哪个 Pod 由 K8s 决定**：连接建立时由 kube-proxy 在 Service 上分发，grpcx 不按 IP 定向拨号，也不在应用层再挑一次 Pod。
+- **健康检查只补数量**：keepalive 周期里 ping 失败的后端会被摘除并补拨，补拨的目标只是让连接数回到解析到的地址数量。
+
+要让连接池跟着 Pod 数量伸缩，用 Headless Service，DNS 直接返回各 Pod 的 IP；普通 ClusterIP Service 的 DNS 通常只返回一个 ClusterIP，此时连接池就是 1 条，Pod 之间的分摊完全依赖 kube-proxy 的连接级分发。
 
 ### 帧格式
 
@@ -91,7 +101,7 @@ grpcx 采用「上层语义全兼容 + 底层传输层替换」的架构设计�
 | **服务端接口层** | `grpc.Server` + `RegisterService()` 注册服务 | `grpcx.Server` + `RegisterService()` 直接接收 `grpc.ServiceDesc` | 编程模型完全对齐，学习成本极低 |
 | **核心RPC调度层** | 基于 HTTP/2 Stream 映射 RPC 调用<br>支持一元 / 客户端流 / 服务端流 / 双向流 | 自研 4 字节长度帧 + protobuf 调用头实现 RPC 调度<br>当前支持一元 RPC，一元语义与 gRPC 完全对齐（流式待实现） | 一元调用语义一致，仅底层流载体不同 |
 | **扩展拦截器层** | 标准一元 / 流式拦截器接口<br>丰富的第三方拦截器生态 | 独立实现拦截器体系<br>服务端一元拦截器，客户端一元拦截器（流式拦截器仅为接口占位）<br>连接级 `transport.Handler` 由 `grpcx.Server` 内嵌，对外暴露单连接的 `Handle` | 设计思想一致，无法直接复用 gRPC 第三方拦截器 |
-| **服务治理层** | 可插拔 Resolver / Balancer<br>支持 etcd / Consul 等多种服务发现<br>丰富的负载均衡策略 | 内置 DNS 服务发现 + 基础负载均衡<br>内置连接池与健康检查 | gRPC 面向通用场景能力更全；grpcx 保留 K8s 内网核心能力 |
+| **服务治理层** | 可插拔 Resolver / Balancer<br>支持 etcd / Consul 等多种服务发现<br>丰富的负载均衡策略 | 内置 DNS 服务发现 + 连接池与健康检查<br>DNS 结果只用于连接池定容，Pod 间分摊交给 K8s | gRPC 面向通用场景能力更全；grpcx 保留 K8s 内网核心能力 |
 | **元数据上下文层** | `grpc/metadata` 基于 HTTP/2 Header 传递 | `grpcx/metadata` 基于协议帧内嵌传递 | 业务使用方式完全一致，仅底层承载载体不同 |
 | **序列化层** | 默认 Protobuf 序列化，支持自定义 Codec | `grpcx/encoding` 模块，默认 Protobuf 序列化 | 序列化协议完全一致，复用 protoc 生成代码 |
 | **传输协议层** | HTTP/2 + gRPC 帧协议<br>标准公开协议，包含完整流控、拥塞控制能力 | 4 字节长度帧 + protobuf 调用头（transport 源自 containerd ttrpc）<br>仅保留核心帧封装与 StreamID 复用 | **最核心差异层**，也是 1.50–2.50 倍性能优势的来源 |

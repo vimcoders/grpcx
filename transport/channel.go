@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -53,12 +52,10 @@ func putmbuf(p []byte) {
 type channel struct {
 	Options
 	net.Conn
-	br        *bufio.Reader
-	bw        net.Buffers
-	t         *time.Timer
-	closed    bool
-	closeOnce sync.Once
-	closeErr  error
+	br     *bufio.Reader
+	bw     net.Buffers
+	t      *time.Timer
+	closed bool
 	sync.Mutex
 }
 
@@ -175,9 +172,8 @@ func (ch *channel) Send(p ...[]byte) error {
 		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
 			// A background flush has no caller to return to; the connection is
-			// closed so the failure surfaces on the next call, and it is logged
-			// so it is not lost entirely.
-			slog.Error("transport: background flush failed", "error", err)
+			// closed so the failure surfaces as Unavailable on the next call
+			// instead of being retried against a socket that already broke.
 			_ = ch.Conn.Close()
 		}
 	})
@@ -186,23 +182,11 @@ func (ch *channel) Send(p ...[]byte) error {
 }
 
 // Close stops the flush timer, writes out whatever batching still holds, then
-// closes the connection. It runs once and every later call returns the same
-// result: the flush timer, a sending goroutine and Close itself all touch the
-// buffer and the timer, so the state is taken under the same lock and the
-// outcome is cached instead of being recomputed against a dead connection.
-// A flush failure is reported as-is; the connection is closed either way.
+// closes the connection. It is called once per channel — the client wraps it in
+// sync.Once — and holds the lock throughout, so it cannot interleave with a Send
+// or with the flush timer callback. The connection is closed on every path, and
+// a flush failure is reported as-is.
 func (ch *channel) Close() error {
-	ch.closeOnce.Do(func() {
-		ch.closeErr = ch.close()
-	})
-	return ch.closeErr
-}
-
-// close is the one-shot body of Close: it must be called under the lock so it
-// cannot interleave with a Send or with the flush timer callback. The connection
-// is closed on every path, so a deadline that cannot be set still leaves the
-// channel shut; the close error itself is not what cost the caller anything.
-func (ch *channel) close() error {
 	ch.Lock()
 	defer ch.Unlock()
 	defer func() { _ = ch.Conn.Close() }()
@@ -214,6 +198,8 @@ func (ch *channel) close() error {
 	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
 		return err
 	}
-	_, werr := ch.bw.WriteTo(ch.Conn)
-	return werr
+	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
+		return err
+	}
+	return nil
 }

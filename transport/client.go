@@ -349,19 +349,23 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close tears the transport down once: it closes every live stream and then the
-// underlying connection. The stream table and the configured stream limit are
-// left as they are: zeroing the limit would lift it instead of ending the
-// transport, so a closed connection would silently accept unlimited streams.
+// Close tears the transport down once: it cancels every live stream, then closes
+// the underlying connection from a defer in the same sync.Once, so a second call
+// is a no-op and nothing is closed twice. The stream table and the configured
+// stream limit are left as they are: zeroing the limit would lift it instead of
+// ending the transport, so a closed connection would silently accept unlimited
+// streams. Closing a connection that is already being thrown away has nothing
+// left to report to, so its error is dropped.
 func (c *client) Close() error {
 	c.Once.Do(func() {
+		defer c.SendCloser.Close()
 		c.Lock()
 		defer c.Unlock()
 		for _, s := range c.streams {
-			// Closing a stream is local bookkeeping; the connection close below
-			// is what reports a problem.
+			// Cancelling a stream is local bookkeeping: the transport is going
+			// away, so a pending call is told so by its own context.
 			_ = s.Close()
 		}
 	})
-	return c.SendCloser.Close()
+	return nil
 }

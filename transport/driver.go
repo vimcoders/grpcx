@@ -24,7 +24,7 @@ const (
 	// frame header and the small payloads that arrive in bursts, because a read
 	// larger than the buffer bypasses it and goes straight into the frame
 	// buffer. Sizing it at messageLengthMax cost 4MB of heap per connection.
-	readBufSize = 64 * 1024
+	readBufSize = 1024 * 1024
 	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
 	// settles on, so it is the shortest useful flush delay.
 	defaultFlushInterval = time.Millisecond

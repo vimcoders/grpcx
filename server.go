@@ -165,7 +165,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 		s.wg.Go(func() {
 			defer s.untrackConn(conn)
 			if err := s.Handle(cancelCtx, conn); err != nil {
-				slog.Error("ListenAndServe", "exited", err.Error())
+				slog.Debug("ListenAndServe: handler exited", "error", err)
 			}
 		})
 	}

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -411,5 +412,32 @@ func TestServerHandleReturnsWhenPeerCloses(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Handle did not return after the peer closed")
+	}
+}
+
+// TestServerReadTimeoutClosesIdleConnection pins that WithServerReadTimeout
+// reaches the connection: a peer that connects and never sends a frame is cut
+// off once the read deadline expires, instead of pinning a handler forever.
+func TestServerReadTimeoutClosesIdleConnection(t *testing.T) {
+	addr := startServer(t,
+		RegisterService(&api.EchoService_ServiceDesc, &echoServer{}),
+		WithServerReadTimeout(50*time.Millisecond),
+	)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial %s: %v", addr, err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	// No frame is written, so only the server's own read timeout can end this:
+	// the close it performs shows up here as EOF well before the 2s deadline.
+	buf := make([]byte, 8)
+	var nerr net.Error
+	if _, err := conn.Read(buf); err == nil {
+		t.Fatal("read on an idle connection succeeded, want the server to close it")
+	} else if errors.As(err, &nerr) && nerr.Timeout() {
+		t.Fatal("the client's own 2s deadline fired, want the server's 50ms read timeout first")
 	}
 }

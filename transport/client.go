@@ -53,6 +53,24 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithReadTimeout sets how long the server waits for the next frame before
+// giving up on the connection. ServerOptions.Handle passes it to every accepted
+// connection's channel; the client side ignores it.
+func WithReadTimeout(d time.Duration) Option {
+	return func(so *Options) {
+		so.readTimeout = d
+	}
+}
+
+// WithWriteTimeout sets how long the server waits for a write to flush before
+// failing the call. ServerOptions.Handle passes it to every accepted
+// connection's channel; the client side ignores it.
+func WithWriteTimeout(d time.Duration) Option {
+	return func(so *Options) {
+		so.writeTimeout = d
+	}
+}
+
 // WithCodec sets the codec used to marshal requests and unmarshal responses.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
@@ -81,8 +99,9 @@ type Options struct {
 	bufsize       int
 }
 
-// Keepalive returns the period at which an idle connection is pinged to keep
-// it alive.
+// Keepalive returns the period at which an idle connection is pinged to keep it
+// alive. It is a fixed multiple of defaultTimeout rather than a configurable
+// field, so every connection is pinged at the same cadence.
 func (o Options) Keepalive() time.Duration {
 	return defaultKeepalive * defaultTimeout
 }
@@ -193,9 +212,11 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 // and derives a cancellable context for it. It fails with
 // codes.ResourceExhausted once maxStreams is reached, and keeps failing after
 // Close has zeroed the limit: zero is the closed marker, so a dead transport
-// never hands out a stream. Call options are ignored here: Invoke and RoundTrip
-// build and marshal the request header themselves, so opts never reach the wire
-// through this path.
+// never hands out a stream. An id is only claimed when the slot is free, so a
+// wrap past MaxUint32 that lands on a live stream is refused rather than
+// overwriting it. Call options are ignored here: Invoke and RoundTrip build and
+// marshal the request header themselves, so opts never reach the wire through
+// this path.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
@@ -278,8 +299,9 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 }
 
 // RoundTrip sends an already framed request — header plus payload — and waits
-// for the matching response. It bypasses the codec, so the caller owns the
-// marshalling of both the header and the payload.
+// for the matching response. The payload is sent as the caller handed it in;
+// the header is re-marshalled here, so it carries this transport's stream id and
+// default timeout, with the caller's deadline folded in when the context has one.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
 	options := cmp.Or(req.Options, &api.CallOptions{})
 	if dl, ok := ctx.Deadline(); ok {

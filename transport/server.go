@@ -70,7 +70,9 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 }
 
 // WithServerReadTimeout sets how long the server waits for the next frame
-// before giving up on the connection.
+// before giving up on the connection. Handle passes it to the frame channel of
+// every accepted connection, where it bounds the header read and the payload read
+// separately.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.readTimeout = d
@@ -78,7 +80,9 @@ func WithServerReadTimeout(d time.Duration) ServerOption {
 }
 
 // WithServerWriteTimeout sets how long the server waits for a write to flush
-// before failing the call.
+// before failing the call. Handle passes it to the frame channel of every
+// accepted connection; a batched flush runs under the deadline the last Send
+// installed.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.writeTimeout = d
@@ -97,7 +101,7 @@ func WithServerBufSize(n int) ServerOption {
 // Handle serves the connection until it breaks: it wraps the connection in a
 // channel and loops dispatching one call at a time through interceptor.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
-	ch := newChannel(c, WithBufSize(so.bufsize))
+	ch := newChannel(c, WithBufSize(so.bufsize), WithReadTimeout(so.readTimeout), WithWriteTimeout(so.writeTimeout))
 	// The connection is being torn down either way, so only the handler's own
 	// error is worth returning.
 	defer func() { _ = ch.Close() }()

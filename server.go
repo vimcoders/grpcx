@@ -63,12 +63,6 @@ type ServiceRegistrar = transport.ServiceRegistrar
 type Server struct {
 	Handler
 	ServiceRegistrar
-	wg sync.WaitGroup
-
-	// listener is written once by the serving goroutine with no lock around it.
-	// Nothing reads it: Close waits on the handler group only, so this field just
-	// records what ListenAndServe bound.
-	listener net.Listener
 }
 
 // NewServer returns a server configured by opts. Options not passed here are
@@ -85,17 +79,12 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 }
 
-// Close waits for the handlers to return and reports nil. It does not stop the
-// serve loop and does not close the connections: the listener keeps accepting,
-// and a handler parked in a read comes back only when its read timeout fires or
-// the peer hangs up—up to the configured read timeout, 30s by default. What
-// stops the loop is ListenAndServe's ctx and the AfterFunc it installs, not this
-// call.
-//
-// Close is safe on a Server that never ran ListenAndServe: there is no handler
-// to wait for, and it returns nil immediately. Every call returns nil.
+// Close reports nil and does nothing else: it does not stop the serve loop, does
+// not close the listener and does not touch any connection. Returning without
+// waiting is deliberate, because handlers can still be in flight when it
+// returns; the wait happens at the end of ListenAndServe instead. Every call
+// returns nil, including on a Server that never served.
 func (s *Server) Close() error {
-	s.wg.Wait()
 	return nil
 }
 
@@ -105,20 +94,27 @@ func (s *Server) Close() error {
 // closed listener then surfaces as the returned error, so a canceled context
 // comes back as net.ErrClosed rather than nil. The ctx also reaches the
 // handlers, so they see the same cancellation.
+//
+// The handlers started here are waited for before the return: the deferred wait
+// runs after the accept loop has exited, so by the time ListenAndServe returns
+// every accepted connection has been served to its end. That wait is also why a
+// handler parked on an idle connection delays the return until its read
+// deadline fires.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	s.listener = listener
 	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
-	defer func() { _ = stop() }()
+	defer stop()
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			return err
 		}
-		s.wg.Go(func() {
+		wg.Go(func() {
 			if err := s.Handle(ctx, conn); err != nil {
 				slog.Debug("listenAndServe: exited", "error", err)
 			}

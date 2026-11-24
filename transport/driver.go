@@ -43,7 +43,7 @@ const (
 	// defaultReadTimeout bounds how long the reader waits for the next frame
 	// before treating the connection as dead. It must stay well above the
 	// keepalive period, or idle connections would be torn down between pings.
-	defaultReadTimeout = 5 * defaultTimeout
+	defaultReadTimeout = 2 * defaultKeepalive
 	// defaultWriteTimeout bounds a single write: Send arms the write deadline on
 	// every call, and the flush timer inherits the deadline left by the last Send.
 	defaultWriteTimeout = defaultTimeout

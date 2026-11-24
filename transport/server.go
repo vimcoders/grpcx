@@ -102,9 +102,9 @@ func WithServerBufSize(n int) ServerOption {
 // channel and loops dispatching one call at a time through interceptor.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	ch := newChannel(c, WithBufSize(so.bufsize), WithReadTimeout(so.readTimeout), WithWriteTimeout(so.writeTimeout))
-	// The connection is being torn down either way, so only the handler's own
-	// error is worth returning.
 	defer func() { _ = ch.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = ch.Close() })
+	defer stop()
 	for {
 		select {
 		case <-ctx.Done():

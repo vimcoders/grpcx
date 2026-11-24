@@ -27,25 +27,22 @@ type rrBuilder struct{}
 
 // Build builds a round robin balancer.
 func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
-	// Create a child context that can be canceled when the balancer is closed.
-	childCtx, cancel := context.WithCancel(ctx)
 	// Create a round robin balancer.
 	var x = RoundRobin{
-		dialContext: func(ctx context.Context) (transport.RoundTripper, error) {
-			return transport.DialContext(ctx, endpoint, opts...)
+		dial: func(childCtx context.Context) (transport.RoundTripper, error) {
+			return transport.DialContext(childCtx, endpoint, opts...)
 		},
-		resolveContext: func(ctx context.Context) (int, error) {
+		resolve: func(childCtx context.Context) (int, error) {
 			resolver := resolver.GetResolver("dns")
-			address, err := resolver.Resolve(ctx, url.URL{Scheme: "dns", Host: endpoint})
+			address, err := resolver.Resolve(childCtx, url.URL{Scheme: "dns", Host: endpoint})
 			if err != nil {
 				return 0, err
 			}
 			return len(address), nil
 		},
-		cancel: cancel,
 	}
 	// Resolve the endpoint to get the addresses.
-	podCount, err := x.resolveContext(childCtx)
+	podCount, err := x.resolve(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +51,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	}
 	// Dial to each address and create a round tripper for each.
 	for range podCount {
-		rt, err := x.dialContext(childCtx)
+		rt, err := x.dial(ctx)
 		if err != nil {
 			// Build is already failing with err; the half-built round robin is
 			// discarded, and its close error cannot change that.
@@ -66,7 +63,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	go func() {
 		// The keepalive loop ends with the balancer's context, so only an
 		// unexpected exit is worth reporting.
-		if err := x.Keepalive(childCtx, opts...); status.Code(err) != codes.Canceled {
+		if err := x.Keepalive(ctx, opts...); status.Code(err) != codes.Canceled {
 			slog.Error("balancer: keepalive exited", "endpoint", endpoint, "error", err)
 		}
 	}()
@@ -76,11 +73,10 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 
 // RoundRobin is a round robin balancer.
 type RoundRobin struct {
-	rts            []transport.RoundTripper
-	count          atomic.Uint32
-	dialContext    func(ctx context.Context) (transport.RoundTripper, error)
-	resolveContext func(ctx context.Context) (int, error)
-	cancel         context.CancelFunc
+	rts     []transport.RoundTripper
+	count   atomic.Uint32
+	dial    func(context.Context) (transport.RoundTripper, error)
+	resolve func(context.Context) (int, error)
 	sync.RWMutex
 }
 
@@ -134,7 +130,7 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 // pass behind Keepalive.
 func (rr *RoundRobin) Ping(ctx context.Context) error {
 	// Resolve the endpoint to get the addresses.
-	podCount, err := rr.resolveContext(ctx)
+	podCount, err := rr.resolve(ctx)
 	if err != nil {
 		return err
 	}
@@ -154,7 +150,7 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 	}
 	// Create new round trippers for any new addresses.
 	for i := len(rts); i < podCount; i++ {
-		rt, err := rr.dialContext(ctx)
+		rt, err := rr.dial(ctx)
 		if err != nil {
 			continue
 		}
@@ -175,9 +171,8 @@ func (rr *RoundRobin) clone() []transport.RoundTripper {
 
 // Close closes the round robin balancer.
 func (rr *RoundRobin) Close() error {
-	// Cancel the context to stop the keepalive goroutine.
-	if rr.cancel != nil {
-		rr.cancel()
+	for _, rt := range rr.clone() {
+		_ = rt.Close()
 	}
 	return nil
 }

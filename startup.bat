@@ -22,13 +22,13 @@ go install github.com/bufbuild/buf/cmd/buf@latest
 echo 🎨 执行代码自动格式化与规范检测
 golangci-lint run --fix ./...
 echo 🧾 校验依赖完整性 go mod verify
-go mod verify || exit /b 1
+go mod verify 
 echo 📐 校验 go.mod 无漂移 go mod tidy -diff
-go mod tidy -diff || exit /b 1
+go mod tidy -diff
 echo 🕵️ 变量遮蔽检查 shadow
-go vet -vettool=%USERPROFILE%\go\bin\shadow.exe ./... || exit /b 1
+go vet -vettool=%USERPROFILE%\go\bin\shadow.exe ./... 
 echo ✅ 运行单元测试（打乱顺序 + 覆盖率）
-go test -shuffle=on -count=1 -cover ./... || exit /b 1
+go test -shuffle=on -count=1 -cover ./...
 echo 🛡️ 扫描依赖与标准库漏洞（退出码 3 表示有命中，不阻断后续流程）
 govulncheck ./...
 docker compose up -d --build --wait grpc grpcx

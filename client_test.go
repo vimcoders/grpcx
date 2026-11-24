@@ -98,25 +98,34 @@ func TestClientNewStreamIsUnimplemented(t *testing.T) {
 	}
 }
 
-// TestClientCloseRejectsLaterCalls covers what Close leaves behind: the
-// balancer still holds its round trippers, so the pick succeeds, and the
-// transport refuses the call because Close zeroed its stream limit.
-func TestClientCloseRejectsLaterCalls(t *testing.T) {
+// TestClientCloseIsIdempotent pins that Close can run more than once: it only
+// cancels the context and returns, so repeated calls report nil and the caller
+// does not need a flag of its own.
+func TestClientCloseIsIdempotent(t *testing.T) {
 	h := startServer(t, withEcho, WithServerReadTimeout(shortRead))
-	cc := dialClient(t, h)
-
-	if err := cc.Close(); err != nil {
-		t.Fatalf("Close = %v, want nil", err)
+	cc, err := Dial(h.addr)
+	if err != nil {
+		t.Fatalf("dial %s: %v", h.addr, err)
 	}
-	if _, err := echoClient(cc).Echo(context.Background(), &api.EchoRequest{Message: "after"}); err == nil {
-		t.Fatalf("Echo after Close succeeded, want a failure")
+
+	for i := range 2 {
+		if err := cc.Close(); err != nil {
+			t.Fatalf("Close #%d = %v, want nil", i+1, err)
+		}
 	}
 }
 
-// TestClientDialUnreachableEndpointFails pins that Dial reports a refusing
-// endpoint instead of returning a client that cannot serve.
-func TestClientDialUnreachableEndpointFails(t *testing.T) {
-	if _, err := Dial("127.0.0.1:1"); err == nil {
-		t.Fatalf("Dial on a closed port = nil, want a dial error")
+// TestClientDialUnreachableReturnsClient pins the tolerant dial contract: a
+// resolvable endpoint with nothing listening still yields a client, and the
+// failure surfaces on the first call as an empty-pool pick.
+func TestClientDialUnreachableReturnsClient(t *testing.T) {
+	cc, err := Dial("127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("Dial on a closed port = %v, want nil", err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+
+	if _, err := echoClient(cc).Echo(context.Background(), &api.EchoRequest{Message: "hi"}); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Echo on an empty pool code = %v (err = %v), want ResourceExhausted", status.Code(err), err)
 	}
 }

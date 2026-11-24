@@ -12,6 +12,7 @@ import (
 	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
@@ -114,15 +115,15 @@ func TestServerHandlesConcurrentCalls(t *testing.T) {
 	}
 }
 
-// TestServerCancelsServeLoopWithErrClosed pins the shutdown contract: the serve
-// loop has no close signal of its own, so a canceled context closes the
-// listener through the AfterFunc and the resulting Accept error is what
-// ListenAndServe returns.
-func TestServerCancelsServeLoopWithErrClosed(t *testing.T) {
+// TestServerCancelReturnsNil pins the shutdown contract: the serve loop has no
+// close signal of its own, so a canceled context closes the listener through the
+// AfterFunc, and the resulting net.ErrClosed is folded into nil. A cancel is a
+// clean stop, not an error the caller has to explain.
+func TestServerCancelReturnsNil(t *testing.T) {
 	h := startServer(t, withEcho, WithServerReadTimeout(shortRead))
 
-	if err := h.stop(t); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("ListenAndServe = %v, want net.ErrClosed", err)
+	if err := h.stop(t); err != nil {
+		t.Fatalf("ListenAndServe after cancel = %v, want nil", err)
 	}
 }
 
@@ -137,6 +138,54 @@ func TestServerCancelStopsAccepting(t *testing.T) {
 	if err == nil {
 		_ = conn.Close()
 		t.Fatalf("dial %s after cancel succeeded, want the listener to be closed", h.addr)
+	}
+}
+
+// TestServerReportsBindError pins that a listen failure is returned as itself,
+// not folded into the net.ErrClosed shutdown path.
+func TestServerReportsBindError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	if err := NewServer().ListenAndServe(context.Background(), ln.Addr().String()); err == nil {
+		t.Fatalf("ListenAndServe on a taken port = nil, want a bind error")
+	} else if errors.Is(err, net.ErrClosed) {
+		t.Fatalf("bind error = %v, want the listen error rather than net.ErrClosed", err)
+	}
+}
+
+// TestServerInterceptorSeesFullMethod pins that a server interceptor installed
+// at construction time is applied to every call and receives the full method
+// name, which is how middleware dispatches.
+func TestServerInterceptorSeesFullMethod(t *testing.T) {
+	methods := make(chan string, 1)
+	h := startServer(t, withEcho,
+		WithServerReadTimeout(shortRead),
+		UnaryServerInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			// The handler runs in its own goroutine, so the method name travels
+			// back over a channel rather than through a shared variable.
+			select {
+			case methods <- info.FullMethod:
+			default:
+			}
+			return handler(ctx, req)
+		}),
+	)
+	cc := dialClient(t, h)
+
+	if _, err := echoClient(cc).Echo(context.Background(), &api.EchoRequest{Message: "hi"}); err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+	select {
+	case got := <-methods:
+		if got != api.EchoService_Echo_FullMethodName {
+			t.Fatalf("server interceptor saw %q, want %q", got, api.EchoService_Echo_FullMethodName)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server interceptor was not called within 1s")
 	}
 }
 
@@ -179,8 +228,8 @@ func TestServerCancelWaitsForHandlers(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("ListenAndServe did not return within 2s after the handler finished")
 	}
-	if err := *h.serveErr; !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("ListenAndServe = %v, want net.ErrClosed", err)
+	if err := *h.serveErr; err != nil {
+		t.Fatalf("ListenAndServe = %v, want nil", err)
 	}
 	select {
 	case err := <-callDone:
@@ -208,107 +257,10 @@ func TestServerCancelReturnsWithIdleConnection(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := h.stop(t); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("ListenAndServe = %v, want net.ErrClosed", err)
+	if err := h.stop(t); err != nil {
+		t.Fatalf("ListenAndServe = %v, want nil", err)
 	}
 	if elapsed := time.Since(start); elapsed > 8*shortRead {
 		t.Fatalf("ListenAndServe took %v with an idle connection, want it back within %v", elapsed, 8*shortRead)
-	}
-}
-
-// TestServerCloseOnFreshServerReturnsNil covers the documented case: Close does
-// nothing, so a Server that never ran ListenAndServe is as fine as a serving one.
-func TestServerCloseOnFreshServerReturnsNil(t *testing.T) {
-	if err := NewServer().Close(); err != nil {
-		t.Fatalf("Close on a fresh server = %v, want nil", err)
-	}
-}
-
-// TestServerCloseIsIdempotent pins that repeated Close calls all return nil.
-// Close is a no-op, so the calls cannot interfere with each other or with the
-// serve loop.
-func TestServerCloseIsIdempotent(t *testing.T) {
-	h := startServer(t, withEcho, WithServerReadTimeout(shortRead))
-
-	for i := range 2 {
-		if err := h.srv.Close(); err != nil {
-			t.Fatalf("Close #%d = %v, want nil", i+1, err)
-		}
-	}
-}
-
-// TestServerCloseDoesNotStopAcceptLoop covers what Close deliberately leaves
-// alone: it closes nothing, so the listener still answers and a live connection
-// is not cut off. The connection opened here is closed right away and unblocks
-// the handler with EOF.
-func TestServerCloseDoesNotStopAcceptLoop(t *testing.T) {
-	h := startServer(t, withEcho, WithServerReadTimeout(shortRead))
-	if err := h.srv.Close(); err != nil {
-		t.Fatalf("Close = %v, want nil", err)
-	}
-
-	conn, err := net.Dial("tcp", h.addr)
-	if err != nil {
-		t.Fatalf("listener stopped accepting after Close: %v", err)
-	}
-	_ = conn.Close()
-}
-
-// TestServerCloseDoesNotWaitForHandlers pins where the shutdown work moved:
-// Close closes nothing and waits for nothing, so it returns at once even with a
-// handler in flight. The wait lives at the end of ListenAndServe instead.
-func TestServerCloseDoesNotWaitForHandlers(t *testing.T) {
-	entered := make(chan struct{}, 1)
-	gate := make(chan struct{})
-
-	h := startServer(t, withEcho,
-		WithServerReadTimeout(shortRead),
-		UnaryServerInterceptor(blockingInterceptor(entered, gate)),
-	)
-	cc := dialClient(t, h)
-
-	callDone := make(chan error, 1)
-	go func() {
-		_, err := echoClient(cc).Echo(context.Background(), &api.EchoRequest{Message: "blocked"})
-		callDone <- err
-	}()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("server interceptor did not run within 2s")
-	}
-
-	start := time.Now()
-	if err := h.srv.Close(); err != nil {
-		t.Fatalf("Close = %v, want nil", err)
-	}
-	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
-		t.Fatalf("Close took %v with a handler in flight, want it to return at once", elapsed)
-	}
-
-	close(gate)
-	select {
-	case err := <-callDone:
-		if err != nil {
-			t.Fatalf("the blocked call returned %v, want nil", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("the blocked call did not return within 2s")
-	}
-}
-
-// TestServerReportsBindError pins that a listen failure is returned as itself,
-// not folded into the net.ErrClosed shutdown path.
-func TestServerReportsBindError(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	if err := NewServer().ListenAndServe(context.Background(), ln.Addr().String()); err == nil {
-		t.Fatalf("ListenAndServe on a taken port = nil, want a bind error")
-	} else if errors.Is(err, net.ErrClosed) {
-		t.Fatalf("bind error = %v, want the listen error rather than net.ErrClosed", err)
 	}
 }

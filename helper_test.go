@@ -62,13 +62,10 @@ func freeAddr(t *testing.T) string {
 // startServer runs a Server on a reserved loopback address. register, when not
 // nil, installs the service before the loop starts.
 //
-// Cleanup cancels the serve loop and waits for ListenAndServe to return. Close
-// is called as well, because it is how a server is shut down, but it is a no-op:
-// the handler group now lives inside ListenAndServe, whose deferred wait runs
-// once the accept loop has exited, so its Wait can never overlap an Add from a
-// freshly accepted connection. A test that stops the loop itself with stop can
-// still rely on this cleanup, because cancel is idempotent and the done channel
-// is closed.
+// Cleanup cancels the serve loop and waits for ListenAndServe to return, which
+// also waits for the handlers it started. Server has no Close of its own: the
+// listener is closed through the context, and the handler group is waited for
+// at the end of ListenAndServe.
 func startServer(t *testing.T, register func(*Server), opts ...ServerOption) *serveHandle {
 	t.Helper()
 	srv := NewServer(opts...)
@@ -92,7 +89,6 @@ func startServer(t *testing.T, register func(*Server), opts ...ServerOption) *se
 		case <-time.After(2 * time.Second):
 			t.Log("ListenAndServe did not return within 2s")
 		}
-		_ = srv.Close()
 	})
 	return h
 }
@@ -132,9 +128,10 @@ func (h *serveHandle) waitListening(t *testing.T) {
 }
 
 // stop cancels the serve loop and returns the error ListenAndServe ended with.
-// The listener is closed through the context, so a canceled loop reports
-// net.ErrClosed rather than nil. ListenAndServe waits for its handlers before it
-// returns, so this call also means every handler has finished.
+// The listener is closed through the context, and canceling is a clean shutdown,
+// so a canceled loop reports nil rather than net.ErrClosed. ListenAndServe waits
+// for its handlers before it returns, so this call also means every handler has
+// finished.
 func (h *serveHandle) stop(t *testing.T) error {
 	t.Helper()
 	h.cancel()

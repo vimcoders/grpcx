@@ -91,12 +91,26 @@ func TestServerTimeoutOptionsAreStored(t *testing.T) {
 	}
 }
 
-// TestKeepaliveIsThreeCallTimeouts pins Keepalive to a multiple of the default
-// timeout instead of a fixed duration, so raising the timeout also raises the
-// ping period.
-func TestKeepaliveIsThreeCallTimeouts(t *testing.T) {
-	o := DefaultOptions()
-	if got, want := o.Keepalive(), defaultKeepalive*defaultTimeout; got != want {
+// TestDefaultReadTimeoutExceedsKeepalive pins the invariant the constant
+// documents: the idle read deadline must stay well above the keepalive period,
+// or an idle connection would be torn down between two pings. Both values are
+// durations derived from defaultTimeout, so a tuning change on either side is
+// caught here.
+func TestDefaultReadTimeoutExceedsKeepalive(t *testing.T) {
+	keepalive := DefaultOptions().Keepalive()
+	if defaultReadTimeout <= keepalive {
+		t.Fatalf("defaultReadTimeout = %v, keepalive = %v: the read deadline must stay above the ping period", defaultReadTimeout, keepalive)
+	}
+	if keepalive != 3*defaultTimeout {
+		t.Fatalf("Keepalive() = %v, want %v", keepalive, 3*defaultTimeout)
+	}
+}
+
+// TestKeepaliveIsAFixedMultipleOfTimeout pins that Keepalive is derived from
+// defaultTimeout rather than being an independent knob, so raising the timeout
+// raises the ping period with it.
+func TestKeepaliveIsAFixedMultipleOfTimeout(t *testing.T) {
+	if got, want := DefaultOptions().Keepalive(), defaultKeepalive; got != want {
 		t.Errorf("Keepalive() = %v, want %v", got, want)
 	}
 }

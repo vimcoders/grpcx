@@ -128,6 +128,7 @@ func startServer(t *testing.T, opts ...ServerOption) (*Server, string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe(ctx, addr) }()
+	waitListening(t, srv, addr, done)
 
 	t.Cleanup(func() {
 		cancel()
@@ -142,6 +143,34 @@ func startServer(t *testing.T, opts ...ServerOption) (*Server, string) {
 		}
 	})
 	return srv, addr
+}
+
+// waitListening blocks until addr accepts connections. freeAddr only reserves
+// the port and releases it, and ListenAndServe binds inside its own goroutine,
+// so a dial issued right after startServer can reach a port nobody listens on
+// yet. The listener field is published once net.Listen has returned — at that
+// point the socket is already listening — so waiting on it is a readiness
+// signal that costs no probe connection.
+func waitListening(t *testing.T, srv *Server, addr string, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		srv.mu.Lock()
+		listening := srv.listener != nil
+		srv.mu.Unlock()
+		if listening {
+			return
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("ListenAndServe on %s returned before it listened: %v", addr, err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("address %s did not start listening within 2s", addr)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // dialClient connects to addr and closes the client when the test ends.

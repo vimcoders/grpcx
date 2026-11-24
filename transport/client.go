@@ -103,7 +103,7 @@ type Options struct {
 // alive. It is a fixed multiple of defaultTimeout rather than a configurable
 // field, so every connection is pinged at the same cadence.
 func (o Options) Keepalive() time.Duration {
-	return defaultKeepalive * defaultTimeout
+	return defaultKeepalive
 }
 
 // Timeout returns the default call timeout.
@@ -221,7 +221,11 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	c.Lock()
 	defer c.Unlock()
 	// maxStreams is never zero while the transport is open — WithMaxStreams
-	// replaces zero with the default — so a zero limit can only come from Close.
+	// replaces zero with the default — so a zero limit can only come from Close,
+	// and a call on a closed transport fails instead of allocating a stream.
+	if c.maxStreams == 0 {
+		return nil, status.Unavailable.Err()
+	}
 	if len(c.streams) >= int(c.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}

@@ -67,27 +67,22 @@ func WithBufSize(n int) Option {
 }
 
 // client is the ClientConnInterface implementation: it holds the codec, the
-// unary interceptor, the transport options, the balancer picker and the cancel
-// function that stops the balancer's keepalive loop.
+// unary interceptor, the transport options and the balancer picker. The
+// picker's Close is what stops the keepalive loop, so the client keeps no cancel
+// function of its own.
 type client struct {
 	balancer.Picker
 	encoding.Codec
 	unaryClientInterceptor UnaryClientInterceptor
 	opts                   []transport.Option
-	cancel                 context.CancelFunc // Cancelled on close.
 }
 
 // DialContext builds a client for endpoint: it installs the default unary
-// interceptor, applies the options, derives a child context that Close cancels,
-// dials through the balancer and keeps the resulting picker.
+// interceptor, applies the options, dials through the balancer under the caller's
+// ctx and keeps the resulting picker.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
-	// The child context lives as long as the client: Close cancels it to stop
-	// the keepalive loop, and the balancer's own dial and resolve calls run
-	// under it.
-	childCtx, cancel := context.WithCancel(ctx)
 	c := client{
-		cancel: cancel,
-		Codec:  encoding.GetCodec(encoding.Name),
+		Codec: encoding.GetCodec(encoding.Name),
 		unaryClientInterceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
 			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
 			if err != nil {
@@ -100,7 +95,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 		o(&c)
 	}
 	c.opts = append(c.opts, transport.WithCodec(c.Codec))
-	picker, err := balancer.DialContext(childCtx, endpoint, c.opts...)
+	picker, err := balancer.DialContext(ctx, endpoint, c.opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,10 +137,9 @@ func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 	return nil, status.Unimplemented.Err()
 }
 
-// Close closes the balancer, which closes every backend transport, then cancels
-// the child context derived in DialContext so the keepalive loop stops even
-// after the picker is gone.
+// Close closes the picker, which cancels the balancer's context. The keepalive
+// loop returns on that cancel and closes every backend transport it holds, so
+// Close itself does not block on the connections.
 func (c *client) Close() error {
-	defer c.cancel()
 	return c.Picker.Close()
 }

@@ -25,6 +25,7 @@ const (
 type rrBuilder struct {
 	dial    func(context.Context) (transport.RoundTripper, error)
 	resolve func(context.Context) ([]resolver.Address, error)
+	cancel  context.CancelFunc // Cancelled on close.
 }
 
 // Build builds a round robin balancer.
@@ -33,25 +34,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 	var x = RoundRobin{
 		dial:    b.dial,
 		resolve: b.resolve,
-	}
-	// Resolve the endpoint to get the addresses.
-	ips, err := x.resolve(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if len(ips) == 0 {
-		return nil, status.Unavailable.Err()
-	}
-	// Dial to each address and create a round tripper for each.
-	for range ips {
-		rt, err := x.dial(ctx)
-		if err != nil {
-			// Build is already failing with err; the half-built round robin is
-			// discarded, and its close error cannot change that.
-			_ = x.Close()
-			return nil, err
-		}
-		x.rts = append(x.rts, rt)
+		cancel:  b.cancel,
 	}
 	go func() {
 		// The keepalive loop ends with the balancer's context, so only an
@@ -59,7 +42,13 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 		if err := x.Keepalive(ctx, opts...); err != nil {
 			slog.Debug("balancer: keepalive exited", "endpoint", endpoint, "error", err)
 		}
+		for _, rt := range x.clone() {
+			_ = rt.Close()
+		}
 	}()
+	if err := x.Ping(ctx); err != nil {
+		return nil, err
+	}
 	// Return the round robin balancer.
 	return &x, nil
 }
@@ -70,6 +59,7 @@ type RoundRobin struct {
 	step    atomic.Uint32
 	dial    func(context.Context) (transport.RoundTripper, error)
 	resolve func(context.Context) ([]resolver.Address, error)
+	cancel  context.CancelFunc // Cancelled on close.
 	sync.RWMutex
 }
 
@@ -89,7 +79,9 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 // endpoint to the number of backends, dials one round tripper per backend and
 // starts the keepalive loop under ctx.
 func DialContext(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
+	childCtx, cancel := context.WithCancel(ctx)
 	b := rrBuilder{
+		cancel: cancel,
 		dial: func(childCtx context.Context) (transport.RoundTripper, error) {
 			return transport.DialContext(childCtx, endpoint, opts...)
 		},
@@ -102,8 +94,9 @@ func DialContext(ctx context.Context, endpoint string, opts ...transport.Option)
 			return address, nil
 		},
 	}
-	p, err := b.Build(ctx, endpoint, opts...)
+	p, err := b.Build(childCtx, endpoint, opts...)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	return p, nil
@@ -178,13 +171,14 @@ func (rr *RoundRobin) clone() []transport.RoundTripper {
 	return append([]transport.RoundTripper{}, rr.rts...)
 }
 
-// Close closes every backend round tripper it currently holds. It takes a
-// snapshot first, so a concurrent Ping replacing the slice cannot race it, and a
-// second call closes the remaining backends again only if one was added in
-// between.
+// Close stops the balancer by cancelling its context. It does not close the
+// backend round trippers itself: the keepalive loop closes every one it holds
+// after the loop returns, so the connections are torn down by the goroutine that
+// owned them, without racing a concurrent Ping. Close is safe to call more than
+// once, and returns nil either way.
 func (rr *RoundRobin) Close() error {
-	for _, rt := range rr.clone() {
-		_ = rt.Close()
+	if rr.cancel != nil {
+		rr.cancel()
 	}
 	return nil
 }

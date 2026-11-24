@@ -43,13 +43,14 @@ const (
 	// defaultReadTimeout bounds how long the reader waits for the next frame
 	// before treating the connection as dead. It must stay well above the
 	// keepalive period, or idle connections would be torn down between pings.
-	defaultReadTimeout = 10 * defaultTimeout
+	defaultReadTimeout = 5 * defaultTimeout
 	// defaultWriteTimeout bounds a single write: Send arms the write deadline on
 	// every call, and the flush timer inherits the deadline left by the last Send.
 	defaultWriteTimeout = defaultTimeout
-	// defaultKeepalive is the idle period, in units of defaultTimeout, at which
-	// the round robin balancer pings a connection.
-	defaultKeepalive = 3
+	// defaultKeepalive is the idle period at which the round robin balancer pings
+	// a connection. It is three call timeouts, which stays below the read timeout
+	// so an idle connection is pinged before the reader gives up on it.
+	defaultKeepalive = 3 * defaultTimeout
 )
 
 // RoundTripper is the client-side transport: it dials a connection, dispatches

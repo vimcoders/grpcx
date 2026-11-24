@@ -2,6 +2,7 @@ package grpcx
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
@@ -79,15 +80,6 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 }
 
-// Close reports nil and does nothing else: it does not stop the serve loop, does
-// not close the listener and does not touch any connection. Returning without
-// waiting is deliberate, because handlers can still be in flight when it
-// returns; the wait happens at the end of ListenAndServe instead. Every call
-// returns nil, including on a Server that never served.
-func (s *Server) Close() error {
-	return nil
-}
-
 // ListenAndServe accepts connections on addr and serves each one in its own
 // goroutine until the listener fails or ctx is canceled. An AfterFunc closes the
 // listener when ctx is done, which is what wakes the loop out of Accept; the
@@ -109,10 +101,12 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	defer stop()
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	defer func() { _ = s.Close() }()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 		wg.Go(func() {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -444,6 +446,138 @@ func TestBuildClosesHalfBuiltBackendsOnDialError(t *testing.T) {
 	}
 	if got := first.closeCount(); got != 1 {
 		t.Fatalf("half-built backend closed %d times, want 1", got)
+	}
+}
+
+// listenLoopback starts a TCP listener on 127.0.0.1 and returns it with its
+// address. An IP literal resolves to exactly one address, so the pool size this
+// test asserts does not depend on the host's DNS answers.
+func listenLoopback(t *testing.T) (net.Listener, string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen on loopback: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln, ln.Addr().String()
+}
+
+// TestRoundRobinKeepalivePingsOnTick pins the ping cadence: after one keepalive
+// period the loop pings the pool, and a ping that fails only drops and replaces
+// its backend instead of stopping the loop. The period is fixed at three call
+// timeouts (9s) and is not tunable through an Option, so this test is skipped
+// under -short.
+func TestRoundRobinKeepalivePingsOnTick(t *testing.T) {
+	if testing.Short() {
+		t.Skip("keepalive period is 9s, too slow for -short")
+	}
+	dead := &fakeRT{name: "dead", pingErr: status.Unavailable.Err()}
+	rr := newTestRoundRobin(
+		[]transport.RoundTripper{dead},
+		podAddrs(1),
+		func(context.Context) (transport.RoundTripper, error) { return &fakeRT{name: "replacement"}, nil },
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan error, 1)
+	go func() { done <- rr.Keepalive(ctx, transport.WithMaxStreams(16)) }()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for dead.pingCount() == 0 {
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("Keepalive did not ping within 15s")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The failed ping dropped the dead backend and dialed the replacement, so
+	// the loop is still running with a full pool.
+	if got := len(rr.clone()); got != 1 {
+		t.Fatalf("pool size after a failed ping = %d, want 1", got)
+	}
+	if got := dead.closeCount(); got != 1 {
+		t.Fatalf("unresponsive backend closed %d times, want 1", got)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if statusCodeOf(err) != codes.Canceled {
+			t.Fatalf("Keepalive after cancel = %v, want Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Keepalive did not return within 1s of cancel")
+	}
+}
+
+// TestDialContextBuildsBalancerForReachableEndpoint pins the wiring DialContext
+// owns: the real DNS resolver turns an IP literal into one address, the real
+// dial opens one TCP connection, and the returned picker serves picks over it.
+func TestDialContextBuildsBalancerForReachableEndpoint(t *testing.T) {
+	ln, addr := listenLoopback(t)
+
+	accepted := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		close(accepted)
+		defer func() { _ = conn.Close() }()
+		// Drain until the client closes, so its receive loop exits cleanly
+		// instead of tripping over a reset connection.
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+
+	picker, err := DialContext(t.Context(), addr)
+	if err != nil {
+		t.Fatalf("DialContext(%q): %v", addr, err)
+	}
+	defer func() { _ = picker.Close() }()
+
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("DialContext did not open a connection within 1s")
+	}
+	rt, err := picker.Pick(t.Context(), PickInfo{})
+	if err != nil {
+		t.Fatalf("Pick after DialContext: %v", err)
+	}
+	if rt == nil {
+		t.Fatal("Pick after DialContext = nil round tripper")
+	}
+}
+
+// TestDialContextReportsDialError pins the failure branch: a resolvable
+// endpoint with nothing listening makes DialContext return the dial error and
+// no picker.
+func TestDialContextReportsDialError(t *testing.T) {
+	ln, addr := listenLoopback(t)
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	picker, err := DialContext(t.Context(), addr)
+	if err == nil {
+		_ = picker.Close()
+		t.Fatalf("DialContext(%q) = nil error, want a dial error", addr)
+	}
+	if picker != nil {
+		t.Fatalf("DialContext(%q) = %v, want nil picker", addr, picker)
+	}
+}
+
+// TestDialContextReportsResolveError pins the resolve branch: an empty endpoint
+// fails in the DNS closure before any dial, and the error reaches the caller.
+func TestDialContextReportsResolveError(t *testing.T) {
+	picker, err := DialContext(t.Context(), "")
+	if err == nil {
+		_ = picker.Close()
+		t.Fatal("DialContext on an empty endpoint = nil error, want a resolve error")
+	}
+	if picker != nil {
+		t.Fatalf("DialContext on an empty endpoint = %v, want nil picker", picker)
 	}
 }
 

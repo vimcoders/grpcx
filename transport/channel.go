@@ -52,10 +52,9 @@ func putmbuf(p []byte) {
 type channel struct {
 	Options
 	net.Conn
-	br     *bufio.Reader
-	bw     net.Buffers
-	t      *time.Timer
-	closed bool
+	br *bufio.Reader
+	bw net.Buffers
+	t  *time.Timer
 	sync.Mutex
 }
 
@@ -82,7 +81,7 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 func (ch *channel) Recv() ([]byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
-	if err := ch.Conn.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
+	if err := ch.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
 		return nil, err
 	}
 
@@ -97,6 +96,9 @@ func (ch *channel) Recv() ([]byte, error) {
 	}
 
 	if h > 0 {
+		if err := ch.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
+			return nil, err
+		}
 		payload := getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, payload); err != nil {
 			putmbuf(payload)
@@ -111,11 +113,13 @@ func (ch *channel) Recv() ([]byte, error) {
 // Send writes the given byte slices as one or more frames, each prefixed with
 // a 4-byte payload length. Callers pass the header slice and the payload slice
 // as separate frames; the stream id lives in the header slice, not the frame
-// header.
+// header. Every call arms the write deadline before it touches the connection.
 //
 // With bufsize <= 0 every call goes straight to the connection. Otherwise the
 // frames are appended to a pending write buffer and flushed as soon as it grows
-// past bufsize, or by a timer after flushInterval, whichever comes first.
+// past bufsize, or by a timer after flushInterval, whichever comes first. A write
+// that fails is reported as Unavailable; the connection is left in place for the
+// next call to discover.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -129,27 +133,17 @@ func (ch *channel) Send(p ...[]byte) error {
 
 	ch.Lock()
 	defer ch.Unlock()
-	// A closed channel keeps no frame: buffering one would let Send report
-	// success for data that the flush timer can only fail to write later.
-	if ch.closed {
-		return errors.Join(net.ErrClosed, status.Canceled.Err())
-	}
 	var n int
 	ch.bw = append(ch.bw, bw...)
 	for _, b := range ch.bw {
 		n += len(b)
 	}
+	if err := ch.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
+		return err
+	}
 
 	if n >= ch.bufsize {
-		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-			return err
-		}
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-			// A frame that never reached the wire is a failed call, not a
-			// successful one. Report the write error as Unavailable and close the
-			// connection, so neither this call nor the next one is told a
-			// truncated frame was delivered.
-			_ = ch.Conn.Close()
 			return errors.Join(err, status.Unavailable.Err())
 		}
 		if ch.t != nil {
@@ -166,40 +160,21 @@ func (ch *channel) Send(p ...[]byte) error {
 	ch.t = time.AfterFunc(ch.flushInterval, func() {
 		ch.Lock()
 		defer ch.Unlock()
-		if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-			_ = ch.Conn.Close()
-			return
-		}
+		// The timer has nobody to report to, so a failed flush ends here: the
+		// socket is left open and the next Send is the one that sees it broke.
 		if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-			// A background flush has no caller to return to; the connection is
-			// closed so the failure surfaces as Unavailable on the next call
-			// instead of being retried against a socket that already broke.
-			_ = ch.Conn.Close()
+			return
 		}
 	})
 
 	return nil
 }
 
-// Close stops the flush timer, writes out whatever batching still holds, then
-// closes the connection. It is called once per channel — the client wraps it in
-// sync.Once — and holds the lock throughout, so it cannot interleave with a Send
-// or with the flush timer callback. The connection is closed on every path, and
-// a flush failure is reported as-is.
+// Close closes the connection. Frames still sitting in the batch buffer are
+// dropped rather than written out, and the flush timer is left running: if it
+// fires after this call its write fails silently against the closed socket.
+// Close takes no lock of its own. The client calls it from sync.Once, after every
+// stream has been cancelled.
 func (ch *channel) Close() error {
-	ch.Lock()
-	defer ch.Unlock()
-	defer func() { _ = ch.Conn.Close() }()
-	if ch.t != nil {
-		ch.t.Stop()
-		ch.t = nil
-	}
-	ch.closed = true
-	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-		return err
-	}
-	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return err
-	}
-	return nil
+	return ch.Conn.Close()
 }

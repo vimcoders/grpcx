@@ -18,8 +18,6 @@ package transport
 import (
 	"cmp"
 	"context"
-	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -144,25 +142,11 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		o(&rt.Options)
 	}
 	go func() {
-		if err := rt.Handle(ctx, ch); !errExpectedExit(err) {
-			slog.Error("transport: receive loop exited", "endpoint", endpoint, "error", err)
+		if err := rt.Handle(ctx, ch); err != nil {
+			slog.Debug("transport: receive loop exited", "endpoint", endpoint, "error", err)
 		}
 	}()
 	return rt, nil
-}
-
-// errExpectedExit reports whether err is a normal way for a connection to end:
-// the peer closed it, the transport was closed from our side, or the context it
-// ran under was canceled. Anything else is worth logging, because the receive
-// loop stopping means no reply on that connection can be delivered any more.
-func errExpectedExit(err error) bool {
-	if err == nil {
-		return true
-	}
-	return errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, context.Canceled) ||
-		status.Code(err) == codes.Canceled
 }
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
@@ -367,8 +351,6 @@ func (c *client) Close() error {
 		c.Lock()
 		defer c.Unlock()
 		for _, s := range c.streams {
-			// Cancelling a stream is local bookkeeping: the transport is going
-			// away, so a pending call is told so by its own context.
 			_ = s.Close()
 		}
 		// Zero is the closed marker, not a "no cap" request: createStream compares

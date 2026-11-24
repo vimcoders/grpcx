@@ -42,7 +42,8 @@ const (
 	// before treating the connection as dead. It must stay well above the
 	// keepalive period, or idle connections would be torn down between pings.
 	defaultReadTimeout = 10 * defaultTimeout
-	// defaultWriteTimeout bounds a single flush.
+	// defaultWriteTimeout bounds a single write: Send arms the write deadline on
+	// every call, and the flush timer inherits the deadline left by the last Send.
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the idle period, in units of defaultTimeout, at which
 	// the round robin balancer pings a connection.
@@ -76,8 +77,8 @@ type Recver interface {
 	Recv() ([]byte, error)
 }
 
-// SendCloser is a Sender that also closes the connection, flushing whatever
-// batching still holds before it does.
+// SendCloser is a Sender that also closes the connection. Frames still held in
+// the send buffer are dropped at that point rather than written out first.
 type SendCloser interface {
 	Sender
 	io.Closer

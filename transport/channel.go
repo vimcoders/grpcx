@@ -199,23 +199,21 @@ func (ch *channel) Close() error {
 }
 
 // close is the one-shot body of Close: it must be called under the lock so it
-// cannot interleave with a Send or with the flush timer callback.
+// cannot interleave with a Send or with the flush timer callback. The connection
+// is closed on every path, so a deadline that cannot be set still leaves the
+// channel shut; the close error itself is not what cost the caller anything.
 func (ch *channel) close() error {
 	ch.Lock()
 	defer ch.Unlock()
+	defer func() { _ = ch.Conn.Close() }()
 	if ch.t != nil {
 		ch.t.Stop()
 		ch.t = nil
 	}
 	ch.closed = true
 	if err := ch.Conn.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-		_ = ch.Conn.Close()
 		return err
 	}
 	_, werr := ch.bw.WriteTo(ch.Conn)
-	cerr := ch.Conn.Close()
-	if werr != nil {
-		return werr
-	}
-	return cerr
+	return werr
 }

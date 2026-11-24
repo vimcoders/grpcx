@@ -109,7 +109,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	defer stop()
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

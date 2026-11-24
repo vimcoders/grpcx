@@ -9,6 +9,7 @@ import (
 	"github.com/vimcoders/grpcx/balancer"
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
+	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
@@ -37,14 +38,6 @@ func WithCodec(codec encoding.Codec) Option {
 func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *client) {
 		c.unaryClientInterceptor = i
-	}
-}
-
-// WithStreamClientInterceptor wraps every stream call with i. grpcx carries
-// unary calls only, so this exists for interface compatibility.
-func WithStreamClientInterceptor(i StreamClientInterceptor) Option {
-	return func(c *client) {
-		c.streamClientInterceptor = i
 	}
 }
 
@@ -78,17 +71,20 @@ func WithBufSize(n int) Option {
 type client struct {
 	balancer.Picker
 	encoding.Codec
-	unaryClientInterceptor  UnaryClientInterceptor
-	streamClientInterceptor StreamClientInterceptor
-	opts                    []transport.Option
+	unaryClientInterceptor UnaryClientInterceptor
+	opts                   []transport.Option
+	cancel                 context.CancelFunc // Cancelled on close.
+
 }
 
 // DialContext builds a client for endpoint: it installs the default
 // interceptors, applies the options, dials through the balancer and keeps the
 // resulting picker.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
+	childCtx, cancel := context.WithCancel(ctx)
 	c := client{
-		Codec: encoding.GetCodec(encoding.Name),
+		cancel: cancel,
+		Codec:  encoding.GetCodec(encoding.Name),
 		unaryClientInterceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
 			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
 			if err != nil {
@@ -96,19 +92,13 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 			}
 			return rt.Invoke(ctx, method, req, reply, opts...)
 		},
-		streamClientInterceptor: func(ctx context.Context, desc *grpc.StreamDesc, balance balancer.Picker, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
-			if err != nil {
-				return nil, err
-			}
-			return rt.NewStream(ctx, desc, method, opts...)
-		},
 	}
 	for _, o := range opts {
 		o(&c)
 	}
+	// Create a child context that can be canceled when the balancer is closed.
 	c.opts = append(c.opts, transport.WithCodec(c.Codec))
-	picker, err := balancer.DialContext(ctx, endpoint, c.opts...)
+	picker, err := balancer.DialContext(childCtx, endpoint, c.opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -146,10 +136,11 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 // NewStream opens a stream through the stream client interceptor. grpcx carries
 // unary calls only, so the returned stream cannot actually carry frames.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-	return c.streamClientInterceptor(ctx, desc, c.Picker, method, opts...)
+	return nil, status.Unimplemented.Err()
 }
 
 // Close closes the balancer, which closes every backend transport.
 func (c *client) Close() error {
+	defer c.cancel()
 	return c.Picker.Close()
 }

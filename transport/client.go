@@ -207,13 +207,17 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 
 // createStream allocates the next stream id, registers it in the stream table
 // and derives a cancellable context for it. It fails with
-// codes.ResourceExhausted once maxStreams is reached. Call options are ignored
-// here: Invoke and RoundTrip build and marshal the request header themselves,
-// so opts never reach the wire through this path.
+// codes.ResourceExhausted once maxStreams is reached, and keeps failing after
+// Close has zeroed the limit: zero is the closed marker, so a dead transport
+// never hands out a stream. Call options are ignored here: Invoke and RoundTrip
+// build and marshal the request header themselves, so opts never reach the wire
+// through this path.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
-	if c.maxStreams > 0 && len(c.streams) >= int(c.maxStreams) {
+	// maxStreams is never zero while the transport is open — WithMaxStreams
+	// replaces zero with the default — so a zero limit can only come from Close.
+	if len(c.streams) >= int(c.maxStreams) {
 		return nil, status.ResourceExhausted.Err()
 	}
 	streamID := c.streamID + 1
@@ -351,11 +355,12 @@ func (c *client) Ping(ctx context.Context) error {
 
 // Close tears the transport down once: it cancels every live stream, then closes
 // the underlying connection from a defer in the same sync.Once, so a second call
-// is a no-op and nothing is closed twice. The stream table and the configured
-// stream limit are left as they are: zeroing the limit would lift it instead of
-// ending the transport, so a closed connection would silently accept unlimited
-// streams. Closing a connection that is already being thrown away has nothing
-// left to report to, so its error is dropped.
+// is a no-op and nothing is closed twice. The stream table itself is left as it
+// was, but the limit is zeroed as the closed marker: WithMaxStreams never stores
+// zero, so zero can only mean "closed" and createStream refuses every later call
+// instead of filling a table nothing will send from. Closing a connection that is
+// already being thrown away has nothing left to report to, so its error is
+// dropped.
 func (c *client) Close() error {
 	c.Once.Do(func() {
 		defer c.SendCloser.Close()
@@ -366,6 +371,9 @@ func (c *client) Close() error {
 			// away, so a pending call is told so by its own context.
 			_ = s.Close()
 		}
+		// Zero is the closed marker, not a "no cap" request: createStream compares
+		// against it, and WithMaxStreams can never produce it.
+		c.maxStreams = 0
 	})
 	return nil
 }

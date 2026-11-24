@@ -283,10 +283,12 @@ func TestMaxStreamsLimitsConcurrentCalls(t *testing.T) {
 	}
 }
 
-// TestCloseKeepsStreamLimit pins that Close ends the transport without touching
-// the configured limit: setting maxStreams to zero would mean "no cap" and let a
-// closed connection keep allocating streams.
-func TestCloseKeepsStreamLimit(t *testing.T) {
+// TestCloseRefusesNewStreams pins that Close ends the transport for new calls.
+// It zeroes the stream limit, and because WithMaxStreams never stores zero (its
+// cmp.Or falls back to the default), zero can only mean "this transport is
+// closed": createStream then refuses every later call instead of handing out a
+// stream that nothing will ever send.
+func TestCloseRefusesNewStreams(t *testing.T) {
 	addr := startTestServer(t, &testEcho{})
 	rt := dialTestClient(t, addr, WithMaxStreams(4))
 
@@ -306,14 +308,18 @@ func TestCloseKeepsStreamLimit(t *testing.T) {
 	c.RLock()
 	limit, registered := c.maxStreams, len(c.streams)
 	c.RUnlock()
-	if limit != 4 {
-		t.Fatalf("maxStreams after Close = %d, want 4", limit)
+	if limit != 0 {
+		t.Fatalf("maxStreams after Close = %d, want 0 as the closed marker", limit)
 	}
 	if registered == 0 {
 		t.Fatal("Close wiped the stream table, want it left as it was")
 	}
 	if open.id == 0 {
 		t.Fatal("stream id = 0, want a real id")
+	}
+
+	if _, err := c.createStream(t.Context()); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("createStream after Close = %v, want %v", err, codes.ResourceExhausted)
 	}
 }
 

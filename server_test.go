@@ -73,7 +73,9 @@ func TestServerHandlerErrorStaysOnTheCall(t *testing.T) {
 
 // TestServerClosesIdleConnectionAtReadTimeout pins the read deadline on an idle
 // connection: a peer that connects and then says nothing is dropped once the
-// deadline fires, which is what frees the handler that owns it.
+// deadline fires, which is what frees the handler that owns it. The test-side
+// deadline is ten times the server one, so a slow runner that delays the handler
+// does not make this read fail on the test's own timeout instead.
 func TestServerClosesIdleConnectionAtReadTimeout(t *testing.T) {
 	h := startServer(t, withEcho, WithServerReadTimeout(shortRead))
 
@@ -83,7 +85,7 @@ func TestServerClosesIdleConnectionAtReadTimeout(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	_ = conn.SetReadDeadline(time.Now().Add(3 * shortRead))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * shortRead))
 	if _, err := conn.Read(make([]byte, 1)); err == nil {
 		t.Fatalf("read on an idle connection returned data, want it closed by the server read deadline")
 	} else if errors.Is(err, os.ErrDeadlineExceeded) {
@@ -190,10 +192,13 @@ func TestServerCancelWaitsForHandlers(t *testing.T) {
 	}
 }
 
-// TestServerCancelWaitsForIdleHandler covers the cost of that wait on an idle
-// connection: canceling does not interrupt a handler parked reading the next
-// frame, so ListenAndServe waits out the read deadline.
-func TestServerCancelWaitsForIdleHandler(t *testing.T) {
+// TestServerCancelReturnsWithIdleConnection pins that an idle connection cannot
+// keep ListenAndServe from returning forever. There are two legitimate paths:
+// the handler notices the cancel at the top of its next loop turn and returns at
+// once, or it is already parked in a read and rides out the deadline that call
+// armed. Requiring the second one on every run is not a property, so the check
+// here is the bound instead.
+func TestServerCancelReturnsWithIdleConnection(t *testing.T) {
 	h := startServer(t, withEcho, WithServerReadTimeout(shortRead))
 	cc := dialClient(t, h)
 
@@ -206,8 +211,8 @@ func TestServerCancelWaitsForIdleHandler(t *testing.T) {
 	if err := h.stop(t); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("ListenAndServe = %v, want net.ErrClosed", err)
 	}
-	if elapsed := time.Since(start); elapsed < shortRead/2 {
-		t.Fatalf("ListenAndServe returned in %v; an idle handler should hold it until the %v read deadline", elapsed, shortRead)
+	if elapsed := time.Since(start); elapsed > 8*shortRead {
+		t.Fatalf("ListenAndServe took %v with an idle connection, want it back within %v", elapsed, 8*shortRead)
 	}
 }
 

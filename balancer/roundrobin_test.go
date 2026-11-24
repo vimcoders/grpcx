@@ -3,7 +3,6 @@ package balancer
 import (
 	"context"
 	"errors"
-	"net"
 	"sync"
 	"testing"
 	"time"
@@ -11,325 +10,281 @@ import (
 	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
-
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 )
 
-// fakeRT is a RoundTripper that only records what the balancer does to it: a
-// balancer never carries a call itself, so RoundTrip, Invoke and NewStream stay
-// unimplemented stubs.
+// fakeRT is a RoundTripper that counts closes and can fail a ping, which is all
+// the balancer reads from a backend.
 type fakeRT struct {
+	name    string
 	mu      sync.Mutex
+	closes  int
 	pingErr error
-	pings   int
-	closed  int
 }
 
-var errNotUsed = errors.New("fakeRT: call path not used by the balancer")
-
-func (r *fakeRT) RoundTrip(context.Context, *api.Request) (*api.Response, error) {
-	return nil, errNotUsed
+func (f *fakeRT) RoundTrip(context.Context, *api.Request) (*api.Response, error) {
+	return &api.Response{}, nil
 }
 
-func (r *fakeRT) Invoke(context.Context, string, any, any, ...grpc.CallOption) error {
-	return errNotUsed
+func (f *fakeRT) Ping(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pingErr
 }
 
-func (r *fakeRT) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
-	return nil, errNotUsed
-}
-
-func (r *fakeRT) Ping(context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.pings++
-	return r.pingErr
-}
-
-func (r *fakeRT) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.closed++
+func (f *fakeRT) Invoke(context.Context, string, any, any, ...grpc.CallOption) error {
 	return nil
 }
 
-func (r *fakeRT) stats() (pings, closed int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.pings, r.closed
+func (f *fakeRT) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
+	return nil, status.Unimplemented.Err()
 }
 
-// TestPickRotatesEveryBackend checks the rotation: the first pick lands on the
-// first backend and the following picks visit every backend in order.
-func TestPickRotatesEveryBackend(t *testing.T) {
-	rts := []transport.RoundTripper{&fakeRT{}, &fakeRT{}, &fakeRT{}}
-	rr := RoundRobin{rts: rts}
+func (f *fakeRT) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closes++
+	return nil
+}
 
-	for i := 0; i < 2*len(rts); i++ {
-		got, err := rr.Pick(context.Background(), PickInfo{FullMethodName: "/api.EchoService/Echo"})
+func (f *fakeRT) closeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closes
+}
+
+func (f *fakeRT) failPing(err error) {
+	f.mu.Lock()
+	f.pingErr = err
+	f.mu.Unlock()
+}
+
+// newRoundRobin builds a balancer over the given backends with injected resolve
+// and dial hooks, so no test touches DNS or the network.
+func newRoundRobin(rts []transport.RoundTripper, pods int, dial func(context.Context) (transport.RoundTripper, error)) *RoundRobin {
+	return &RoundRobin{
+		rts:     rts,
+		dial:    dial,
+		resolve: func(context.Context) (int, error) { return pods, nil },
+	}
+}
+
+// TestRoundRobinPickRotates pins the rotation: every backend is used in turn,
+// and the index wraps back to the first. A picker that kept returning the same
+// backend would still look correct with one address and silently pin all traffic
+// when several exist.
+func TestRoundRobinPickRotates(t *testing.T) {
+	a, b, c := &fakeRT{name: "a"}, &fakeRT{name: "b"}, &fakeRT{name: "c"}
+	rr := newRoundRobin([]transport.RoundTripper{a, b, c}, 3, nil)
+
+	want := []string{"a", "b", "c", "a"}
+	for i, name := range want {
+		rt, err := rr.Pick(context.Background(), PickInfo{})
 		if err != nil {
-			t.Fatalf("pick %d = %v", i, err)
+			t.Fatalf("Pick %d: %v", i, err)
 		}
-		want := rts[i%len(rts)]
-		if got != want {
-			t.Fatalf("pick %d returned backend %d, want %d", i, indexOf(rts, got), indexOf(rts, want))
-		}
-	}
-}
-
-func indexOf(rts []transport.RoundTripper, rt transport.RoundTripper) int {
-	for i, v := range rts {
-		if v == rt {
-			return i
+		if got := rt.(*fakeRT).name; got != name {
+			t.Fatalf("Pick %d = %q, want %q", i, got, name)
 		}
 	}
-	return -1
 }
 
-func TestPickWithoutBackends(t *testing.T) {
-	rr := RoundRobin{}
-	_, err := rr.Pick(context.Background(), PickInfo{})
-	if err == nil {
-		t.Fatalf("Pick on an empty balancer = nil error")
-	}
-	if got := status.Code(err); got != status.ResourceExhausted.Code() {
-		t.Fatalf("Pick error code = %v, want ResourceExhausted", got)
-	}
-}
+// TestRoundRobinPickWithoutBackends pins the empty table: a balancer with no
+// backend reports a status instead of handing back a nil round tripper the
+// caller would dereference.
+func TestRoundRobinPickWithoutBackends(t *testing.T) {
+	rr := newRoundRobin(nil, 0, nil)
 
-// TestPickConcurrent hammers Pick from several goroutines; with -race this also
-// checks the read lock around the backend slice.
-func TestPickConcurrent(t *testing.T) {
-	rts := []transport.RoundTripper{&fakeRT{}, &fakeRT{}}
-	rr := RoundRobin{rts: rts}
-
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() {
-			for range 100 {
-				if _, err := rr.Pick(context.Background(), PickInfo{}); err != nil {
-					t.Errorf("concurrent Pick = %v", err)
-					return
-				}
-			}
-		})
+	rt, err := rr.Pick(context.Background(), PickInfo{})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Pick on an empty balancer = %v, want ResourceExhausted", err)
 	}
-	wg.Wait()
-}
-
-// TestPingTrimsExtraBackends keeps the first podCount healthy backends and
-// closes the rest.
-func TestPingTrimsExtraBackends(t *testing.T) {
-	a, b, c := &fakeRT{}, &fakeRT{}, &fakeRT{}
-	dials := 0
-	rr := RoundRobin{
-		rts:            []transport.RoundTripper{a, b, c},
-		resolveContext: func(context.Context) (int, error) { return 2, nil },
-		dialContext: func(context.Context) (transport.RoundTripper, error) {
-			dials++
-			return &fakeRT{}, nil
-		},
-	}
-	if err := rr.Ping(context.Background()); err != nil {
-		t.Fatalf("Ping = %v", err)
-	}
-
-	if dials != 0 {
-		t.Fatalf("dialed %d backends, want 0: the pool was already large enough", dials)
-	}
-	if _, closed := c.stats(); closed != 1 {
-		t.Fatalf("extra backend closed %d times, want 1", closed)
-	}
-	got := rr.clone()
-	if len(got) != 2 || got[0] != a || got[1] != b {
-		t.Fatalf("backends after ping = %d, want [a b]", len(got))
+	if rt != nil {
+		t.Fatalf("Pick = %v, want a nil round tripper alongside the error", rt)
 	}
 }
 
-// TestPingReplacesDeadBackend covers the failure half: a backend whose ping
-// fails is closed, and a fresh dial fills the gap.
-func TestPingReplacesDeadBackend(t *testing.T) {
-	a := &fakeRT{}
-	dead := &fakeRT{pingErr: errors.New("connection reset")}
-	dialed := &fakeRT{}
-	dials := 0
-	rr := RoundRobin{
-		rts:            []transport.RoundTripper{a, dead},
-		resolveContext: func(context.Context) (int, error) { return 2, nil },
-		dialContext: func(context.Context) (transport.RoundTripper, error) {
-			dials++
-			return dialed, nil
-		},
-	}
-	if err := rr.Ping(context.Background()); err != nil {
-		t.Fatalf("Ping = %v", err)
-	}
+// TestRoundRobinCloseClosesEveryBackend pins the whole point of Close: canceling
+// the balancer context only stops new work, so the connections themselves have
+// to be closed here. Leaving them open is what left a benchmark with connections
+// that only died on their read deadline.
+func TestRoundRobinCloseClosesEveryBackend(t *testing.T) {
+	rts := []transport.RoundTripper{&fakeRT{}, &fakeRT{}, &fakeRT{}}
+	rr := newRoundRobin(rts, 3, nil)
 
-	if _, closed := dead.stats(); closed != 1 {
-		t.Fatalf("dead backend closed %d times, want 1", closed)
+	if err := rr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	if dials != 1 {
-		t.Fatalf("dialed %d times, want 1", dials)
-	}
-	got := rr.clone()
-	if len(got) != 2 || got[0] != a || got[1] != dialed {
-		t.Fatalf("backends after ping = %d entries, want [a dialed]", len(got))
+	for i, rt := range rts {
+		if got := rt.(*fakeRT).closeCount(); got != 1 {
+			t.Fatalf("backend %d closed %d times, want 1", i, got)
+		}
 	}
 }
 
-func TestPingGrowsPool(t *testing.T) {
-	dials := 0
-	rr := RoundRobin{
-		resolveContext: func(context.Context) (int, error) { return 3, nil },
-		dialContext: func(context.Context) (transport.RoundTripper, error) {
-			dials++
-			return &fakeRT{}, nil
-		},
+// TestRoundRobinCloseIsRepeatable pins that a second Close does not panic on a
+// nil cancel function and still reaches the backends. The transport Close
+// underneath is a sync.Once, so a repeat close is harmless there.
+func TestRoundRobinCloseIsRepeatable(t *testing.T) {
+	rt := &fakeRT{}
+	rr := newRoundRobin([]transport.RoundTripper{rt}, 1, nil)
+
+	if err := rr.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
 	}
-	if err := rr.Ping(context.Background()); err != nil {
-		t.Fatalf("Ping = %v", err)
+	if err := rr.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
 	}
-	if dials != 3 {
-		t.Fatalf("dialed %d times, want 3", dials)
-	}
-	if got := len(rr.clone()); got != 3 {
-		t.Fatalf("pool = %d backends, want 3", got)
+	if got := rt.closeCount(); got < 1 {
+		t.Fatalf("backend closed %d times, want it closed at least once", got)
 	}
 }
 
-// TestPingSkipsFailedDials checks that a dial failure leaves the pool short
-// rather than failing the whole ping.
-func TestPingSkipsFailedDials(t *testing.T) {
-	rr := RoundRobin{
-		resolveContext: func(context.Context) (int, error) { return 2, nil },
-		dialContext: func(context.Context) (transport.RoundTripper, error) {
-			return nil, errors.New("dial refused")
-		},
-	}
-	if err := rr.Ping(context.Background()); err != nil {
-		t.Fatalf("Ping = %v, want nil: a failed dial is not a ping failure", err)
-	}
-	if got := len(rr.clone()); got != 0 {
-		t.Fatalf("pool = %d backends, want 0", got)
-	}
-}
-
-func TestPingPropagatesResolveError(t *testing.T) {
-	resolveErr := errors.New("no such host")
-	a := &fakeRT{}
-	rr := RoundRobin{
-		rts:            []transport.RoundTripper{a},
-		resolveContext: func(context.Context) (int, error) { return 0, resolveErr },
-	}
-	if err := rr.Ping(context.Background()); !errors.Is(err, resolveErr) {
-		t.Fatalf("Ping = %v, want %v", err, resolveErr)
-	}
-	if pings, _ := a.stats(); pings != 0 {
-		t.Fatalf("backend pinged %d times after a resolve failure, want 0", pings)
-	}
-}
-
-func TestKeepaliveStopsOnCancel(t *testing.T) {
+// TestRoundRobinKeepaliveStopsOnCancel pins that the health loop ends with its
+// context: it must not outlive the balancer and keep dialing replacements
+// against an endpoint nobody uses any more.
+func TestRoundRobinKeepaliveStopsOnCancel(t *testing.T) {
+	rr := newRoundRobin(nil, 0, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	rr := RoundRobin{resolveContext: func(context.Context) (int, error) { return 0, nil }}
 	done := make(chan error, 1)
 	go func() { done <- rr.Keepalive(ctx) }()
 
 	select {
 	case err := <-done:
-		if got := status.Code(err); got != status.Canceled.Code() {
-			t.Fatalf("Keepalive = %v (code %v), want Canceled", err, got)
+		if status.Code(err) != codes.Canceled {
+			t.Fatalf("Keepalive = %v, want Canceled", err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("Keepalive did not return after the context was canceled")
+	case <-time.After(time.Second):
+		t.Fatal("Keepalive did not return after its context was canceled")
 	}
 }
 
-func TestCloseCancelsContext(t *testing.T) {
-	called := false
-	rr := RoundRobin{cancel: func() { called = true }}
-	if err := rr.Close(); err != nil {
-		t.Fatalf("Close = %v", err)
-	}
-	if !called {
-		t.Fatalf("Close did not cancel the balancer context")
-	}
+// TestRoundRobinPingDropsUnresponsiveBackend pins the health pass: a backend
+// that fails its ping is closed and replaced up to the resolved pod count, which
+// is how a churned pod leaves the rotation.
+func TestRoundRobinPingDropsUnresponsiveBackend(t *testing.T) {
+	alive, dead := &fakeRT{name: "alive"}, &fakeRT{name: "dead"}
+	dead.failPing(errors.New("ping refused"))
+	replacement := &fakeRT{name: "replacement"}
 
-	// A zero value has nothing to cancel and must not panic.
-	if err := (&RoundRobin{}).Close(); err != nil {
-		t.Fatalf("zero RoundRobin Close = %v", err)
-	}
-}
-
-// TestBuildReportsEmptyEndpoint checks the resolver error path: an empty host
-// cannot be resolved, so Build fails before dialing anything.
-func TestBuildReportsEmptyEndpoint(t *testing.T) {
-	var b rrBuilder
-	if _, err := b.Build(context.Background(), ""); err == nil {
-		t.Fatalf("Build(\"\") = nil error")
-	}
-}
-
-// TestDialContextConnects drives the real path against a loopback listener: the
-// endpoint resolves through the dns resolver, one connection is dialed and the
-// picker returns it.
-func TestDialContextConnects(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-
-	conns := make(chan net.Conn, 4)
-	go func() {
-		for {
-			c, acceptErr := ln.Accept()
-			if acceptErr != nil {
-				return
-			}
-			conns <- c
-		}
-	}()
-
-	picker, err := DialContext(context.Background(), ln.Addr().String())
-	if err != nil {
-		_ = ln.Close()
-		t.Fatalf("DialContext(%s) = %v", ln.Addr(), err)
-	}
-	t.Cleanup(func() {
-		_ = picker.Close()
-		_ = ln.Close()
-		for {
-			select {
-			case c := <-conns:
-				_ = c.Close()
-			default:
-				return
-			}
-		}
+	dials := 0
+	rr := newRoundRobin([]transport.RoundTripper{alive, dead}, 2, func(context.Context) (transport.RoundTripper, error) {
+		dials++
+		return replacement, nil
 	})
 
-	rt, err := picker.Pick(context.Background(), PickInfo{FullMethodName: "/api.EchoService/Echo"})
-	if err != nil {
-		t.Fatalf("Pick = %v", err)
+	if err := rr.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
 	}
-	if rt == nil {
-		t.Fatalf("Pick returned a nil backend")
+	if got := dead.closeCount(); got != 1 {
+		t.Fatalf("dead backend closed %d times, want 1", got)
+	}
+	if dials != 1 {
+		t.Fatalf("dialed %d replacements, want 1", dials)
+	}
+	if got := len(rr.rts); got != 2 {
+		t.Fatalf("backends after Ping = %d, want 2", got)
+	}
+	if rr.rts[1] != replacement {
+		t.Fatalf("replacement not installed at the end of the table")
 	}
 }
 
-// TestDialContextRefused checks that a refused connection surfaces from
-// DialContext instead of returning a picker with no backends.
-func TestDialContextRefused(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
+// TestRoundRobinPingClosesExcessBackends pins the shrink path: when the endpoint
+// resolves to fewer pods than the table holds, the surplus connections are
+// closed instead of being kept around forever.
+func TestRoundRobinPingClosesExcessBackends(t *testing.T) {
+	first, surplus := &fakeRT{name: "first"}, &fakeRT{name: "surplus"}
+	rr := newRoundRobin([]transport.RoundTripper{first, surplus}, 1, nil)
 
-	if _, err := DialContext(context.Background(), addr); err == nil {
-		t.Fatalf("DialContext on a closed port = nil error")
+	if err := rr.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
 	}
+	if got := surplus.closeCount(); got != 1 {
+		t.Fatalf("surplus backend closed %d times, want 1", got)
+	}
+	if got := len(rr.rts); got != 1 {
+		t.Fatalf("backends after Ping = %d, want 1", got)
+	}
+}
+
+// TestRoundRobinPingRedialsToPodCount pins the grow path: an empty table is
+// filled up to the resolved pod count.
+func TestRoundRobinPingRedialsToPodCount(t *testing.T) {
+	dials := 0
+	rr := newRoundRobin(nil, 2, func(context.Context) (transport.RoundTripper, error) {
+		dials++
+		return &fakeRT{}, nil
+	})
+
+	if err := rr.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if dials != 2 {
+		t.Fatalf("dialed %d backends, want 2", dials)
+	}
+	if got := len(rr.rts); got != 2 {
+		t.Fatalf("backends after Ping = %d, want 2", got)
+	}
+}
+
+// TestRoundRobinPingReportsResolveError pins that a failing resolution stops the
+// pass: the table must keep whatever it has rather than being emptied on a
+// transient DNS failure.
+func TestRoundRobinPingReportsResolveError(t *testing.T) {
+	rt := &fakeRT{}
+	rr := &RoundRobin{
+		rts: []transport.RoundTripper{rt},
+		resolve: func(context.Context) (int, error) {
+			return 0, errors.New("resolver: no addresses found")
+		},
+	}
+
+	if err := rr.Ping(context.Background()); err == nil {
+		t.Fatal("Ping with a failing resolver = nil error")
+	}
+	if got := len(rr.rts); got != 1 {
+		t.Fatalf("backends after a failed resolve = %d, want the existing 1 kept", got)
+	}
+	if got := rt.closeCount(); got != 0 {
+		t.Fatalf("backend closed %d times on a failed resolve, want 0", got)
+	}
+}
+
+// TestRoundRobinPingSkipsUndialableReplacement pins that a dial failure does not
+// install a nil backend: the table keeps the backends it has and the next pass
+// retries.
+func TestRoundRobinPingSkipsUndialableReplacement(t *testing.T) {
+	rr := newRoundRobin(nil, 1, func(context.Context) (transport.RoundTripper, error) {
+		return nil, errors.New("connection refused")
+	})
+
+	if err := rr.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if got := len(rr.rts); got != 0 {
+		t.Fatalf("backends after a failed dial = %d, want 0", got)
+	}
+}
+
+// TestRoundRobinConcurrentPickAndClose pins that picking while closing is safe:
+// Pick takes the read lock and Close walks the table under the write lock. The
+// race detector, which runs in CI, is what checks the memory-model side.
+func TestRoundRobinConcurrentPickAndClose(t *testing.T) {
+	rts := []transport.RoundTripper{&fakeRT{}, &fakeRT{}}
+	rr := newRoundRobin(rts, 2, nil)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 16 {
+				_, _ = rr.Pick(context.Background(), PickInfo{})
+			}
+		})
+	}
+	wg.Go(func() { _ = rr.Close() })
+	wg.Wait()
 }

@@ -2,187 +2,249 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"io"
-	"maps"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
-	"github.com/vimcoders/grpcx/metadata"
-	"google.golang.org/grpc"
 )
 
-// newTestConns returns the two ends of a loopback TCP connection. TCP rather
-// than net.Pipe: net.Pipe is unbuffered, so a writer blocks until the reader
-// drains it, which would deadlock every batching test.
-func newTestConns(t *testing.T) (net.Conn, net.Conn) {
-	t.Helper()
+// errWriteRefused is the failure a test conn reports when it is told to reject
+// every write. Tests assert it survives the wrapping, because a caller has to be
+// able to tell a refused write from a transport-level status.
+var errWriteRefused = errors.New("test: write refused")
 
+// tcpPair returns two connected connections over the loopback interface. A real
+// socket is required for the frame tests: net.Pipe is unbuffered, so a Write
+// blocks until the peer reads, and an assertion about a completed write would
+// deadlock instead of failing. t.Cleanup closes both.
+func tcpPair(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
-
-	accepted := make(chan net.Conn, 1)
-	go func() {
-		c, acceptErr := ln.Accept()
-		if acceptErr != nil {
-			accepted <- nil
-			return
-		}
-		accepted <- c
-	}()
-
-	c, err := net.Dial("tcp", ln.Addr().String())
+	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
+		_ = ln.Close()
 		t.Fatalf("dial: %v", err)
 	}
-
-	var peer net.Conn
-	select {
-	case peer = <-accepted:
-	case <-time.After(5 * time.Second):
-		_ = c.Close()
-		t.Fatalf("accept timed out")
+	accepted, err := ln.Accept()
+	if err != nil {
+		_ = conn.Close()
+		_ = ln.Close()
+		t.Fatalf("accept: %v", err)
 	}
-	if peer == nil {
-		_ = c.Close()
-		t.Fatalf("accept failed")
-	}
-
+	_ = ln.Close()
 	t.Cleanup(func() {
-		_ = c.Close()
-		_ = peer.Close()
+		_ = conn.Close()
+		_ = accepted.Close()
 	})
-	return c, peer
+	return conn, accepted
 }
 
-// frameSink records every frame a Sender writes, so a test can assert on the
-// exact bytes and their order.
-type frameSink struct {
-	mu     sync.Mutex
-	frames [][]byte
+// recordingConn wraps a net.Conn and records what the channel does to it: how
+// many writes reached the wire, how many bytes each one carried, whether the
+// conn was closed, and every deadline the channel armed. Tests use it to pin
+// the batching decisions and the deadline arming, which a plain pipe cannot
+// observe.
+type recordingConn struct {
+	net.Conn
+	mu             sync.Mutex
+	writeCalls     int
+	writeBytes     int
+	closed         bool
+	readDeadlines  []time.Duration
+	writeDeadlines []time.Duration
+	writeErr       error
 }
 
-func (f *frameSink) Send(p ...[]byte) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, b := range p {
-		f.frames = append(f.frames, append([]byte(nil), b...))
+// Write records the call and the byte count before delegating, so a test can see
+// an attempted write even when the injection then fails it. A nil embedded conn
+// makes the fake a sink: the bytes are counted and dropped, which lets a write
+// test run without a peer that has to keep reading.
+func (c *recordingConn) Write(b []byte) (int, error) {
+	c.mu.Lock()
+	c.writeCalls++
+	c.writeBytes += len(b)
+	err := c.writeErr
+	inner := c.Conn
+	c.mu.Unlock()
+	if err != nil {
+		return 0, err
 	}
-	return nil
-}
-
-// Frames returns a copy of the recorded frames.
-func (f *frameSink) Frames() [][]byte {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([][]byte, len(f.frames))
-	for i, b := range f.frames {
-		out[i] = append([]byte(nil), b...)
+	if inner == nil {
+		return len(b), nil
 	}
-	return out
+	return inner.Write(b)
 }
 
-// frameSource replays pre-recorded frames as a Recver. Frames are handed out
-// through the buffer pool, because callers put them back with putmbuf and the
-// pool only accepts buffers it could have handed out itself.
+// Close records the close so a test can tell a closed conn from an abandoned one.
+func (c *recordingConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	inner := c.Conn
+	c.mu.Unlock()
+	if inner == nil {
+		return nil
+	}
+	return inner.Close()
+}
+
+// SetReadDeadline records how far ahead the deadline was armed. The interval is
+// kept rather than the absolute time, because that is what the channel decides.
+func (c *recordingConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.readDeadlines = append(c.readDeadlines, time.Until(t))
+	inner := c.Conn
+	c.mu.Unlock()
+	if inner == nil {
+		return nil
+	}
+	return inner.SetReadDeadline(t)
+}
+
+// SetWriteDeadline is the write half of SetReadDeadline.
+func (c *recordingConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.writeDeadlines = append(c.writeDeadlines, time.Until(t))
+	inner := c.Conn
+	c.mu.Unlock()
+	if inner == nil {
+		return nil
+	}
+	return inner.SetWriteDeadline(t)
+}
+
+func (c *recordingConn) stats() (writes, written int, closed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeCalls, c.writeBytes, c.closed
+}
+
+func (c *recordingConn) deadlines() (read, write []time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.readDeadlines...), append([]time.Duration(nil), c.writeDeadlines...)
+}
+
+func (c *recordingConn) failWrites(err error) {
+	c.mu.Lock()
+	c.writeErr = err
+	c.mu.Unlock()
+}
+
+// frameSource is a Recver backed by a fixed script of frames. It hands out the
+// frames in order and then reports io.EOF, which is exactly how a peer closing
+// the connection looks to the receive loop.
 type frameSource struct {
 	frames [][]byte
 	err    error
+	i      int
 }
 
 func (f *frameSource) Recv() ([]byte, error) {
-	if len(f.frames) == 0 {
-		if f.err != nil {
-			return nil, f.err
-		}
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.i >= len(f.frames) {
 		return nil, io.EOF
 	}
-	b := f.frames[0]
-	f.frames = f.frames[1:]
-	p := getmbuf(len(b))
-	copy(p, b)
+	p := f.frames[f.i]
+	f.i++
 	return p, nil
 }
 
-// newFrameSource builds a Recver that hands out the given frames in order.
-func newFrameSource(frames ...[]byte) *frameSource {
-	return &frameSource{frames: frames}
+// newFrame copies payload into a pooled buffer, which is what channel.Recv
+// returns in production. The copy matters: the callers put the buffer back with
+// putmbuf, and that pool only recycles buffers whose capacity matches a size
+// class.
+func newFrame(payload []byte) []byte {
+	p := getmbuf(len(payload))
+	copy(p, payload)
+	return p
 }
 
-// echoMethodHandler is the grpc.MethodDesc handler shape for Echo, written out
-// by hand so the tests do not depend on the generated helper, which is
-// unexported.
-func echoMethodHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
-	in := new(api.EchoRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(api.EchoServiceServer).Echo(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: api.EchoService_Echo_FullMethodName}
-	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
-		return srv.(api.EchoServiceServer).Echo(ctx, req.(*api.EchoRequest))
-	})
+// recordSender is a Sender that keeps every frame group it was handed and can
+// be told to fail. The frames are copied because the channel reuses its own
+// header buffers across calls.
+type recordSender struct {
+	mu    sync.Mutex
+	calls [][][]byte
+	err   error
 }
 
-// testEcho is a controllable EchoServiceServer: it echoes the message, counts
-// calls, records metadata and can be gated, failed or delayed on demand.
-type testEcho struct {
-	api.UnimplementedEchoServiceServer
-
-	mu     sync.Mutex
-	calls  int
-	values map[string]string
-
-	// gate, when non-nil, holds the handler until it is closed or the call
-	// context ends.
-	gate chan struct{}
-	// err, when non-nil, is returned instead of a reply.
-	err error
+func (s *recordSender) Send(p ...[]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	group := make([][]byte, len(p))
+	for i, b := range p {
+		group[i] = append([]byte(nil), b...)
+	}
+	s.calls = append(s.calls, group)
+	return nil
 }
 
-func (e *testEcho) Echo(ctx context.Context, in *api.EchoRequest) (*api.EchoResponse, error) {
-	e.mu.Lock()
-	e.calls++
-	if md, ok := metadata.GetMetadata(ctx); ok {
-		if e.values == nil {
-			e.values = make(map[string]string, len(md))
-		}
-		maps.Copy(e.values, md)
-	}
-	e.mu.Unlock()
+func (s *recordSender) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.calls)
+}
 
-	e.mu.Lock()
-	gate, err := e.gate, e.err
-	e.mu.Unlock()
+func (s *recordSender) frame(g, i int) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[g][i]
+}
 
-	if gate != nil {
-		select {
-		case <-gate:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
+func (s *recordSender) fail(err error) {
+	s.mu.Lock()
+	s.err = err
+	s.mu.Unlock()
+}
+
+// mustMarshal marshals a message through the codec the transport uses, failing
+// the test rather than returning an error a frame-level test cannot act on.
+func mustMarshal(t *testing.T, msg any) []byte {
+	t.Helper()
+	b, err := encoding.Marshal(msg)
 	if err != nil {
-		return nil, err
+		t.Fatalf("marshal %T: %v", msg, err)
 	}
-	return &api.EchoResponse{Message: in.GetMessage()}, nil
+	return b
 }
 
-func (e *testEcho) metadataValue(key string) string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.values[key]
+// headerFrame builds the frame a peer sends ahead of a payload: the marshalled
+// call options.
+func headerFrame(t *testing.T, opts *api.CallOptions) []byte {
+	t.Helper()
+	return newFrame(mustMarshal(t, opts))
 }
 
-func (e *testEcho) callCount() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.calls
+// decodeHeader is the inverse of headerFrame, for the tests that inspect the
+// header a sender wrote.
+func decodeHeader(t *testing.T, frame []byte) *api.CallOptions {
+	t.Helper()
+	var opts api.CallOptions
+	if err := encoding.Unmarshal(frame, &opts); err != nil {
+		t.Fatalf("unmarshal call options: %v", err)
+	}
+	return &opts
+}
+
+// testContext returns a context whose cancellation the test controls, plus the
+// cleanup that cancels it. Every test that parks a goroutine on a request uses
+// it so a failure cannot leave the goroutine running into the next test.
+func testContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return ctx
 }

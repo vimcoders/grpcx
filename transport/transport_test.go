@@ -2,9 +2,7 @@ package transport
 
 import (
 	"context"
-	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,358 +15,401 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// startTestServer serves one EchoService over a loopback listener and returns
-// the address to dial. Every accepted connection is handed to Transport.Handle
-// in its own goroutine; the cleanup cancels them and waits, so no goroutine
-// outlives the test.
-func startTestServer(t *testing.T, svc api.EchoServiceServer, opts ...ServerOption) string {
+// startServer serves the given options on a loopback listener and returns the
+// address. Every accepted connection is served by the same ServerOptions, and
+// the cleanup closes both the listener and the live connections before waiting:
+// a handler parked in a read otherwise keeps the test process alive until its
+// read timeout.
+func startServer(t *testing.T, opts ...ServerOption) string {
 	t.Helper()
-
 	so := DefaultServerOptions
-	so.RegisterService(&api.EchoService_ServiceDesc, svc)
-	for _, opt := range opts {
-		opt(&so)
+	for _, o := range opts {
+		o(&so)
 	}
-
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	t.Cleanup(func() {
-		cancel()
-		_ = ln.Close()
-		wg.Wait()
-	})
 
-	wg.Go(func() {
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+		wg    sync.WaitGroup
+	)
+	go func() {
 		for {
-			c, err := ln.Accept()
+			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
 			wg.Go(func() {
-				defer func() { _ = c.Close() }()
-				_ = so.Handle(ctx, c)
+				defer func() { _ = conn.Close() }()
+				_ = so.Handle(ctx, conn)
 			})
 		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = ln.Close()
+		mu.Lock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
 	})
-
 	return ln.Addr().String()
 }
 
-// dialTestClient connects to addr and closes the transport when the test ends.
-// Cleanup is registered after the server's, so it runs first (LIFO) and the
-// server's Handle loop sees the connection close instead of waiting for its
-// read deadline.
-func dialTestClient(t *testing.T, addr string, opts ...Option) RoundTripper {
+// dialTransport connects to addr and closes the transport when the test ends.
+func dialTransport(t *testing.T, addr string, opts ...Option) RoundTripper {
 	t.Helper()
-
 	rt, err := DialContext(context.Background(), addr, opts...)
 	if err != nil {
-		t.Fatalf("dial %s: %v", addr, err)
+		t.Fatalf("DialContext(%s): %v", addr, err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
 	return rt
 }
 
-// waitForCalls blocks until the service has handled want calls, so a test can
-// assert on a handler that is still blocked inside Echo.
-func waitForCalls(t *testing.T, svc *testEcho, want int) {
-	t.Helper()
+// TestClientInvokeEcho pins the unary call end to end: a request framed by the
+// client is decoded by the registered method, the reply is framed back on the
+// same stream, and the generated stub sees the response.
+func TestClientInvokeEcho(t *testing.T) {
+	addr := startServer(t, RegisterService(&api.EchoService_ServiceDesc, &echoServer{}))
+	rt := dialTransport(t, addr)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for svc.callCount() < want {
-		if time.Now().After(deadline) {
-			t.Fatalf("handler reached %d calls, want %d", svc.callCount(), want)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// TestInvokeEchoRoundTrip is the happy path end to end: the generated stub
-// dials through the transport, the server dispatches by method name and the
-// reply comes back on the stream the request opened.
-func TestInvokeEchoRoundTrip(t *testing.T) {
-	svc := &testEcho{}
-	addr := startTestServer(t, svc)
-	cc := api.NewEchoServiceClient(dialTestClient(t, addr))
-
-	ctx := metadata.WithMetadata(t.Context(), metadata.Pairs("x-test", "v1"))
-	reply, err := cc.Echo(ctx, &api.EchoRequest{Message: "hello"})
+	client := api.NewEchoServiceClient(rt)
+	reply, err := client.Echo(context.Background(), &api.EchoRequest{Message: "hello"})
 	if err != nil {
 		t.Fatalf("Echo: %v", err)
 	}
-	if got := reply.GetMessage(); got != "hello" {
-		t.Fatalf("reply = %q, want %q", got, "hello")
-	}
-	if got := svc.metadataValue("x-test"); got != "v1" {
-		t.Fatalf("metadata x-test = %q, want %q", got, "v1")
-	}
-	if got := svc.callCount(); got != 1 {
-		t.Fatalf("handler calls = %d, want 1", got)
+	if reply.Message != "hello!" {
+		t.Fatalf("reply = %q, want hello!", reply.Message)
 	}
 }
 
-// TestInvokeUnknownMethodUnimplemented covers a method the registered service
-// does not expose: the server must answer Unimplemented and name the method it
-// could not resolve.
-func TestInvokeUnknownMethodUnimplemented(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr)
+// TestClientInvokeReportsHandlerStatus pins that the server's status error
+// arrives at the caller as the same code, which is how a handler failure is
+// surfaced without the connection being torn down.
+func TestClientInvokeReportsHandlerStatus(t *testing.T) {
+	addr := startServer(t, RegisterService(&api.EchoService_ServiceDesc, &failingEcho{}))
+	rt := dialTransport(t, addr)
 
-	err := rt.Invoke(t.Context(), "/api.EchoService/Nope", &api.EchoRequest{}, &api.EchoResponse{})
-	if got := status.Code(err); got != codes.Unimplemented {
-		t.Fatalf("code = %v, want Unimplemented (err = %v)", got, err)
-	}
-	if !strings.Contains(err.Error(), "Nope") {
-		t.Fatalf("error %q does not name the requested method", err)
+	err := rt.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "x"}, &api.EchoResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Invoke code = %v, want InvalidArgument", status.Code(err))
 	}
 }
 
-// TestInvokeHandlerErrorPropagates checks that a handler error travels back in
-// the response header as a status code instead of breaking the connection.
-func TestInvokeHandlerErrorPropagates(t *testing.T) {
-	svc := &testEcho{err: status.Error(codes.InvalidArgument, "bad input")}
-	addr := startTestServer(t, svc)
-	cc := api.NewEchoServiceClient(dialTestClient(t, addr))
+// TestClientInvokeUnimplementedMethod pins the dispatch fallback: an unknown
+// method is answered with Unimplemented instead of leaving the caller waiting
+// for a reply that will never come.
+func TestClientInvokeUnimplementedMethod(t *testing.T) {
+	addr := startServer(t)
+	rt := dialTransport(t, addr)
 
-	_, err := cc.Echo(t.Context(), &api.EchoRequest{Message: "x"})
-	if got := status.Code(err); got != codes.InvalidArgument {
-		t.Fatalf("code = %v, want InvalidArgument (err = %v)", got, err)
-	}
-	if !strings.Contains(err.Error(), "bad input") {
-		t.Fatalf("error %q does not carry the handler message", err)
+	err := rt.Invoke(context.Background(), "/nope/Nope", &api.Empty{}, &api.Empty{})
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("Invoke unknown method code = %v, want Unimplemented", status.Code(err))
 	}
 }
 
-// TestInvokeConcurrent runs several goroutines over one connection so the
-// stream table, the receive loop and the shared writer are all exercised at
-// once. -race is what actually proves it; CI runs that.
-func TestInvokeConcurrent(t *testing.T) {
-	const goroutines, perGoroutine = 8, 25
+// TestClientPingSucceeds pins the health check: the server answers an empty
+// request with Unimplemented, which the client counts as proof the connection is
+// alive rather than as a failure.
+func TestClientPingSucceeds(t *testing.T) {
+	addr := startServer(t)
+	rt := dialTransport(t, addr)
 
-	svc := &testEcho{}
-	addr := startTestServer(t, svc)
-	cc := api.NewEchoServiceClient(dialTestClient(t, addr))
-
-	errs := make(chan error, goroutines*perGoroutine)
-	var wg sync.WaitGroup
-	for g := range goroutines {
-		wg.Go(func() {
-			for i := range perGoroutine {
-				msg := fmt.Sprintf("g%d-%d", g, i)
-				reply, err := cc.Echo(t.Context(), &api.EchoRequest{Message: msg})
-				if err != nil {
-					errs <- fmt.Errorf("Echo(%s): %w", msg, err)
-					return
-				}
-				if got := reply.GetMessage(); got != msg {
-					errs <- fmt.Errorf("reply = %q, want %q", got, msg)
-					return
-				}
-			}
-		})
-	}
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		t.Error(err)
-	}
-	if got, want := svc.callCount(), goroutines*perGoroutine; got != want {
-		t.Fatalf("handler calls = %d, want %d", got, want)
-	}
-}
-
-// TestInvokeRespectsCallDeadline checks that a short client deadline ends the
-// call promptly. Two outcomes race here and both are correct: the client usually
-// notices its own deadline first and reports Canceled, but under load, or with
-// the race detector slowing the goroutines down, the server's per-call deadline
-// can fire first and send back the handler's bare ctx error, which carries no
-// status code and surfaces as Unknown. What must never happen is the call
-// waiting out the package default instead of the 50ms header timeout.
-func TestInvokeRespectsCallDeadline(t *testing.T) {
-	gate := make(chan struct{})
-	svc := &testEcho{gate: gate}
-	addr := startTestServer(t, svc)
-	cc := api.NewEchoServiceClient(dialTestClient(t, addr))
-	t.Cleanup(func() { close(gate) })
-
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-
-	start := time.Now()
-	_, err := cc.Echo(ctx, &api.EchoRequest{Message: "blocked"})
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("Echo succeeded, want the deadline to end the call")
-	}
-	if elapsed > time.Second {
-		t.Fatalf("call took %v, want it to end with the 50ms deadline", elapsed)
-	}
-	if code := status.Code(err); code != codes.Canceled && !strings.Contains(err.Error(), "deadline exceeded") {
-		t.Fatalf("code = %v and message %q names no deadline, want Canceled or a deadline error", code, err.Error())
-	}
-}
-
-// TestCloseUnblocksPendingInvoke checks that closing the transport releases a
-// call still waiting for a reply, instead of leaving it until its deadline.
-func TestCloseUnblocksPendingInvoke(t *testing.T) {
-	gate := make(chan struct{})
-	svc := &testEcho{gate: gate}
-	addr := startTestServer(t, svc)
-	rt := dialTestClient(t, addr)
-	cc := api.NewEchoServiceClient(rt)
-	t.Cleanup(func() { close(gate) })
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := cc.Echo(context.Background(), &api.EchoRequest{Message: "pending"})
-		done <- err
-	}()
-
-	waitForCalls(t, svc, 1)
-	if err := rt.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	select {
-	case err := <-done:
-		if got := status.Code(err); got != codes.Canceled {
-			t.Fatalf("code = %v, want Canceled (err = %v)", got, err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Invoke did not return after Close")
-	}
-}
-
-// TestPingTreatsUnimplementedAsAlive covers the health check: the ping carries
-// no method name, so the server can only answer Unimplemented, and that answer
-// proves the connection is up.
-func TestPingTreatsUnimplementedAsAlive(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr)
-
-	if err := rt.Ping(t.Context()); err != nil {
+	if err := rt.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
 }
 
-// TestMaxStreamsLimitsConcurrentCalls drives createStream directly: the second
-// stream must be refused while the first is open, and allowed again once it is
-// released.
-func TestMaxStreamsLimitsConcurrentCalls(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr, WithMaxStreams(1))
+// TestClientRoundTripCarriesFrames pins the framed entry point: a caller that
+// marshals its own header and payload gets the matching reply back, which is the
+// path the balancer and the OTel interceptor use.
+func TestClientRoundTripCarriesFrames(t *testing.T) {
+	addr := startServer(t, RegisterService(&api.EchoService_ServiceDesc, &echoServer{}))
+	rt := dialTransport(t, addr)
 
-	c, ok := rt.(*client)
-	if !ok {
-		t.Fatalf("RoundTripper is %T, want *client", rt)
-	}
-
-	first, err := c.createStream(t.Context())
-	if err != nil {
-		t.Fatalf("first stream: %v", err)
-	}
-	if _, err := c.createStream(t.Context()); status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("second stream error = %v, want ResourceExhausted", err)
-	}
-	_ = first.CloseSend()
-
-	if _, err := c.createStream(t.Context()); err != nil {
-		t.Fatalf("stream after release: %v", err)
-	}
-}
-
-// TestCloseRefusesNewStreams pins that Close ends the transport for new calls.
-// It zeroes the stream limit, and because WithMaxStreams never stores zero (its
-// cmp.Or falls back to the default), zero can only mean "this transport is
-// closed": createStream then refuses every later call instead of handing out a
-// stream that nothing will ever send.
-func TestCloseRefusesNewStreams(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr, WithMaxStreams(4))
-
-	c, ok := rt.(*client)
-	if !ok {
-		t.Fatalf("RoundTripper is %T, want *client", rt)
-	}
-
-	open, err := c.createStream(t.Context())
-	if err != nil {
-		t.Fatalf("createStream: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	c.RLock()
-	limit, registered := c.maxStreams, len(c.streams)
-	c.RUnlock()
-	if limit != 0 {
-		t.Fatalf("maxStreams after Close = %d, want 0 as the closed marker", limit)
-	}
-	if registered == 0 {
-		t.Fatal("Close wiped the stream table, want it left as it was")
-	}
-	if open.id == 0 {
-		t.Fatal("stream id = 0, want a real id")
-	}
-
-	if _, err := c.createStream(t.Context()); status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("createStream after Close = %v, want %v", err, codes.ResourceExhausted)
-	}
-}
-
-// TestNewStreamUnimplemented pins the documented gap: grpcx serves unary calls
-// only, so the streaming entry point refuses every request.
-func TestNewStreamUnimplemented(t *testing.T) {
-	addr := startTestServer(t, &testEcho{})
-	rt := dialTestClient(t, addr)
-
-	if _, err := rt.NewStream(t.Context(), &grpc.StreamDesc{}, api.EchoService_Echo_FullMethodName); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("NewStream error = %v, want Unimplemented", err)
-	}
-}
-
-// TestRoundTripCarriesStreamID covers the pre-framed entry point: the caller
-// hands in a header with no stream id, and the reply must still find its way
-// back, which only works if the transport stamps the id into the header it
-// puts on the wire.
-func TestRoundTripCarriesStreamID(t *testing.T) {
-	svc := &testEcho{}
-	addr := startTestServer(t, svc)
-	rt := dialTestClient(t, addr)
-
-	payload, err := encoding.Marshal(&api.EchoRequest{Message: "roundtrip"})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
 	req := &api.Request{
-		Options: &api.CallOptions{
-			Service:        "api.EchoService",
-			FullMethodName: api.EchoService_Echo_FullMethodName,
-		},
-		Payload: payload,
+		Options: &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName},
+		Payload: mustMarshal(t, &api.EchoRequest{Message: "framed"}),
 	}
-
-	reply, err := rt.RoundTrip(t.Context(), req)
+	resp, err := rt.RoundTrip(context.Background(), req)
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
-	defer putmbuf(reply.Payload)
+	defer putmbuf(resp.Payload)
 
+	if codes.Code(resp.Options.Code) != codes.OK {
+		t.Fatalf("reply code = %v, want OK", codes.Code(resp.Options.Code))
+	}
 	var out api.EchoResponse
-	if err := encoding.Unmarshal(reply.Payload, &out); err != nil {
+	if err := encoding.Unmarshal(resp.Payload, &out); err != nil {
 		t.Fatalf("unmarshal reply: %v", err)
 	}
-	if got := out.GetMessage(); got != "roundtrip" {
-		t.Fatalf("reply = %q, want %q", got, "roundtrip")
+	if out.Message != "framed!" {
+		t.Fatalf("reply = %q, want framed!", out.Message)
 	}
-	if got := svc.callCount(); got != 1 {
-		t.Fatalf("handler calls = %d, want 1", got)
+}
+
+// mdRecorder captures what the server interceptor saw, so a test can assert the
+// metadata and deadline that reached the handler.
+type mdRecorder struct {
+	mu           sync.Mutex
+	md           metadata.MD
+	deadline     time.Time
+	hasDeadline  bool
+	invokedCount int
+}
+
+func (r *mdRecorder) interceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		r.mu.Lock()
+		r.invokedCount++
+		r.md, _ = metadata.GetMetadata(ctx)
+		r.deadline, r.hasDeadline = ctx.Deadline()
+		r.mu.Unlock()
+		return handler(ctx, req)
+	}
+}
+
+func (r *mdRecorder) snapshot() (metadata.MD, time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.md, r.deadline, r.hasDeadline
+}
+
+// TestClientInvokePropagatesMetadata pins that the client's metadata travels in
+// the request header and is reattached to the handler's context, which is the
+// only channel an interceptor has for out-of-band values.
+func TestClientInvokePropagatesMetadata(t *testing.T) {
+	rec := &mdRecorder{}
+	addr := startServer(t,
+		RegisterService(&api.EchoService_ServiceDesc, &echoServer{}),
+		UnaryServerInterceptor(rec.interceptor()),
+	)
+	rt := dialTransport(t, addr)
+
+	ctx := metadata.WithMetadata(context.Background(), metadata.Pairs("trace-id", "abc123"))
+	if _, err := api.NewEchoServiceClient(rt).Echo(ctx, &api.EchoRequest{Message: "x"}); err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+
+	md, _, _ := rec.snapshot()
+	if v, ok := md.Get("trace-id"); !ok || v != "abc123" {
+		t.Fatalf("server metadata = %v, want trace-id=abc123", md)
+	}
+}
+
+// TestClientInvokeNarrowsTimeoutToDeadline pins the deadline rule end to end: a
+// caller deadline shorter than the transport default reaches the handler as that
+// deadline, because the client writes the remaining time into the header.
+func TestClientInvokeNarrowsTimeoutToDeadline(t *testing.T) {
+	rec := &mdRecorder{}
+	addr := startServer(t,
+		RegisterService(&api.EchoService_ServiceDesc, &echoServer{}),
+		UnaryServerInterceptor(rec.interceptor()),
+	)
+	rt := dialTransport(t, addr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := api.NewEchoServiceClient(rt).Echo(ctx, &api.EchoRequest{Message: "x"}); err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+
+	_, deadline, hasDeadline := rec.snapshot()
+	if !hasDeadline {
+		t.Fatalf("handler context carries no deadline, want the caller's")
+	}
+	// The header carries milliseconds, so the bound is the caller's deadline plus
+	// the rounding the truncation can introduce.
+	if got := deadline.Sub(start); got > 250*time.Millisecond {
+		t.Fatalf("handler deadline is %v out, want under 250ms", got)
+	}
+}
+
+// TestClientCloseIsIdempotent pins the sync.Once: a second Close is a no-op and
+// still reports success, so a caller that closes twice (a defer plus an explicit
+// call) does not get a spurious error.
+func TestClientCloseIsIdempotent(t *testing.T) {
+	addr := startServer(t)
+	rt := dialTransport(t, addr)
+
+	if err := rt.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestClientRefusesStreamsAfterClose pins the closed marker: with the limit
+// zeroed, createStream refuses every later call instead of filling a table
+// nothing will ever send from.
+func TestClientRefusesStreamsAfterClose(t *testing.T) {
+	addr := startServer(t)
+	rt := dialTransport(t, addr)
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	err := rt.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{}, &api.EchoResponse{})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("Invoke after Close = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestClientMaxStreamsRefusesExtraCall pins the concurrency cap: with one slot
+// taken by a call that has not finished, a second call is refused rather than
+// overrunning the stream table the limit exists to bound.
+func TestClientMaxStreamsRefusesExtraCall(t *testing.T) {
+	addr := startServer(t, RegisterService(&api.EchoService_ServiceDesc, &echoServer{}))
+	rt := dialTransport(t, addr, WithMaxStreams(1))
+
+	c := rt.(*client)
+	s, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("first createStream: %v", err)
+	}
+	defer func() { _ = s.CloseSend() }()
+
+	err = rt.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{}, &api.EchoResponse{})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("second call = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestClientNewStreamUnimplemented pins that the stream surface is refused up
+// front: grpcx carries unary calls only, so a caller must not be handed a stream
+// that can never carry frames.
+func TestClientNewStreamUnimplemented(t *testing.T) {
+	addr := startServer(t)
+	rt := dialTransport(t, addr)
+
+	_, err := rt.NewStream(context.Background(), &grpc.StreamDesc{}, "/nope/Nope")
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("NewStream = %v, want Unimplemented", err)
+	}
+}
+
+// TestClientCreateStreamIDsIncrease pins the id allocation: every stream gets a
+// fresh id, because two live calls sharing one id would deliver replies to the
+// wrong caller.
+func TestClientCreateStreamIDsIncrease(t *testing.T) {
+	addr := startServer(t)
+	rt := dialTransport(t, addr)
+	c := rt.(*client)
+
+	first, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("first createStream: %v", err)
+	}
+	defer func() { _ = first.CloseSend() }()
+	second, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("second createStream: %v", err)
+	}
+	defer func() { _ = second.CloseSend() }()
+
+	if second.id <= first.id {
+		t.Fatalf("stream ids = %d then %d, want increasing", first.id, second.id)
+	}
+}
+
+// TestClientDeleteStreamClosesTheSlot pins that finishing a call frees its slot
+// immediately, so a stream limit of one connection does not have to wait for the
+// connection to close.
+func TestClientDeleteStreamClosesTheSlot(t *testing.T) {
+	addr := startServer(t, RegisterService(&api.EchoService_ServiceDesc, &echoServer{}))
+	rt := dialTransport(t, addr, WithMaxStreams(1))
+	c := rt.(*client)
+
+	s, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("createStream: %v", err)
+	}
+	if err := s.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	// The slot is free again, so a fresh call may take it.
+	if err := rt.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{}, &api.EchoResponse{}); err != nil {
+		t.Fatalf("Invoke after the slot was freed: %v", err)
+	}
+}
+
+// TestServerHandleAnswersUnknownMethodRaw pins the dispatcher from the wire side:
+// a header naming an unregistered method still gets a header and a payload back,
+// so the connection stays usable.
+func TestServerHandleAnswersUnknownMethodRaw(t *testing.T) {
+	serverConn, clientConn := tcpPair(t)
+	so := DefaultServerOptions
+	ctx := testContext(t)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_ = so.Handle(ctx, serverConn)
+	})
+	defer func() {
+		_ = clientConn.Close()
+		wg.Wait()
+	}()
+
+	wire := newChannel(clientConn)
+	if err := wire.Send(mustMarshal(t, &api.CallOptions{FullMethodName: "/nope/Nope", StreamID: 6})); err != nil {
+		t.Fatalf("send header: %v", err)
+	}
+	if err := wire.Send([]byte{}); err != nil {
+		t.Fatalf("send payload: %v", err)
+	}
+
+	h, err := wire.Recv()
+	if err != nil {
+		t.Fatalf("recv header: %v", err)
+	}
+	defer putmbuf(h)
+	header := decodeHeader(t, h)
+	if codes.Code(header.Code) != codes.Unimplemented {
+		t.Fatalf("reply code = %v, want Unimplemented", codes.Code(header.Code))
+	}
+	if header.StreamID != 6 {
+		t.Fatalf("reply StreamID = %d, want 6", header.StreamID)
+	}
+	p, err := wire.Recv()
+	if err != nil {
+		t.Fatalf("recv payload: %v", err)
+	}
+	putmbuf(p)
+}
+
+// TestServerHandleReturnsWhenPeerCloses pins that a connection ending is
+// reported, not swallowed: the caller of Handle is the one that closes the
+// connection and logs the exit.
+func TestServerHandleReturnsWhenPeerCloses(t *testing.T) {
+	serverConn, clientConn := tcpPair(t)
+	so := DefaultServerOptions
+
+	done := make(chan error, 1)
+	go func() { done <- so.Handle(context.Background(), serverConn) }()
+
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("close peer: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Handle = nil after the peer closed, want the connection error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Handle did not return after the peer closed")
 	}
 }

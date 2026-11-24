@@ -2,476 +2,510 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
-// TestCallOptionsApplyMerge pins the merge rules: a non-zero caller field wins,
-// metadata is appended, and a timeout never grows when the caller's is shorter.
-func TestCallOptionsApplyMerge(t *testing.T) {
-	base := api.CallOptions{
-		Service:        "api.EchoService",
-		FullMethodName: "/api.EchoService/Echo",
+// echoServer is the service implementation the stream tests dispatch to. It
+// echoes the request with a suffix, so a test can tell the reply apart from the
+// request that produced it.
+type echoServer struct {
+	api.UnimplementedEchoServiceServer
+}
+
+func (s *echoServer) Echo(_ context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
+	return &api.EchoResponse{Message: req.GetMessage() + "!"}, nil
+}
+
+// failingEcho returns a status error, which the handler has to report through
+// the response header instead of tearing the connection down.
+type failingEcho struct {
+	api.UnimplementedEchoServiceServer
+}
+
+func (s *failingEcho) Echo(context.Context, *api.EchoRequest) (*api.EchoResponse, error) {
+	return nil, status.Error(codes.InvalidArgument, "bad input")
+}
+
+// TestCallOptionsApplyMergesFields pins the merge table: a non-zero field in the
+// caller's option wins, and a timeout is only ever narrowed. Extending a caller
+// deadline here would silently turn a bounded call into an unbounded one.
+func TestCallOptionsApplyMergesFields(t *testing.T) {
+	base := &api.CallOptions{
 		Timeout:        100,
+		FullMethodName: "/api.EchoService/Old",
+		Service:        "old",
 		Metadatas:      []string{"a", "1"},
-		StreamID:       3,
-		Authority:      "peer",
+		StreamID:       7,
 	}
-	caller := CallOptions{
-		FullMethodName: "/other/Method",
-		Timeout:        50,
+	overlay := CallOptions{
+		Timeout:        40,
+		FullMethodName: "/api.EchoService/Echo",
 		Metadatas:      []string{"b", "2"},
-		StreamID:       9,
-		Authority:      "caller",
 	}
-	caller.apply(&base)
 
-	if base.FullMethodName != "/other/Method" {
-		t.Fatalf("FullMethodName = %q, want the caller's", base.FullMethodName)
+	overlay.apply(base)
+
+	if base.Timeout != 40 {
+		t.Errorf("Timeout = %d, want the smaller 40", base.Timeout)
 	}
-	if base.Service != "api.EchoService" {
-		t.Fatalf("Service = %q, want the base value kept", base.Service)
+	if base.FullMethodName != "/api.EchoService/Echo" {
+		t.Errorf("FullMethodName = %q, want the overlay value", base.FullMethodName)
 	}
-	if base.Timeout != 50 {
-		t.Fatalf("Timeout = %d, want the smaller caller value 50", base.Timeout)
+	if base.Service != "old" {
+		t.Errorf("Service = %q, want the zero overlay to keep the base value", base.Service)
 	}
-	if base.StreamID != 9 {
-		t.Fatalf("StreamID = %d, want the caller's 9", base.StreamID)
+	if base.StreamID != 7 {
+		t.Errorf("StreamID = %d, want the zero overlay to keep the base value", base.StreamID)
 	}
-	if got := len(base.Metadatas); got != 4 {
-		t.Fatalf("Metadatas length = %d, want 4 (appended)", got)
+	if got, want := len(base.Metadatas), 4; got != want {
+		t.Errorf("len(Metadatas) = %d, want %d (overlay appended)", got, want)
 	}
 }
 
-// TestCallOptionsApplyKeepsShorterTimeout is the other half of the timeout
-// rule: a longer caller deadline must not extend the already negotiated one.
+// TestCallOptionsApplyKeepsShorterTimeout pins the other half of the timeout
+// rule: an overlay demanding a longer deadline than the header already carries
+// must not extend it.
 func TestCallOptionsApplyKeepsShorterTimeout(t *testing.T) {
-	base := api.CallOptions{Timeout: 50}
-	caller := CallOptions{Timeout: 500}
-	caller.apply(&base)
-	if base.Timeout != 50 {
-		t.Fatalf("Timeout = %d, want 50", base.Timeout)
+	base := &api.CallOptions{Timeout: 20}
+	overlay := CallOptions{Timeout: 90}
+
+	overlay.apply(base)
+
+	if base.Timeout != 20 {
+		t.Errorf("Timeout = %d, want the shorter 20 preserved", base.Timeout)
 	}
 }
 
-// TestCallOptionsApplyZeroLeavesBaseAlone checks that an empty CallOptions is a
-// no-op, which is what an omitted option must mean.
-func TestCallOptionsApplyZeroLeavesBaseAlone(t *testing.T) {
-	base := api.CallOptions{FullMethodName: "/m", Timeout: 20, StreamID: 2}
-	empty := CallOptions{}
-	empty.apply(&base)
-	if base.FullMethodName != "/m" || base.Timeout != 20 || base.StreamID != 2 {
-		t.Fatalf("base mutated by an empty option: method=%q timeout=%d stream=%d",
-			base.FullMethodName, base.Timeout, base.StreamID)
+// TestCallOptionsApplyZeroTimeoutLeavesBase pins that an option carrying no
+// timeout is a no-op, so a caller without a deadline never rewrites the header's
+// advertised default.
+func TestCallOptionsApplyZeroTimeoutLeavesBase(t *testing.T) {
+	base := &api.CallOptions{Timeout: 300}
+	overlay := CallOptions{FullMethodName: "/api.EchoService/Echo"}
+
+	overlay.apply(base)
+
+	if base.Timeout != 300 {
+		t.Errorf("Timeout = %d, want the untouched 300", base.Timeout)
 	}
 }
 
-// TestWithCallOptionsCopiesFields makes sure the dispatcher's decoded header
-// reaches the handler intact.
-func TestWithCallOptionsCopiesFields(t *testing.T) {
-	read := &api.CallOptions{
-		Service:        "svc",
-		FullMethodName: "/svc/M",
-		Timeout:        42,
-		Metadatas:      []string{"k", "v"},
-		Code:           3,
-		Desc:           "desc",
+// TestWithCallOptionsCopiesHeader pins that the dispatcher hands the handler a
+// copy of the decoded header rather than the header itself: the handler applies
+// its own defaults through CallOptions.apply, which would mutate the frame
+// options the dispatcher still holds.
+func TestWithCallOptionsCopiesHeader(t *testing.T) {
+	header := &api.CallOptions{
+		FullMethodName: "/api.EchoService/Echo",
 		StreamID:       11,
+		Timeout:        500,
+		Metadatas:      []string{"k", "v"},
 	}
+
+	opt := WithCallOptions(header)
 	var got api.CallOptions
-	WithCallOptions(read).apply(&got)
+	opt.apply(&got)
 
-	if got.FullMethodName != read.FullMethodName || got.Timeout != read.Timeout ||
-		got.Code != read.Code || got.StreamID != read.StreamID ||
-		got.StreamID != 11 || len(got.Metadatas) != 2 {
-		t.Fatalf("copied options = method=%q timeout=%d code=%d stream=%d, want the ones from the wire",
-			got.FullMethodName, got.Timeout, got.Code, got.StreamID)
+	if got.StreamID != 11 || got.FullMethodName != "/api.EchoService/Echo" || got.Timeout != 500 {
+		t.Fatalf("applied header = %+v, want the decoded values", &got)
+	}
+	if len(got.Metadatas) != 2 {
+		t.Fatalf("Metadatas = %v, want the decoded pair", got.Metadatas)
 	}
 }
 
-// TestSenderWritesHeaderBeforePayload is the frame contract every peer depends
-// on: the marshalled options travel first, the marshalled message second.
-func TestSenderWritesHeaderBeforePayload(t *testing.T) {
-	sink := &frameSink{}
-	s := sender{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
-	if err := s.send(4, &api.EchoRequest{Message: "hi"}, &CallOptions{FullMethodName: "/m"}); err != nil {
+// TestSenderWritesHeaderThenPayload pins the frame order a peer depends on:
+// header first, payload second, never interleaved, so the reader can tell the
+// two apart by position alone.
+func TestSenderWritesHeaderThenPayload(t *testing.T) {
+	rs := &recordSender{}
+	sd := &sender{Sender: rs, Codec: encoding.GetCodec(encoding.Name)}
+
+	err := sd.send(9, &api.EchoRequest{Message: "hi"}, &CallOptions{FullMethodName: "/api.EchoService/Echo"})
+	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-
-	frames := sink.Frames()
-	if len(frames) != 2 {
-		t.Fatalf("frames = %d, want 2", len(frames))
+	if got := rs.count(); got != 1 {
+		t.Fatalf("Send calls = %d, want 1", got)
+	}
+	if got := len(rs.calls[0]); got != 2 {
+		t.Fatalf("frames = %d, want header plus payload", got)
 	}
 
-	var header api.CallOptions
-	if err := encoding.Unmarshal(frames[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.FullMethodName != "/m" || header.StreamID != 4 {
-		t.Fatalf("header = method=%q stream=%d, want method /m on stream 4", header.FullMethodName, header.StreamID)
-	}
-
-	var payload api.EchoRequest
-	if err := encoding.Unmarshal(frames[1], &payload); err != nil {
-		t.Fatalf("unmarshal payload: %v", err)
-	}
-	if payload.Message != "hi" {
-		t.Fatalf("payload = %q, want %q", payload.Message, "hi")
-	}
-}
-
-// TestSenderStreamIDWinsOverOptions locks the routing invariant of the
-// explicit stream id parameter: an id smuggled in through options must not
-// move the frame onto another stream.
-func TestSenderStreamIDWinsOverOptions(t *testing.T) {
-	sink := &frameSink{}
-	s := sender{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
-	if err := s.send(5, &api.EchoRequest{Message: "hi"}, &CallOptions{StreamID: 42}); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sink.Frames()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.StreamID != 5 {
-		t.Fatalf("StreamID = %d, want the explicit 5", header.StreamID)
-	}
-}
-
-// TestClientStreamSendAppendsOwnStreamID is the property that keeps a caller
-// from steering a frame onto somebody else's stream: the stream's own id is
-// applied last and wins.
-func TestClientStreamSendAppendsOwnStreamID(t *testing.T) {
-	sink := &frameSink{}
-	s := &clientStream{id: 7, Sender: sink, codec: encoding.GetCodec(encoding.Name)}
-
-	if err := s.Send(&api.EchoRequest{Message: "x"}, &CallOptions{StreamID: 99}); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-
-	frames := sink.Frames()
-	if len(frames) != 2 {
-		t.Fatalf("frames = %d, want 2", len(frames))
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(frames[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.StreamID != 7 {
-		t.Fatalf("StreamID = %d, want the stream's own 7", header.StreamID)
-	}
-}
-
-// TestClientStreamSendMsgAndContext covers the grpc.ClientStream accessors a
-// stub or an interceptor may reach for: SendMsg sends on the stream's own id
-// and Context hands back the stream context, not the caller's.
-func TestClientStreamSendMsgAndContext(t *testing.T) {
-	sink := &frameSink{}
-	ctx := t.Context()
-	s := &clientStream{
-		Sender: sink,
-		ctx:    ctx,
-		id:     9,
-		codec:  encoding.GetCodec(encoding.Name),
-	}
-
-	if err := s.SendMsg(&api.EchoRequest{Message: "msg"}); err != nil {
-		t.Fatalf("SendMsg: %v", err)
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sink.Frames()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
+	header := decodeHeader(t, rs.frame(0, 0))
+	if header.FullMethodName != "/api.EchoService/Echo" {
+		t.Errorf("header FullMethodName = %q", header.FullMethodName)
 	}
 	if header.StreamID != 9 {
-		t.Fatalf("StreamID = %d, want 9", header.StreamID)
+		t.Errorf("header StreamID = %d, want 9", header.StreamID)
 	}
-	if s.Context() != ctx {
-		t.Fatal("Context() did not return the stream context")
+
+	var req api.EchoRequest
+	if err := encoding.Unmarshal(rs.frame(0, 1), &req); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if req.Message != "hi" {
+		t.Errorf("payload message = %q, want %q", req.Message, "hi")
 	}
 }
 
-// TestDecodeCallOptionsRoundTrip reads back a header the sender wrote.
-func TestDecodeCallOptionsRoundTrip(t *testing.T) {
-	h, err := encoding.Marshal(&api.CallOptions{FullMethodName: "/m", StreamID: 12})
+// TestSenderStreamIDWinsOverOption pins that the id argument overrides whatever
+// id a call option carries, so a caller cannot route a frame onto another
+// stream by filling in the field itself.
+func TestSenderStreamIDWinsOverOption(t *testing.T) {
+	rs := &recordSender{}
+	sd := &sender{Sender: rs, Codec: encoding.GetCodec(encoding.Name)}
+
+	if err := sd.send(42, &api.Empty{}, &CallOptions{StreamID: 1}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := decodeHeader(t, rs.frame(0, 0)).StreamID; got != 42 {
+		t.Fatalf("header StreamID = %d, want the send argument 42", got)
+	}
+}
+
+// TestSenderReportsMarshalError pins that a message the codec cannot marshal is
+// reported before anything reaches the wire, so the peer never sees a header
+// without its payload.
+func TestSenderReportsMarshalError(t *testing.T) {
+	rs := &recordSender{}
+	sd := &sender{Sender: rs, Codec: encoding.GetCodec(encoding.Name)}
+
+	if err := sd.send(1, make(chan int)); err == nil {
+		t.Fatal("send of an unmarshalable message = nil error")
+	}
+	if rs.count() != 0 {
+		t.Fatalf("Send calls = %d, want none after a marshal failure", rs.count())
+	}
+}
+
+// TestSenderReportsSendError pins that a transport failure is surfaced to the
+// caller: the frame writer is the only place that knows the socket refused the
+// write, and returning nil would report a call that never left.
+func TestSenderReportsSendError(t *testing.T) {
+	rs := &recordSender{}
+	rs.fail(errWriteRefused)
+	sd := &sender{Sender: rs, Codec: encoding.GetCodec(encoding.Name)}
+
+	if err := sd.send(1, &api.EchoRequest{Message: "x"}); !errors.Is(err, errWriteRefused) {
+		t.Fatalf("send = %v, want the transport's error", err)
+	}
+}
+
+// TestDecodeCallOptionsReadsHeader pins that the dispatcher consumes exactly the
+// header frame and returns what the wire carried, since both directions use it
+// to find the stream before any payload is read.
+func TestDecodeCallOptionsReadsHeader(t *testing.T) {
+	src := &frameSource{frames: [][]byte{headerFrame(t, &api.CallOptions{StreamID: 5, FullMethodName: "/m"})}}
+
+	opts, err := decodeCallOptions(src)
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("decodeCallOptions: %v", err)
+	}
+	if opts.StreamID != 5 || opts.FullMethodName != "/m" {
+		t.Fatalf("decoded = %+v, want the frame's values", opts)
+	}
+	if src.i != 1 {
+		t.Fatalf("consumed %d frames, want 1", src.i)
+	}
+}
+
+// TestDecodeCallOptionsReportsBrokenHeader pins that a garbage header is an
+// error rather than an empty options struct: silently defaulting it would route
+// the call to nothing and leave the connection on a frame boundary it did not
+// actually reach.
+func TestDecodeCallOptionsReportsBrokenHeader(t *testing.T) {
+	src := &frameSource{frames: [][]byte{newFrame([]byte{0xff, 0xff})}}
+
+	if _, err := decodeCallOptions(src); err == nil {
+		t.Fatal("decodeCallOptions = nil error, want a marshal failure")
+	}
+}
+
+// TestDecodeCallOptionsReportsRecvError pins that a connection ending before a
+// header arrives is passed through as-is, so the caller can tell EOF from a bad
+// frame.
+func TestDecodeCallOptionsReportsRecvError(t *testing.T) {
+	src := &frameSource{}
+
+	if _, err := decodeCallOptions(src); !errors.Is(err, io.EOF) {
+		t.Fatalf("decodeCallOptions = %v, want io.EOF", err)
+	}
+}
+
+// newTestStream builds a client stream wired to a record sender, with the pieces
+// a real stream gets from createStream. It returns the stream and the recorded
+// deletes so a test can assert cleanup.
+func newTestStream(t *testing.T) (*clientStream, *recordSender, *int) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	rs := &recordSender{}
+	deletes := 0
+	s := &clientStream{
+		Sender:       rs,
+		ctx:          ctx,
+		id:           7,
+		c:            make(chan *api.Response, 1),
+		cancel:       cancel,
+		deleteStream: func(uint32) { deletes++ },
+		codec:        encoding.GetCodec(encoding.Name),
+	}
+	return s, rs, &deletes
+}
+
+// TestClientStreamSendUsesItsOwnID pins that a stream routes its own sends: the
+// frame carries the id the stream was created with, regardless of what the call
+// option says.
+func TestClientStreamSendUsesItsOwnID(t *testing.T) {
+	s, rs, _ := newTestStream(t)
+
+	if err := s.Send(&api.EchoRequest{Message: "x"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := decodeHeader(t, rs.frame(0, 0)).StreamID; got != s.id {
+		t.Fatalf("header StreamID = %d, want %d", got, s.id)
+	}
+}
+
+// TestClientStreamSendMsgUsesItsOwnID pins the grpc.ClientStream shape of the
+// same rule.
+func TestClientStreamSendMsgUsesItsOwnID(t *testing.T) {
+	s, rs, _ := newTestStream(t)
+
+	if err := s.SendMsg(&api.EchoRequest{Message: "x"}); err != nil {
+		t.Fatalf("SendMsg: %v", err)
+	}
+	if got := decodeHeader(t, rs.frame(0, 0)).StreamID; got != s.id {
+		t.Fatalf("header StreamID = %d, want %d", got, s.id)
+	}
+}
+
+// TestClientStreamRecvMsgDecodesReply pins the success path: a reply framed on
+// the stream is unmarshalled into the caller's message.
+func TestClientStreamRecvMsgDecodesReply(t *testing.T) {
+	s, _, _ := newTestStream(t)
+	s.c <- &api.Response{
+		Options: &api.CallOptions{Code: uint32(codes.OK)},
+		Payload: newFrame(mustMarshal(t, &api.EchoResponse{Message: "pong"})),
 	}
 
-	got, err := decodeCallOptions(newFrameSource(h))
+	var out api.EchoResponse
+	if err := s.RecvMsg(&out); err != nil {
+		t.Fatalf("RecvMsg: %v", err)
+	}
+	if out.Message != "pong" {
+		t.Fatalf("reply = %q, want pong", out.Message)
+	}
+}
+
+// TestClientStreamRecvMsgReportsStatus pins that a non-OK reply code becomes a
+// status error carrying that code, which is how the server reports handler
+// failures without breaking the connection.
+func TestClientStreamRecvMsgReportsStatus(t *testing.T) {
+	s, _, _ := newTestStream(t)
+	s.c <- &api.Response{
+		Options: &api.CallOptions{Code: uint32(codes.InvalidArgument), Desc: "bad input"},
+		Payload: newFrame(mustMarshal(t, &api.EchoResponse{})),
+	}
+
+	err := s.RecvMsg(&api.EchoResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("RecvMsg code = %v, want InvalidArgument", status.Code(err))
+	}
+	// status.Error renders the description inside the "rpc error: ..." wrapper,
+	// so the message part is what carries the server's text.
+	if got := status.Convert(err).Message(); got != "bad input" {
+		t.Fatalf("RecvMsg message = %q, want the server description", got)
+	}
+}
+
+// TestClientStreamRecvMsgReportsCanceled pins that a stream canceled before its
+// reply arrives ends the call with Canceled instead of blocking forever.
+func TestClientStreamRecvMsgReportsCanceled(t *testing.T) {
+	s, _, _ := newTestStream(t)
+	s.cancel()
+
+	if err := s.RecvMsg(&api.EchoResponse{}); status.Code(err) != codes.Canceled {
+		t.Fatalf("RecvMsg after cancel = %v, want Canceled", err)
+	}
+}
+
+// TestClientStreamCloseSendDeletesOnce pins the exactly-once deregistration:
+// CloseSend is called twice on every call — once by the caller's defer, once by
+// its own cleanup — and a second delete would drop a stream that a later frame
+// still routes to.
+func TestClientStreamCloseSendDeletesOnce(t *testing.T) {
+	s, _, deletes := newTestStream(t)
+
+	if err := s.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	if err := s.CloseSend(); err != nil {
+		t.Fatalf("second CloseSend: %v", err)
+	}
+	if *deletes != 1 {
+		t.Fatalf("deleted %d times, want 1", *deletes)
+	}
+}
+
+// TestClientStreamHandleDeliversResponse pins the receive path: the payload
+// frame off the wire lands in the stream's slot with the header that prefixed
+// it.
+func TestClientStreamHandleDeliversResponse(t *testing.T) {
+	s, _, _ := newTestStream(t)
+	want := "pong"
+	src := &frameSource{frames: [][]byte{newFrame(mustMarshal(t, &api.EchoResponse{Message: want}))}}
+
+	err := s.Handle(context.Background(), src, WithCallOptions(&api.CallOptions{StreamID: s.id}))
 	if err != nil {
-		t.Fatalf("decode: %v", err)
+		t.Fatalf("Handle: %v", err)
 	}
-	if got.FullMethodName != "/m" || got.StreamID != 12 {
-		t.Fatalf("decoded = %+v, want /m on stream 12", got)
+
+	var got api.EchoResponse
+	if err := s.RecvMsg(&got); err != nil {
+		t.Fatalf("RecvMsg: %v", err)
+	}
+	if got.Message != want {
+		t.Fatalf("reply = %q, want %q", got.Message, want)
 	}
 }
 
-// TestDecodeCallOptionsRejectsGarbage makes a malformed header an error rather
-// than a silently zeroed dispatch target.
-func TestDecodeCallOptionsRejectsGarbage(t *testing.T) {
-	if _, err := decodeCallOptions(newFrameSource([]byte{0xff, 0xff, 0xff})); err == nil {
-		t.Fatal("decode succeeded on garbage, want an error")
+// TestClientStreamHandleReportsRecvError pins that a broken connection below the
+// frame is returned to the receive loop, which is the only place that can log it
+// and drop the connection.
+func TestClientStreamHandleReportsRecvError(t *testing.T) {
+	s, _, _ := newTestStream(t)
+	src := &frameSource{err: io.ErrUnexpectedEOF}
+
+	if err := s.Handle(context.Background(), src); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("Handle = %v, want ErrUnexpectedEOF", err)
 	}
 }
 
-// TestDefaultMethodHandlerReplies pins the success path: the handler's reply is
-// marshalled into the payload frame and the header carries OK on the same
-// stream the request arrived on.
+// TestClientStreamHandleDropsWhenSlotIsFull pins the abandoned-call path: once
+// the reply slot is full and the call is canceled, the frame is consumed off the
+// wire and its buffer returned, so the next frame still starts on a boundary.
+func TestClientStreamHandleDropsWhenSlotIsFull(t *testing.T) {
+	s, _, _ := newTestStream(t)
+	s.c <- &api.Response{Options: &api.CallOptions{}} // occupy the single slot
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	src := &frameSource{frames: [][]byte{newFrame(mustMarshal(t, &api.EchoResponse{Message: "dropped"}))}}
+
+	if err := s.Handle(ctx, src); err != nil {
+		t.Fatalf("Handle on a canceled call: %v", err)
+	}
+	if src.i != 1 {
+		t.Fatalf("consumed %d frames, want the dropped frame read off the wire", src.i)
+	}
+	select {
+	case <-s.Context().Done():
+	default:
+		t.Fatal("stream still live after dropping an undeliverable frame, want it closed")
+	}
+}
+
+// TestDefaultMethodHandlerReplies pins the server-side success path: the
+// dispatch table resolves the method, the handler runs, and the reply goes back
+// on the stream the request arrived on with code OK.
 func TestDefaultMethodHandlerReplies(t *testing.T) {
-	impl := &testEcho{}
-	sink := &frameSink{}
+	rs := &recordSender{}
 	h := &defaultMethodHandler{
-		Sender:   sink,
+		Sender:   rs,
 		Options:  DefaultOptions(),
-		imp:      impl,
+		imp:      &echoServer{},
 		unaryInt: DefaultServerOptions.unaryInt,
-		Handler:  echoMethodHandler,
+		Handler:  api.EchoService_ServiceDesc.Methods[0].Handler,
+	}
+	src := &frameSource{frames: [][]byte{newFrame(mustMarshal(t, &api.EchoRequest{Message: "ping"}))}}
+
+	err := h.Handle(context.Background(), src, WithCallOptions(&api.CallOptions{StreamID: 12}))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
 
-	req, err := encoding.Marshal(&api.EchoRequest{Message: "ping"})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
+	header := decodeHeader(t, rs.frame(0, 0))
+	if header.StreamID != 12 {
+		t.Errorf("reply StreamID = %d, want the request's 12", header.StreamID)
 	}
-	err = h.Handle(t.Context(), newFrameSource(req), WithCallOptions(&api.CallOptions{
-		FullMethodName: api.EchoService_Echo_FullMethodName,
-		StreamID:       5,
-		Timeout:        1000,
-	}))
-	if err != nil {
-		t.Fatalf("handle: %v", err)
+	if codes.Code(header.Code) != codes.OK {
+		t.Errorf("reply code = %v, want OK", codes.Code(header.Code))
 	}
 
-	frames := sink.Frames()
-	if len(frames) != 2 {
-		t.Fatalf("frames = %d, want 2", len(frames))
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(frames[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.Code != uint32(codes.OK) {
-		t.Fatalf("code = %d, want OK", header.Code)
-	}
-	if header.StreamID != 5 {
-		t.Fatalf("StreamID = %d, want 5", header.StreamID)
-	}
 	var reply api.EchoResponse
-	if err := encoding.Unmarshal(frames[1], &reply); err != nil {
+	if err := encoding.Unmarshal(rs.frame(0, 1), &reply); err != nil {
 		t.Fatalf("unmarshal reply: %v", err)
 	}
-	if reply.Message != "ping" {
-		t.Fatalf("reply = %q, want %q", reply.Message, "ping")
+	if reply.Message != "ping!" {
+		t.Errorf("reply = %q, want ping!", reply.Message)
 	}
 }
 
-// TestDefaultMethodHandlerReportsHandlerError is the failure path: a handler
-// error becomes a status code in the reply header, and the payload is empty, so
-// the connection stays up for the next call.
+// TestDefaultMethodHandlerReportsHandlerError pins that a handler error becomes
+// the reply's status code instead of a connection teardown, so one failed call
+// does not take the connection away from the others multiplexed on it.
 func TestDefaultMethodHandlerReportsHandlerError(t *testing.T) {
-	impl := &testEcho{err: status.Error(codes.InvalidArgument, "bad argument")}
-	sink := &frameSink{}
+	rs := &recordSender{}
 	h := &defaultMethodHandler{
-		Sender:   sink,
+		Sender:   rs,
 		Options:  DefaultOptions(),
-		imp:      impl,
+		imp:      &failingEcho{},
 		unaryInt: DefaultServerOptions.unaryInt,
-		Handler:  echoMethodHandler,
+		Handler:  api.EchoService_ServiceDesc.Methods[0].Handler,
+	}
+	src := &frameSource{frames: [][]byte{newFrame(mustMarshal(t, &api.EchoRequest{Message: "ping"}))}}
+
+	if err := h.Handle(context.Background(), src, WithCallOptions(&api.CallOptions{StreamID: 3})); err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
 
-	req, err := encoding.Marshal(&api.EchoRequest{Message: "x"})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	err = h.Handle(t.Context(), newFrameSource(req), WithCallOptions(&api.CallOptions{
-		FullMethodName: api.EchoService_Echo_FullMethodName,
-		StreamID:       6,
-		Timeout:        1000,
-	}))
-	if err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-
-	frames := sink.Frames()
-	if len(frames) != 2 {
-		t.Fatalf("frames = %d, want 2", len(frames))
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(frames[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
+	header := decodeHeader(t, rs.frame(0, 0))
 	if codes.Code(header.Code) != codes.InvalidArgument {
-		t.Fatalf("code = %v, want InvalidArgument", codes.Code(header.Code))
+		t.Fatalf("reply code = %v, want InvalidArgument", codes.Code(header.Code))
 	}
-	if header.StreamID != 6 {
-		t.Fatalf("StreamID = %d, want 6", header.StreamID)
+	// The handler records err.Error(), not the bare status message, so the
+	// description carries the whole "rpc error: ..." string.
+	if !strings.Contains(header.Desc, "bad input") {
+		t.Fatalf("reply desc = %q, want the handler's error text", header.Desc)
 	}
-	if header.Desc == "" {
-		t.Fatal("Desc empty, want the handler's message")
-	}
-}
-
-// TestDefaultMethodHandlerAppliesCallTimeout proves the header's timeout
-// reaches the handler: one that waits for cancellation must come back as soon
-// as the 20ms deadline fires, not hang until the package default does. The
-// reply carries Unknown rather than DeadlineExceeded because a handler
-// returning the bare ctx.Err() gives the transport no status to report; a
-// handler that wants the code has to wrap it itself.
-func TestDefaultMethodHandlerAppliesCallTimeout(t *testing.T) {
-	impl := &testEcho{gate: make(chan struct{})} // never released: only the deadline can end it
-	sink := &frameSink{}
-	h := &defaultMethodHandler{
-		Sender:   sink,
-		Options:  DefaultOptions(),
-		imp:      impl,
-		unaryInt: DefaultServerOptions.unaryInt,
-		Handler:  echoMethodHandler,
-	}
-
-	req, err := encoding.Marshal(&api.EchoRequest{Message: "x"})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	start := time.Now()
-	err = h.Handle(t.Context(), newFrameSource(req), WithCallOptions(&api.CallOptions{
-		FullMethodName: api.EchoService_Echo_FullMethodName,
-		StreamID:       7,
-		Timeout:        20,
-	}))
-	if err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("handler ran %v, want it cut off by the 20ms call timeout", elapsed)
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sink.Frames()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if got := codes.Code(header.Code); got != codes.Unknown {
-		t.Fatalf("code = %v, want Unknown for a bare ctx error", got)
-	}
-	if !strings.Contains(header.Desc, "deadline exceeded") {
-		t.Fatalf("Desc = %q, want the context deadline error", header.Desc)
+	if header.StreamID != 3 {
+		t.Fatalf("reply StreamID = %d, want 3", header.StreamID)
 	}
 }
 
-// TestDefaultMethodHandlerPassesMetadata checks that the header's metadata pairs
-// are visible to the handler under its own keys.
-func TestDefaultMethodHandlerPassesMetadata(t *testing.T) {
-	impl := &testEcho{}
-	sink := &frameSink{}
-	h := &defaultMethodHandler{
-		Sender:   sink,
-		Options:  DefaultOptions(),
-		imp:      impl,
-		unaryInt: DefaultServerOptions.unaryInt,
-		Handler:  echoMethodHandler,
-	}
-
-	req, err := encoding.Marshal(&api.EchoRequest{Message: "x"})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	err = h.Handle(t.Context(), newFrameSource(req), WithCallOptions(&api.CallOptions{
-		FullMethodName: api.EchoService_Echo_FullMethodName,
-		Metadatas:      []string{"x-test", "v1"},
-		StreamID:       8,
-		Timeout:        1000,
-	}))
-	if err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-
-	if got := impl.metadataValue("x-test"); got != "v1" {
-		t.Fatalf("metadata x-test = %q, want v1", got)
-	}
-}
-
-// TestEmptyHandlerAnswersUnimplemented covers a method the service does not
-// expose: the payload is still consumed, and the reply names the method the
-// caller asked for on the stream it came from.
+// TestEmptyHandlerAnswersUnimplemented pins the fallback for an unknown or
+// unsupported method: the payload is still consumed so the connection stays
+// frame-aligned, and the request's method name comes back as the description.
 func TestEmptyHandlerAnswersUnimplemented(t *testing.T) {
-	sink := &frameSink{}
-	e := &empty{Codec: encoding.GetCodec(encoding.Name), Sender: sink}
+	rs := &recordSender{}
+	e := &empty{Sender: rs, Codec: encoding.GetCodec(encoding.Name)}
+	src := &frameSource{frames: [][]byte{newFrame(mustMarshal(t, &api.EchoRequest{Message: "ignored"}))}}
 
-	req, err := encoding.Marshal(&api.Empty{})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
+	if err := e.Handle(context.Background(), src, WithCallOptions(&api.CallOptions{StreamID: 4, FullMethodName: "/nope/Nope"})); err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
-	err = e.Handle(context.Background(), newFrameSource(req), WithCallOptions(&api.CallOptions{
-		FullMethodName: "/api.EchoService/Missing",
-		StreamID:       13,
-	}))
-	if err != nil {
-		t.Fatalf("handle: %v", err)
+	if src.i != 1 {
+		t.Fatalf("consumed %d frames, want the request payload read off the wire", src.i)
 	}
 
-	frames := sink.Frames()
-	if len(frames) != 2 {
-		t.Fatalf("frames = %d, want 2", len(frames))
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(frames[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
+	header := decodeHeader(t, rs.frame(0, 0))
 	if codes.Code(header.Code) != codes.Unimplemented {
-		t.Fatalf("code = %v, want Unimplemented", codes.Code(header.Code))
+		t.Fatalf("reply code = %v, want Unimplemented", codes.Code(header.Code))
 	}
-	if header.StreamID != 13 {
-		t.Fatalf("StreamID = %d, want 13", header.StreamID)
+	if header.Desc != "/nope/Nope" {
+		t.Fatalf("reply desc = %q, want the requested method", header.Desc)
 	}
-	if header.Desc != "/api.EchoService/Missing" {
-		t.Fatalf("Desc = %q, want the requested method name", header.Desc)
-	}
-}
-
-// TestServerInterceptorCanWrapTheHandler checks the interceptor chain: it must
-// see the request and be able to rewrite the reply.
-func TestServerInterceptorCanWrapTheHandler(t *testing.T) {
-	sink := &frameSink{}
-	impl := &testEcho{}
-	wrapped := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		reply, err := handler(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		reply.(*api.EchoResponse).Message = "wrapped:" + reply.(*api.EchoResponse).Message
-		return reply, nil
-	}
-	h := &defaultMethodHandler{
-		Sender:   sink,
-		Options:  DefaultOptions(),
-		imp:      impl,
-		unaryInt: wrapped,
-		Handler:  echoMethodHandler,
-	}
-
-	req, err := encoding.Marshal(&api.EchoRequest{Message: "x"})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	if err := h.Handle(t.Context(), newFrameSource(req), WithCallOptions(&api.CallOptions{
-		FullMethodName: api.EchoService_Echo_FullMethodName,
-		StreamID:       1,
-		Timeout:        1000,
-	})); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-
-	var reply api.EchoResponse
-	if err := encoding.Unmarshal(sink.Frames()[1], &reply); err != nil {
-		t.Fatalf("unmarshal reply: %v", err)
-	}
-	if reply.Message != "wrapped:x" {
-		t.Fatalf("reply = %q, want the interceptor's rewrite", reply.Message)
+	if header.StreamID != 4 {
+		t.Fatalf("reply StreamID = %d, want 4", header.StreamID)
 	}
 }

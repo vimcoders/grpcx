@@ -3,210 +3,167 @@ package grpcx
 import (
 	"context"
 	"net"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
-// startHandlingServer accepts connections on a loopback listener and serves
-// each one with srv.Handle, the same per-connection entry point ListenAndServe
-// uses.
-func startHandlingServer(t *testing.T, srv *Server) net.Listener {
-	t.Helper()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		cancel()
-		_ = ln.Close()
-	})
-
-	go func() {
-		for {
-			conn, acceptErr := ln.Accept()
-			if acceptErr != nil {
-				return
-			}
-			go func() { _ = srv.Handle(ctx, conn) }()
-		}
-	}()
-	return ln
+// countingInterceptor records how often the server interceptor ran, so a test
+// can assert the option installed at construction time is the one in effect.
+type countingInterceptor struct {
+	mu sync.Mutex
+	n  int
 }
 
-// TestServerServesRegisteredService runs a full call: client dial, balancer
-// pick, connection, codec, interceptor, handler and reply.
-func TestServerServesRegisteredService(t *testing.T) {
-	codec := &countingCodec{enc: encoding.GetCodec(encoding.Name)}
-	echo := &echoServer{}
-	var interceptorCalls atomic.Int64
+func (c *countingInterceptor) interceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		c.mu.Lock()
+		c.n++
+		c.mu.Unlock()
+		return handler(ctx, req)
+	}
+}
 
-	srv := NewServer(
-		WithServerCodec(codec),
-		UnaryServerInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			interceptorCalls.Add(1)
-			return handler(ctx, req)
-		}),
+func (c *countingInterceptor) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// TestServerListenAndServeServes pins the serving loop: a registered service
+// answers over a real listener, which is the only path that exercises accept,
+// dispatch and reply together.
+func TestServerListenAndServeServes(t *testing.T) {
+	_, addr := startServer(t, transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}))
+	cli := dialClient(t, addr)
+
+	reply, err := api.NewEchoServiceClient(cli).Echo(context.Background(), &api.EchoRequest{Message: "served"})
+	if err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+	if reply.Message != "served!" {
+		t.Fatalf("reply = %q, want served!", reply.Message)
+	}
+}
+
+// TestServerAppliesUnaryInterceptor pins that NewServer installs the interceptor
+// passed at construction: options are applied once, and a later registration
+// cannot retro-fit one, so an interceptor that never runs is silently missing
+// auth or tracing on every call.
+func TestServerAppliesUnaryInterceptor(t *testing.T) {
+	rec := &countingInterceptor{}
+	_, addr := startServer(t,
+		transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}),
+		UnaryServerInterceptor(rec.interceptor()),
 	)
-	api.RegisterEchoServiceServer(srv, echo)
-	ln := startHandlingServer(t, srv)
+	cli := dialClient(t, addr)
 
-	cli, err := Dial(ln.Addr().String(), WithCodec(codec))
-	if err != nil {
-		t.Fatalf("Dial(%s) = %v", ln.Addr(), err)
+	if _, err := api.NewEchoServiceClient(cli).Echo(context.Background(), &api.EchoRequest{Message: "x"}); err != nil {
+		t.Fatalf("Echo: %v", err)
 	}
+	if got := rec.count(); got != 1 {
+		t.Fatalf("interceptor ran %d times, want 1", got)
+	}
+}
+
+// TestServerRegisterServiceReplaces pins the single-service rule: the dispatch
+// table holds one descriptor, so a later registration replaces the earlier one.
+// The test observes it from the wire — the superseded service stops answering —
+// because the descriptor itself is not exported.
+func TestServerRegisterServiceReplaces(t *testing.T) {
+	first := &grpc.ServiceDesc{ServiceName: "first.Echo", Methods: api.EchoService_ServiceDesc.Methods}
+	second := &grpc.ServiceDesc{ServiceName: "second.Echo", Methods: api.EchoService_ServiceDesc.Methods}
+	srv, addr := startServer(t, transport.RegisterService(first, &echoStub{}))
+	cli := dialClient(t, addr)
+
+	if err := cli.Invoke(context.Background(), "/first.Echo/Echo", &api.EchoRequest{Message: "a"}, &api.EchoResponse{}); err != nil {
+		t.Fatalf("first registration did not serve: %v", err)
+	}
+
+	srv.RegisterService(second, &echoStub{})
+
+	if err := cli.Invoke(context.Background(), "/first.Echo/Echo", &api.EchoRequest{}, &api.EchoResponse{}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("superseded service = %v, want Unimplemented", err)
+	}
+	if err := cli.Invoke(context.Background(), "/second.Echo/Echo", &api.EchoRequest{Message: "b"}, &api.EchoResponse{}); err != nil {
+		t.Fatalf("second registration did not serve: %v", err)
+	}
+}
+
+// TestServerCloseIsIdempotent pins that Close can run twice: ListenAndServe
+// closes on the way out and a test or a supervisor closes explicitly, so a
+// second call must not touch a closed listener or wait on an empty group.
+func TestServerCloseIsIdempotent(t *testing.T) {
+	srv := NewServer()
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+// TestServerTrackConnRejectsAfterClose pins the admission check: a connection
+// accepted after Close must be refused, because nothing would ever close it
+// again and the handler would outlive the server.
+func TestServerTrackConnRejectsAfterClose(t *testing.T) {
+	srv := NewServer()
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	conn, peer := net.Pipe()
 	defer func() {
-		if closeErr := cli.Close(); closeErr != nil {
-			t.Fatalf("client Close = %v", closeErr)
-		}
+		_ = conn.Close()
+		_ = peer.Close()
 	}()
 
-	for i, msg := range []string{"ping", "pong"} {
-		reply := new(api.EchoResponse)
-		if err := cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: msg}, reply); err != nil {
-			t.Fatalf("Invoke %d = %v", i, err)
-		}
-		if got := reply.GetMessage(); got != msg {
-			t.Fatalf("reply %d = %q, want %q", i, got, msg)
-		}
-	}
-
-	if got := echo.callCount(); got != 2 {
-		t.Fatalf("handler calls = %d, want 2", got)
-	}
-	if got := interceptorCalls.Load(); got != 2 {
-		t.Fatalf("interceptor calls = %d, want 2", got)
-	}
-	// Two calls each way: request marshal plus reply marshal on both sides.
-	if got := codec.marshals.Load(); got < 4 {
-		t.Fatalf("codec marshals = %d, want at least 4", got)
-	}
-	if got := codec.unmarshals.Load(); got < 4 {
-		t.Fatalf("codec unmarshals = %d, want at least 4", got)
+	if srv.trackConn(conn) {
+		t.Fatal("trackConn accepted a connection after Close")
 	}
 }
 
-// TestServerReturnsHandlerError checks that a failing handler reaches the caller
-// as a status error with its original code.
-func TestServerReturnsHandlerError(t *testing.T) {
-	echo := &echoServer{err: status.NotFound.Err()}
-	srv := NewServer()
-	api.RegisterEchoServiceServer(srv, echo)
-	ln := startHandlingServer(t, srv)
+// TestServerCloseStopsServing pins that Close tears down a live connection:
+// closing the listener alone leaves the handler parked in a read, and the client
+// would keep using a socket nothing serves. After Close the next call has to
+// fail instead of hanging.
+func TestServerCloseStopsServing(t *testing.T) {
+	srv, addr := startServer(t, transport.RegisterService(&api.EchoService_ServiceDesc, &echoStub{}))
+	cli := dialClient(t, addr)
+	client := api.NewEchoServiceClient(cli)
 
-	cli, err := Dial(ln.Addr().String())
-	if err != nil {
-		t.Fatalf("Dial = %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := client.Echo(ctx, &api.EchoRequest{Message: "before"}); err != nil {
+		t.Fatalf("Echo before Close: %v", err)
 	}
-	defer func() { _ = cli.Close() }()
-
-	err = cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "x"}, new(api.EchoResponse))
-	if err == nil {
-		t.Fatalf("Invoke against a failing handler = nil error")
-	}
-	if got := status.Code(err); got != codes.NotFound {
-		t.Fatalf("error code = %v, want NotFound (err = %v)", got, err)
-	}
-}
-
-// TestListenAndServeShutsDownOnClose covers the serving loop: it accepts on the
-// configured address, serves the call, and returns once Close shuts it down.
-func TestListenAndServeShutsDownOnClose(t *testing.T) {
-	addr := reserveAddr(t)
-	srv := NewServer()
-	api.RegisterEchoServiceServer(srv, &echoServer{})
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe(context.Background(), addr) }()
-
-	var cli ClientConnInterface
-	deadline := time.Now().Add(5 * time.Second)
-	var dialErr error
-	for time.Now().Before(deadline) {
-		cli, dialErr = Dial(addr)
-		if dialErr == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if cli == nil {
-		t.Fatalf("server never became dialable on %s: %v", addr, dialErr)
-	}
-
-	reply := new(api.EchoResponse)
-	if err := cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "hello"}, reply); err != nil {
-		t.Fatalf("Invoke = %v", err)
-	}
-	if got := reply.GetMessage(); got != "hello" {
-		t.Fatalf("reply = %q, want hello", got)
-	}
-
-	_ = cli.Close()
-	started := time.Now()
 	if err := srv.Close(); err != nil {
-		t.Fatalf("Server.Close = %v", err)
+		t.Fatalf("Close: %v", err)
 	}
-	// Prompt shutdown: Close closes the open connections, so the handler must
-	// not wait out its read timeout (30s) before returning.
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("Close took %v, want a prompt shutdown", elapsed)
-	}
-	select {
-	case err := <-errCh:
-		if err == nil {
-			t.Fatalf("ListenAndServe returned nil after the listener was closed")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatalf("ListenAndServe did not return after Close")
+
+	if _, err := client.Echo(ctx, &api.EchoRequest{Message: "after"}); err == nil {
+		t.Fatal("Echo after Close = nil error, want the connection refused")
 	}
 }
 
-// TestListenAndServeReportsListenError checks the bind failure path.
-func TestListenAndServeReportsListenError(t *testing.T) {
-	srv := NewServer()
-	if err := srv.ListenAndServe(context.Background(), "256.256.256.256:0"); err == nil {
-		t.Fatalf("ListenAndServe on an invalid address = nil error")
+// TestServerListenAndServeReportsBindError pins the startup failure path: a
+// taken address is reported to the caller instead of serving from nowhere.
+func TestServerListenAndServeReportsBindError(t *testing.T) {
+	addr := freeAddr(t)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("occupy address: %v", err)
 	}
-}
+	defer func() { _ = ln.Close() }()
 
-func TestCloseIsIdempotent(t *testing.T) {
-	srv := NewServer()
-	for i := range 2 {
-		if err := srv.Close(); err != nil {
-			t.Fatalf("Close %d = %v", i, err)
-		}
-	}
-}
-
-// TestServerOptionWrappers covers the constructors: each returns an option that
-// can be applied to the defaults without panicking.
-func TestServerOptionWrappers(t *testing.T) {
-	opts := []ServerOption{
-		UnaryServerInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			return handler(ctx, req)
-		}),
-		WithServerCodec(encoding.GetCodec(encoding.Name)),
-		WithServerReadTimeout(time.Second),
-		WithServerWriteTimeout(time.Second),
-		WithServerBufSize(2),
-	}
-
-	so := transport.DefaultServerOptions
-	for i, opt := range opts {
-		if opt == nil {
-			t.Fatalf("option %d is nil", i)
-		}
-		opt(&so)
+	if err := NewServer().ListenAndServe(context.Background(), addr); err == nil {
+		t.Fatal("ListenAndServe on a taken address = nil error")
 	}
 }

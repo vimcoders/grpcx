@@ -160,17 +160,20 @@ func TestListenAndServeWaitsForTheInFlightCall(t *testing.T) {
 }
 
 // TestListenAndServeStopsAcceptingAfterCancel covers the other half of shutdown:
-// once ListenAndServe has returned, the listener is closed, so a dial fails
-// instead of being accepted and served by nothing.
+// once ListenAndServe has returned, the listener is closed and the port is
+// released, so the same address can be bound again. Binding is the probe rather
+// than dialing: the kernel can finish a handshake from the backlog of a
+// just-closed listener, so a dial occasionally succeeds even though nothing
+// serves that port anymore.
 func TestListenAndServeStopsAcceptingAfterCancel(t *testing.T) {
 	srv := serve(t)
 	if err := srv.stop(t); err != nil {
 		t.Fatalf("ListenAndServe = %v, want nil after its own shutdown", err)
 	}
 
-	conn, err := net.DialTimeout("tcp", srv.addr, 100*time.Millisecond)
-	if err == nil {
-		_ = conn.Close()
-		t.Fatalf("dial %s after shutdown succeeded, want the listener closed", srv.addr)
+	lis, err := net.Listen("tcp", srv.addr)
+	if err != nil {
+		t.Fatalf("listen on %s after shutdown = %v, want the port released", srv.addr, err)
 	}
+	_ = lis.Close()
 }

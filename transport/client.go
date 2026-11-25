@@ -164,7 +164,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(&rt.Options)
 	}
-	go func() {
+	go func() { //nolint:gosec // G118: the receive loop belongs to the connection, so it outlives the caller's context.
 		if err := rt.Handle(context.Background(), ch); err != nil {
 			slog.Debug("transport: receive loop exited", "endpoint", endpoint, "error", err)
 		}

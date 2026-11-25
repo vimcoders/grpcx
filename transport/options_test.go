@@ -28,9 +28,6 @@ func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
 	if o.writeTimeout != defaultWriteTimeout {
 		t.Errorf("writeTimeout = %v, want %v", o.writeTimeout, defaultWriteTimeout)
 	}
-	if o.flushInterval != defaultFlushInterval {
-		t.Errorf("flushInterval = %v, want %v", o.flushInterval, defaultFlushInterval)
-	}
 	if o.bufsize != 0 {
 		t.Errorf("bufsize = %d, want 0 (batching off)", o.bufsize)
 	}

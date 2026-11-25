@@ -19,7 +19,6 @@ package transport
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -71,17 +70,17 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 		br:      bufio.NewReaderSize(c, min(messageLengthMax, readBufSize)),
 		Options: defaultOptions,
 	}
+	// push is the timer flush. It writes the pending batch under the deadline the
+	// last Send armed and only logs a failure: the caller was already told that
+	// Send succeeded, and the next Send is what reports the broken connection.
 	push := func() {
 		x.Lock()
 		defer x.Unlock()
-		if err := x.SetWriteDeadline(time.Now().Add(x.writeTimeout)); err != nil {
-			slog.Debug("channel push", "err", err.Error())
-		}
 		if _, err := x.bw.WriteTo(x.Conn); err != nil {
 			slog.Debug("channel push", "err", err.Error())
 		}
 	}
-	x.t = time.AfterFunc(x.flushInterval, push)
+	x.t = time.AfterFunc(defaultFlushInterval, push)
 	return x
 }
 
@@ -126,13 +125,16 @@ func (ch *channel) Recv() ([]byte, error) {
 // as separate frames; the stream id lives in the header slice, not the frame
 // header.
 //
-// With bufsize <= 0 every call goes straight to the connection and arms the
-// write deadline first. Otherwise the frames are appended to a pending write
-// buffer and flushed as soon as it grows past bufsize, or by the timer after
-// flushInterval, whichever comes first; both paths arm the deadline before the
-// write. A failed write is wrapped with codes.Unavailable: a frame that never
-// made it out leaves the peer with nothing to run, so the call can be retried,
-// and the connection is left in place for the next call to discover.
+// The write deadline is armed once at the top of the call, before any frame is
+// queued, so both paths below write under a deadline that was just set.
+//
+// With bufsize <= 0 every call goes straight to the connection. Otherwise the
+// frames are appended to a pending write buffer and flushed as soon as it grows
+// past bufsize, or by the timer after defaultFlushInterval, whichever comes
+// first; the timer writes under the deadline this call armed. A write that
+// fails is returned as the raw I/O error — neither a write timeout nor a closed
+// connection carries a gRPC status, so callers see codes.Unknown — and the
+// connection is left in place for the next call to discover.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -146,22 +148,21 @@ func (ch *channel) Send(p ...[]byte) error {
 
 	ch.Lock()
 	defer ch.Unlock()
+	if err := ch.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
+		return err
+	}
 	var n int
 	ch.bw = append(ch.bw, bw...)
 	for _, b := range ch.bw {
 		n += len(b)
 	}
 	if n < ch.bufsize {
-		_ = ch.t.Reset(ch.flushInterval)
+		_ = ch.t.Reset(defaultFlushInterval)
 		return nil
-	}
-
-	if err := ch.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-		return errors.Join(err, status.Unavailable.Err())
 	}
 	defer ch.t.Stop()
 	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return errors.Join(err, status.Unavailable.Err())
+		return err
 	}
 	return nil
 }

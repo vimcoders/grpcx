@@ -28,7 +28,8 @@ const (
 	// of heap per connection.
 	readBufSize = 1024 * 1024
 	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
-	// settles on, so it is the shortest useful flush delay.
+	// settles on, so it is the shortest useful flush delay, and it is also the
+	// only one a batched connection runs at: Options carries no interval field.
 	defaultFlushInterval = time.Millisecond
 	// defaultBufSize is the size of one batching block. WithBufSize multiplies
 	// its argument by it, so Options.bufsize — the field channel.Send compares

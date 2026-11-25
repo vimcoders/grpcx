@@ -84,7 +84,8 @@ func WithCodec(c encoding.Codec) Option {
 
 // WithBufSize sets the send buffer in blocks of defaultBufSize, clamped to
 // defaultMaxBufSize. A value of zero disables batching and makes every Send
-// synchronous.
+// synchronous. The flush interval is not configurable: the timer wakes at
+// defaultFlushInterval.
 func WithBufSize(n int) Option {
 	return func(c *Options) {
 		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
@@ -94,18 +95,18 @@ func WithBufSize(n int) Option {
 // Options holds the transport configuration shared by the client and the
 // server sides.
 type Options struct {
-	maxStreams    uint32
-	timeout       time.Duration
-	readTimeout   time.Duration
-	writeTimeout  time.Duration
-	flushInterval time.Duration
-	codec         encoding.Codec
-	bufsize       int
+	maxStreams   uint32
+	timeout      time.Duration
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	codec        encoding.Codec
+	bufsize      int
 }
 
 // Keepalive returns the period at which an idle connection is pinged to keep it
-// alive. It is a fixed multiple of defaultTimeout rather than a configurable
-// field, so every connection is pinged at the same cadence.
+// alive. It is the fixed defaultKeepalive — the floor gRPC puts on a client
+// keepalive — rather than a multiple of the call timeout, so every connection is
+// pinged at the same cadence.
 func (o Options) Keepalive() time.Duration {
 	return defaultKeepalive
 }
@@ -119,12 +120,11 @@ func (o Options) Timeout() time.Duration {
 // its package default.
 func DefaultOptions() Options {
 	return Options{
-		timeout:       defaultTimeout,
-		maxStreams:    defaultMaxStreams,
-		codec:         encoding.GetCodec(encoding.Name),
-		readTimeout:   defaultReadTimeout,
-		writeTimeout:  defaultWriteTimeout,
-		flushInterval: defaultFlushInterval,
+		timeout:      defaultTimeout,
+		maxStreams:   defaultMaxStreams,
+		codec:        encoding.GetCodec(encoding.Name),
+		readTimeout:  defaultReadTimeout,
+		writeTimeout: defaultWriteTimeout,
 	}
 }
 

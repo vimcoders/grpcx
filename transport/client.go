@@ -174,9 +174,10 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
-// The loop gets its own context, so the ctx that dialed a connection has no say
-// over how long that connection lives: Close is the cancel, and it is the only
-// way down.
+// DialContext starts it with context.Background(), so the ctx that dialed a
+// connection has no say over how long that connection lives: the loop's lifetime
+// is the connection's. Close is how it ends — it closes the connection, which is
+// what the next read reports — and that is the only way down.
 func (c *client) Handle(ctx context.Context, recv Recver) error {
 	// The receive loop is the owner of the connection; a close error here has
 	// nobody left to report to, and the loop's own error is what it returns.
@@ -217,12 +218,12 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 
 // createStream allocates the next stream id, registers it in the stream table
 // and derives a cancellable context for it. It fails with
-// codes.ResourceExhausted once maxStreams is reached, and keeps failing after
-// Close has zeroed the limit: zero is the closed marker, so a dead transport
-// never hands out a stream. An id is only claimed when the slot is free, so a
-// wrap past MaxUint32 that lands on a live stream is refused rather than
-// overwriting it. Call options are ignored here: Invoke and RoundTrip build and
-// marshal the request header themselves, so opts never reach the wire through
+// codes.ResourceExhausted once maxStreams is reached, and with codes.Unavailable
+// after Close has zeroed the limit: zero is the closed marker, so a dead
+// transport never hands out a stream. An id is only claimed when the slot is
+// free, so a wrap past MaxUint32 that lands on a live stream is refused rather
+// than overwriting it. Call options are ignored here: Invoke and RoundTrip build
+// and marshal the request header themselves, so opts never reach the wire through
 // this path.
 func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
 	options := &api.CallOptions{
@@ -368,7 +369,9 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 // Ping keeps the connection active by opening a stream, sending an empty
 // request and waiting for the reply. It is the health check the balancer relies
 // on, so an idle connection never reaches the read deadline and gets torn
-// down.
+// down. The ping has no timeout of its own: the stream carries the transport's
+// call timeout (the default is defaultTimeout, 3s, or whatever WithTimeout set),
+// so a larger WithTimeout also makes a ping wait longer before it gives up.
 func (c *client) Ping(ctx context.Context) error {
 	s, err := c.createStream(ctx)
 	if err != nil {

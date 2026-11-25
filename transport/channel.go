@@ -166,8 +166,9 @@ func (ch *channel) Send(p ...[]byte) error {
 // Close closes the connection. It takes the same lock as Send, so a flush cannot
 // be in flight while the connection goes away, and it stops the flush timer:
 // frames still sitting in the batch buffer are dropped rather than written out.
-// The client calls it from sync.Once, after every stream has been cancelled; the
-// server calls it from a defer when the connection ends.
+// The client calls it from sync.Once when the transport goes down, leaving the
+// streams on it to their own deadlines; the server calls it from a defer when the
+// connection ends.
 func (ch *channel) Close() error {
 	ch.Lock()
 	defer ch.Unlock()

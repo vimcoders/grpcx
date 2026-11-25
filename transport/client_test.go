@@ -297,6 +297,38 @@ func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 	}
 }
 
+// TestCloseLeavesAnInFlightCallToItsOwnDeadline covers the other half of the
+// shutdown: Close closes the connection but does not wake the streams on it, so a
+// call in flight keeps waiting and ends on its own deadline with
+// DeadlineExceeded — not Canceled, which would read as the caller giving up.
+func TestCloseLeavesAnInFlightCallToItsOwnDeadline(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithTimeout(50*time.Millisecond))
+	s, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- s.RecvMsg(&api.Empty{}) }()
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if code := status.Code(err); code != codes.DeadlineExceeded {
+			t.Errorf("in-flight call after Close = %v (%v), want DeadlineExceeded", err, code)
+		}
+		if d := time.Since(start); d < 30*time.Millisecond {
+			t.Errorf("the call ended %v after it started, want it to wait out its 50ms deadline", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the in-flight call never returned")
+	}
+}
+
 // TestNewStreamIsUnimplemented covers the streaming surface grpcx does not serve.
 func TestNewStreamIsUnimplemented(t *testing.T) {
 	c, _ := newClientOnSender(t, nil)

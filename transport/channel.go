@@ -19,6 +19,7 @@ package transport
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -71,13 +72,14 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 		Options: defaultOptions,
 	}
 	// push is the timer flush. It writes the pending batch under the deadline the
-	// last Send armed and only logs a failure: the caller was already told that
-	// Send succeeded, and the next Send is what reports the broken connection.
+	// last Send armed; a failure closes the connection and logs the joined error.
+	// The caller was already told that Send succeeded, so the next Send is what
+	// surfaces the broken connection.
 	push := func() {
 		x.Lock()
 		defer x.Unlock()
 		if _, err := x.bw.WriteTo(x.Conn); err != nil {
-			slog.Debug("channel push", "err", err.Error())
+			slog.Debug("channel push", "err", errors.Join(err, x.Conn.Close()))
 		}
 	}
 	x.t = time.AfterFunc(defaultFlushInterval, push)
@@ -131,10 +133,13 @@ func (ch *channel) Recv() ([]byte, error) {
 // With bufsize <= 0 every call goes straight to the connection. Otherwise the
 // frames are appended to a pending write buffer and flushed as soon as it grows
 // past bufsize, or by the timer after defaultFlushInterval, whichever comes
-// first; the timer writes under the deadline this call armed. A write that
-// fails is returned as the raw I/O error — neither a write timeout nor a closed
-// connection carries a gRPC status, so callers see codes.Unknown — and the
-// connection is left in place for the next call to discover.
+// first; the timer writes under the deadline this call armed.
+//
+// A write that fails closes the connection and returns the raw I/O error joined
+// with the Close error. Neither carries a gRPC status, so callers see
+// codes.Unknown. The pending batch is left where it is, which is harmless: the
+// connection is already closed, so the next call fails on its own deadline and
+// the leftover can never be flushed into a fresh call.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -149,7 +154,7 @@ func (ch *channel) Send(p ...[]byte) error {
 	ch.Lock()
 	defer ch.Unlock()
 	if err := ch.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-		return err
+		return errors.Join(err, ch.Conn.Close())
 	}
 	var n int
 	ch.bw = append(ch.bw, bw...)
@@ -162,7 +167,7 @@ func (ch *channel) Send(p ...[]byte) error {
 	}
 	defer ch.t.Stop()
 	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return err
+		return errors.Join(err, ch.Conn.Close())
 	}
 	return nil
 }

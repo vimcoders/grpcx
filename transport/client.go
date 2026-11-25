@@ -56,20 +56,22 @@ func WithTimeout(d time.Duration) Option {
 // WithReadTimeout sets how long a channel waits for the next frame before
 // giving up on the connection. Both sides use it: ServerOptions.Handle passes it
 // to every accepted connection's channel, and the client's own channel reads
-// replies under it. It defaults to 2*keepalive.
+// replies under it. It defaults to 2*keepalive; zero leaves the default in
+// place, and any other value is stored as given.
 func WithReadTimeout(d time.Duration) Option {
 	return func(so *Options) {
-		so.readTimeout = d
+		so.readTimeout = cmp.Or(d, defaultReadTimeout)
 	}
 }
 
 // WithWriteTimeout sets how long a write may take to flush before failing the
 // call. Both sides use it: ServerOptions.Handle passes it to every accepted
 // connection's channel, and the client's own channel writes requests under it.
-// It defaults to defaultTimeout.
+// It defaults to defaultTimeout; zero leaves the default in place, and any other
+// value is stored as given.
 func WithWriteTimeout(d time.Duration) Option {
 	return func(so *Options) {
-		so.writeTimeout = d
+		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)
 	}
 }
 
@@ -225,7 +227,7 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 // overwriting it. Call options are ignored here: Invoke and RoundTrip build and
 // marshal the request header themselves, so opts never reach the wire through
 // this path.
-func (c *client) createStream(_ context.Context, opts ...CallOption) (*clientStream, error) {
+func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
 	options := &api.CallOptions{
 		Timeout: c.timeout.Milliseconds(),
 	}
@@ -247,7 +249,7 @@ func (c *client) createStream(_ context.Context, opts ...CallOption) (*clientStr
 	if _, ok := c.streams[streamID]; ok {
 		return nil, status.ResourceExhausted.Err()
 	}
-	childCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(options.Timeout))
+	childCtx, cancel := context.WithTimeout(ctx, time.Millisecond*time.Duration(options.Timeout))
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
@@ -371,9 +373,7 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 // on, so an idle connection never reaches the read deadline and gets torn
 // down.
 func (c *client) Ping(ctx context.Context) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-	s, err := c.createStream(timeoutCtx)
+	s, err := c.createStream(ctx)
 	if err != nil {
 		return err
 	}

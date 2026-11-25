@@ -243,8 +243,9 @@ func TestKeepaliveClearsThePoolWhenItEnds(t *testing.T) {
 }
 
 // TestPingDropsDeadBackendsAndDialsReplacements covers the health pass: a
-// backend that fails its ping is closed and replaced, so the pool still matches
-// the number of pods.
+// backend that fails its ping is dropped and replaced, so the pool still
+// matches the number of pods. The connection itself is left alone — its own
+// receive loop closes it when the read deadline fires.
 func TestPingDropsDeadBackendsAndDialsReplacements(t *testing.T) {
 	backends := &fakeBackends{}
 	rr := buildFor(t, backends, 3)
@@ -257,8 +258,8 @@ func TestPingDropsDeadBackendsAndDialsReplacements(t *testing.T) {
 	if got := len(rr.clone()); got != 3 {
 		t.Errorf("pool holds %d connections, want 3 after the replacement", got)
 	}
-	if got := created[1].closed.Load(); got != 1 {
-		t.Errorf("the dead backend was closed %d times, want 1", got)
+	if got := created[1].closed.Load(); got != 0 {
+		t.Errorf("the dead backend was closed %d times, want 0: the receive loop reclaims it when the read deadline fires", got)
 	}
 	if got := backends.dials; got != 4 {
 		t.Errorf("dial called %d times, want one replacement (4)", got)

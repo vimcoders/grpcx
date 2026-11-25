@@ -19,6 +19,7 @@ package transport
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -149,6 +150,9 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():
+		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
+			return nil, status.DeadlineExceeded.Err()
+		}
 		return nil, status.Canceled.Err()
 	case response, ok := <-s.c:
 		if !ok {

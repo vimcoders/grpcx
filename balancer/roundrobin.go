@@ -152,11 +152,11 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 // Ping re-resolves the endpoint, drops round trippers that no longer answer,
 // dials replacements up to the number of pods the endpoint resolves to, and
 // replaces the pool with what survived. Only a failed resolve is reported: a
-// backend that fails its ping is closed and replaced rather than returned as an
-// error, and a failed replacement dial leaves the pool short of the resolved
-// count instead of failing the pass. A backend dropped for being surplus is not
-// closed here — its receive loop closes it when the read deadline fires. It is
-// the periodic health pass behind Keepalive.
+// backend that fails its ping is dropped from the pool and replaced rather than
+// returned as an error, and a failed replacement dial leaves the pool short of
+// the resolved count instead of failing the pass. Ping never closes a
+// connection: a dropped backend's receive loop closes it when the read deadline
+// fires. It is the periodic health pass behind Keepalive.
 func (rr *RoundRobin) Ping(ctx context.Context) error {
 	ips, err := rr.resolve(ctx)
 	if err != nil {
@@ -166,11 +166,10 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 	var rts []transport.RoundTripper
 	// Keep every round tripper that answers and still fits both under the
 	// number of resolved addresses and under the limit. A backend whose ping
-	// fails is closed at once; a surplus one is only dropped here, and its own
-	// receive loop closes it when the read deadline fires.
+	// fails, and a surplus one that no longer fits, are both only dropped here:
+	// their own receive loop closes the connection when the read deadline fires.
 	for _, rt := range rr.clone() {
 		if err := rt.Ping(ctx); err != nil {
-			_ = rt.Close()
 			continue
 		}
 		if len(rts) >= len(ips) || len(rts) >= limit {

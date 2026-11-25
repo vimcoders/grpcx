@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"net"
 	"path"
@@ -72,20 +73,22 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 // WithServerReadTimeout sets how long the server waits for the next frame
 // before giving up on the connection. Handle passes it to the frame channel of
 // every accepted connection, where it bounds the header read and the payload read
-// separately.
+// separately. Zero leaves defaultReadTimeout in place, so the deadline cannot be
+// expired merely by passing the zero value; any other value is stored as given.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
-		so.readTimeout = d
+		so.readTimeout = cmp.Or(d, defaultReadTimeout)
 	}
 }
 
 // WithServerWriteTimeout sets how long the server waits for a write to flush
 // before failing the call. Handle passes it to the frame channel of every
 // accepted connection; a batched flush runs under the deadline the last Send
-// installed.
+// installed. Zero leaves defaultWriteTimeout in place, for the same reason as
+// WithServerReadTimeout; any other value is stored as given.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
-		so.writeTimeout = d
+		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)
 	}
 }
 

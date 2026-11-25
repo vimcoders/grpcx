@@ -98,19 +98,29 @@ func TestWithBufSizeCountsBlocksAndClamps(t *testing.T) {
 	}
 }
 
-// TestWithReadAndWriteTimeoutAreTakenLiterally documents that the two timeouts
-// are not defaulted: zero reaches the connection as zero.
-func TestWithReadAndWriteTimeoutAreTakenLiterally(t *testing.T) {
+// TestWithReadAndWriteTimeoutZeroFallsBackToTheDefault pins the zero handling on
+// the two client I/O timeouts: zero means "leave the default in place", and any
+// other value is stored as given, shorter or longer alike. Negative values are
+// not zero either, so they are stored as they arrive.
+func TestWithReadAndWriteTimeoutZeroFallsBackToTheDefault(t *testing.T) {
 	o := DefaultOptions()
 	WithReadTimeout(0)(&o)
 	WithWriteTimeout(0)(&o)
-	if o.readTimeout != 0 || o.writeTimeout != 0 {
-		t.Errorf("timeouts = (%v, %v), want (0, 0)", o.readTimeout, o.writeTimeout)
+	if o.readTimeout != defaultReadTimeout || o.writeTimeout != defaultWriteTimeout {
+		t.Errorf("after zero: (%v, %v), want the defaults (%v, %v)", o.readTimeout, o.writeTimeout, defaultReadTimeout, defaultWriteTimeout)
 	}
+
 	WithReadTimeout(2 * time.Second)(&o)
 	WithWriteTimeout(500 * time.Millisecond)(&o)
 	if o.readTimeout != 2*time.Second || o.writeTimeout != 500*time.Millisecond {
-		t.Errorf("timeouts = (%v, %v), want (2s, 500ms)", o.readTimeout, o.writeTimeout)
+		t.Errorf("shorter values: (%v, %v), want (2s, 500ms)", o.readTimeout, o.writeTimeout)
+	}
+
+	grown := defaultReadTimeout + time.Second
+	WithReadTimeout(grown)(&o)
+	WithWriteTimeout(grown)(&o)
+	if o.readTimeout != grown || o.writeTimeout != grown {
+		t.Errorf("longer values: (%v, %v), want (%v, %v)", o.readTimeout, o.writeTimeout, grown, grown)
 	}
 }
 
@@ -181,14 +191,21 @@ func TestWithServerBufSizeCountsBlocks(t *testing.T) {
 	}
 }
 
-// TestWithServerTimeoutsAreTakenLiterally covers the two server-side I/O
-// timeouts.
-func TestWithServerTimeoutsAreTakenLiterally(t *testing.T) {
+// TestWithServerTimeoutsZeroFallsBackToTheDefault covers the two server-side I/O
+// timeouts: zero leaves the package default in place, and any other value is
+// stored as given.
+func TestWithServerTimeoutsZeroFallsBackToTheDefault(t *testing.T) {
 	so := DefaultServerOptions
+	WithServerReadTimeout(0)(&so)
+	WithServerWriteTimeout(0)(&so)
+	if so.readTimeout != defaultReadTimeout || so.writeTimeout != defaultWriteTimeout {
+		t.Errorf("after zero: (%v, %v), want the defaults (%v, %v)", so.readTimeout, so.writeTimeout, defaultReadTimeout, defaultWriteTimeout)
+	}
+
 	WithServerReadTimeout(4 * time.Second)(&so)
 	WithServerWriteTimeout(time.Second)(&so)
 	if so.readTimeout != 4*time.Second || so.writeTimeout != time.Second {
-		t.Errorf("timeouts = (%v, %v), want (4s, 1s)", so.readTimeout, so.writeTimeout)
+		t.Errorf("given values: (%v, %v), want (4s, 1s)", so.readTimeout, so.writeTimeout)
 	}
 }
 

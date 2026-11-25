@@ -267,17 +267,16 @@ func mustStreamError(t *testing.T, c *client) error {
 	return err
 }
 
-// TestCloseCancelsEveryLiveStreamOnce covers the shutdown: every registered
-// stream is canceled and the connection is closed exactly once.
-func TestCloseCancelsEveryLiveStreamOnce(t *testing.T) {
+// TestCloseClosesTheConnectionOnceAndRefusesNewStreams covers the shutdown: the
+// connection is closed exactly once and the limit is zeroed so no later stream
+// can be created. Close deliberately leaves live streams alone — each one ends
+// on its own deadline instead, so a call in flight is never reported as the
+// caller cancelling it, and it is not woken early either.
+func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 	c, sender := newClientOnSender(t, nil)
 	first, err := c.createStream(context.Background())
 	if err != nil {
-		t.Fatalf("first stream: %v", err)
-	}
-	second, err := c.createStream(context.Background())
-	if err != nil {
-		t.Fatalf("second stream: %v", err)
+		t.Fatalf("stream: %v", err)
 	}
 
 	if err := c.Close(); err != nil {
@@ -287,11 +286,14 @@ func TestCloseCancelsEveryLiveStreamOnce(t *testing.T) {
 		t.Fatalf("second Close: %v", err)
 	}
 
-	if first.Context().Err() == nil || second.Context().Err() == nil {
-		t.Error("Close left a live stream behind")
-	}
 	if got := sender.closeCount(); got != 1 {
 		t.Errorf("connection closed %d times, want 1", got)
+	}
+	if first.Context().Err() != nil {
+		t.Error("Close canceled a live stream; it is meant to end on its own deadline")
+	}
+	if _, err := c.createStream(context.Background()); status.Code(err) != codes.Unavailable {
+		t.Errorf("createStream after Close = %v, want Unavailable", err)
 	}
 }
 
@@ -311,7 +313,7 @@ func TestNewStreamIsUnimplemented(t *testing.T) {
 // its stream was closed: both frames are consumed so the connection stays
 // aligned, and nothing is reported.
 func TestInterceptorDiscardsTheFrameOfAGoneStream(t *testing.T) {
-	c := &client{streams: make(map[uint32]*clientStream), cancel: func() {}}
+	c := &client{streams: make(map[uint32]*clientStream)}
 	recv := &fakeRecver{frames: [][]byte{
 		headerFrame(t, &api.CallOptions{StreamID: 99}),
 		payloadFrame(t, &api.EchoResponse{Message: "late"}),
@@ -328,7 +330,7 @@ func TestInterceptorDiscardsTheFrameOfAGoneStream(t *testing.T) {
 // TestInterceptorRoutesFramesToLiveStreams covers the dispatch: the frame lands
 // in the stream its header names.
 func TestInterceptorRoutesFramesToLiveStreams(t *testing.T) {
-	c := &client{streams: make(map[uint32]*clientStream), cancel: func() {}}
+	c := &client{streams: make(map[uint32]*clientStream)}
 	s, _ := newStreamUnderTest(&fakeSender{})
 	c.streams[s.id] = s
 	recv := &fakeRecver{frames: [][]byte{

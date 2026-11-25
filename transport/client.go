@@ -138,7 +138,6 @@ type client struct {
 	streamID uint32
 	sync.Once
 	sync.RWMutex
-	cancel context.CancelFunc
 }
 
 // Dial connects to endpoint over TCP with the background context.
@@ -156,19 +155,17 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
-	childCtx, cancel := context.WithCancel(context.Background())
 	ch := newChannel(cc, opts...)
 	rt := &client{
 		SendCloser: ch,
 		Options:    DefaultOptions(),
 		streams:    make(map[uint32]*clientStream),
-		cancel:     cancel,
 	}
 	for _, o := range opts {
 		o(&rt.Options)
 	}
 	go func() {
-		if err := rt.Handle(childCtx, ch); err != nil {
+		if err := rt.Handle(context.Background(), ch); err != nil {
 			slog.Debug("transport: receive loop exited", "endpoint", endpoint, "error", err)
 		}
 	}()
@@ -392,26 +389,21 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close tears the transport down once: it cancels every live stream, then closes
-// the underlying connection from a defer in the same sync.Once, so a second call
-// is a no-op and nothing is closed twice. A call in flight when this runs ends
-// with codes.Canceled rather than codes.Unavailable: the stream only carries a
-// context cancel, so recv cannot tell a broken connection from a caller's own
-// cancel. Callers that branch on the code should read it as a transport failure,
-// not as a cancellation. The stream table itself is left as it was, but the limit
-// is zeroed as the closed marker: WithMaxStreams never stores zero, so zero can
-// only mean "closed" and createStream refuses every later call instead of filling
-// a table nothing will send from. Closing a connection that is already being
-// thrown away has nothing left to report to, so its error is dropped.
+// Close tears the transport down once: it closes the underlying connection from
+// a defer in the same sync.Once, so a second call is a no-op and nothing is
+// closed twice. A call in flight when this runs is deliberately left alone: its
+// stream ends on its own deadline and reports codes.DeadlineExceeded, so nothing
+// here turns a broken connection into a cancellation. The stream table is left as
+// it was, but the limit is zeroed as the closed marker: WithMaxStreams never
+// stores zero, so zero can only mean "closed" and createStream refuses every
+// later call with codes.Unavailable instead of filling a table nothing will
+// send from. Closing a connection that is already being thrown away has nothing
+// left to report to, so its error is dropped.
 func (c *client) Close() error {
-	defer c.cancel()
 	c.Once.Do(func() {
 		defer c.SendCloser.Close()
 		c.Lock()
 		defer c.Unlock()
-		for _, s := range c.streams {
-			_ = s.Close()
-		}
 		// Zero is the closed marker, not a "no cap" request: createStream compares
 		// against it, and WithMaxStreams can never produce it.
 		c.maxStreams = 0

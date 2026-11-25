@@ -145,9 +145,10 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 
 // recv blocks until the response slot is filled or the stream is canceled,
 // returning codes.Canceled when the call ends without a reply. A broken
-// connection reaches here as a plain cancel, so it reports Canceled too and not
-// Unavailable. The closed-slot branch never fires today — nothing closes the
-// slot — and only guards against a future sender doing so.
+// connection does not cancel the stream, so it surfaces as the stream's own
+// deadline (codes.DeadlineExceeded) instead of arriving here as a cancel. The
+// closed-slot branch never fires today — nothing closes the slot — and only
+// guards against a future sender doing so.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():

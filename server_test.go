@@ -111,7 +111,10 @@ func TestListenAndServeWaitsForTheInFlightCall(t *testing.T) {
 	gate := make(chan struct{})
 	srv := serve(t, UnaryServerInterceptor(blockingInterceptor(entered, gate)))
 
-	cc, err := Dial(srv.addr)
+	// The transport leaves live streams alone when a connection goes down, so the
+	// call below can only end once its own deadline fires: keep that deadline
+	// short instead of waiting out the 3s default.
+	cc, err := Dial(srv.addr, WithTimeout(500*time.Millisecond))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

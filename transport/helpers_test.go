@@ -159,9 +159,6 @@ func newTestClient(t *testing.T, conn net.Conn, opts ...Option) *client {
 		SendCloser: ch,
 		Options:    o,
 		streams:    make(map[uint32]*clientStream),
-		// Close calls cancel unconditionally; a hand-built client is never wired
-		// to DialContext, which is where the real cancel is installed.
-		cancel: func() {},
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	go func() { _ = c.Handle(ctx, ch) }()
@@ -275,9 +272,7 @@ func newClientOnSender(t *testing.T, respond func(*clientStream, *api.CallOption
 		v(&o)
 	}
 	a := &answeringSender{respond: respond}
-	// cancel stands in for the receive loop's cancel: a hand-built client is never
-	// wired to DialContext, and Close calls it unconditionally.
-	c := &client{Options: o, streams: make(map[uint32]*clientStream), cancel: func() {}}
+	c := &client{Options: o, streams: make(map[uint32]*clientStream)}
 	c.SendCloser = a
 	a.c = c
 	t.Cleanup(func() { _ = c.Close() })

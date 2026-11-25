@@ -18,7 +18,8 @@ const (
 	// RoundRobinName is the name of round robin balancer.
 	RoundRobinName = "round_robin"
 	// defaultStep is the default step of round robin balancer.
-	defaultStep = 1
+	defaultStep  = 1
+	defaultLimit = 1024
 )
 
 // rrBuilder is the builder of round robin balancer.
@@ -35,6 +36,7 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 		dial:    b.dial,
 		resolve: b.resolve,
 		cancel:  b.cancel,
+		limit:   defaultLimit,
 	}
 	go func() {
 		// The keepalive loop ends with the balancer's context, so only an
@@ -42,9 +44,13 @@ func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transpor
 		if err := x.Keepalive(ctx, opts...); err != nil {
 			slog.Debug("balancer: keepalive exited", "endpoint", endpoint, "error", err)
 		}
-		for _, rt := range x.clone() {
+		x.Lock()
+		defer x.Unlock()
+		for _, rt := range x.rts {
 			_ = rt.Close()
 		}
+		x.limit = 0
+		x.rts = x.rts[:0]
 	}()
 	if err := x.Ping(ctx); err != nil {
 		return nil, err
@@ -60,6 +66,7 @@ type RoundRobin struct {
 	dial    func(context.Context) (transport.RoundTripper, error)
 	resolve func(context.Context) ([]resolver.Address, error)
 	cancel  context.CancelFunc // Cancelled on close.
+	limit   int
 	sync.RWMutex
 }
 
@@ -73,6 +80,16 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 	}
 	idx := rr.step.Add(defaultStep) % uint32(len(rts))
 	return rts[idx], nil
+}
+
+// Limit returns the maximum number of backend connections the pool may hold.
+// Build installs defaultLimit and the keepalive loop zeroes it when it exits, so
+// a zero limit means the pool admits no backend: Ping closes what is left and
+// dials nothing.
+func (rr *RoundRobin) Limit() int {
+	rr.RLock()
+	defer rr.RUnlock()
+	return rr.limit
 }
 
 // DialContext builds a round robin balancer for endpoint: it resolves the
@@ -136,6 +153,7 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	limit := rr.Limit()
 	// Create a request to send to the round trippers.
 	var rts []transport.RoundTripper
 	// Check the existing round trippers and remove any that are no longer valid.
@@ -144,14 +162,14 @@ func (rr *RoundRobin) Ping(ctx context.Context) error {
 			_ = rt.Close()
 			continue
 		}
-		if len(rts) >= len(ips) {
+		if len(rts) >= len(ips) || len(rts) >= limit {
 			_ = rt.Close()
 			continue
 		}
 		rts = append(rts, rt)
 	}
 	// Create new round trippers for any new addresses.
-	for i := len(rts); i < len(ips); i++ {
+	for i := len(rts); i < len(ips) && i < limit; i++ {
 		rt, err := rr.dial(ctx)
 		if err != nil {
 			continue

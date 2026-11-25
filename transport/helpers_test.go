@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,10 +17,9 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// echoImpl is the api.EchoServiceServer these tests register. It answers with the
-// request message plus "!", and fails the call whose message matches failOn, so a
-// test can pin how a handler error reaches the client without tearing the
-// connection down.
+// echoImpl is the service every end-to-end test registers: it answers with the
+// request message plus "!", and fails the call whose message matches failOn so a
+// handler error can be observed without the connection going away.
 type echoImpl struct {
 	api.UnimplementedEchoServiceServer
 
@@ -34,9 +34,8 @@ func (e *echoImpl) Echo(_ context.Context, req *api.EchoRequest) (*api.EchoRespo
 	return &api.EchoResponse{Message: req.Message + "!"}, nil
 }
 
-// fakeSender records every frame it is handed, flattened in call order: a call
-// with two arguments stores two frames. It is a SendCloser, so it can stand in
-// for the channel on the client side.
+// fakeSender records every frame it is handed, flattened in call order, and
+// counts its closes. It satisfies SendCloser, so it can stand in for a channel.
 type fakeSender struct {
 	mu     sync.Mutex
 	frames [][]byte
@@ -69,28 +68,9 @@ func (f *fakeSender) sent() [][]byte {
 	return append([][]byte{}, f.frames...)
 }
 
-// countingCodec is a codec that remembers how often it was used, so a test can
-// prove the option reached the call path rather than only the options struct.
-type countingCodec struct {
-	marshal   atomic.Int32
-	unmarshal atomic.Int32
-}
-
-func (c *countingCodec) Name() string { return "counting" }
-
-func (c *countingCodec) Marshal(msg any) ([]byte, error) {
-	c.marshal.Add(1)
-	return encoding.Marshal(msg)
-}
-
-func (c *countingCodec) Unmarshal(p []byte, msg any) error {
-	c.unmarshal.Add(1)
-	return encoding.Unmarshal(p, msg)
-}
-
-// fakeRecver hands out the frames it holds in order and then err, or io.EOF when
-// no err is set. Payloads are copies of pooled buffers, because every caller
-// returns what it reads to the pool with putmbuf.
+// fakeRecver hands out its frames in order, then err (io.EOF when unset). Its
+// frames are pooled buffers because every reader returns what it reads with
+// putmbuf.
 type fakeRecver struct {
 	mu     sync.Mutex
 	frames [][]byte
@@ -111,15 +91,40 @@ func (f *fakeRecver) Recv() ([]byte, error) {
 	return p, nil
 }
 
-// pooledPayload copies b into a buffer from the frame pool, so the receiver side
-// may hand it back with putmbuf the way the real channel does.
+func (f *fakeRecver) remaining() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.frames)
+}
+
+// countingCodec records how often it was used, so a test can prove the codec
+// option reached the call path and not only the options struct.
+type countingCodec struct {
+	marshal   atomic.Int32
+	unmarshal atomic.Int32
+}
+
+func (c *countingCodec) Name() string { return "counting" }
+
+func (c *countingCodec) Marshal(msg any) ([]byte, error) {
+	c.marshal.Add(1)
+	return encoding.Marshal(msg)
+}
+
+func (c *countingCodec) Unmarshal(p []byte, msg any) error {
+	c.unmarshal.Add(1)
+	return encoding.Unmarshal(p, msg)
+}
+
+// pooledPayload copies b into a pooled buffer, the way the channel hands a frame
+// to its reader.
 func pooledPayload(b []byte) []byte {
 	p := getmbuf(len(b))
 	copy(p[:len(b)], b)
 	return p[:len(b)]
 }
 
-// mustMarshal marshals m with the package codec and fails the test otherwise.
+// mustMarshal marshals m with the package codec.
 func mustMarshal(t *testing.T, m any) []byte {
 	t.Helper()
 	b, err := encoding.Marshal(m)
@@ -129,35 +134,20 @@ func mustMarshal(t *testing.T, m any) []byte {
 	return b
 }
 
-// headerFrame is a request or response header ready to be read by fakeRecver.
+// headerFrame is a header ready to be read by fakeRecver.
 func headerFrame(t *testing.T, opts *api.CallOptions) []byte {
 	t.Helper()
 	return pooledPayload(mustMarshal(t, opts))
 }
 
-// statusCodeOf is the codes.Code err carries, or codes.Unknown when it carries
-// none.
-func statusCodeOf(err error) codes.Code {
-	return status.Code(err)
-}
-
-// pipeChannels wires two channels over one net.Pipe: whatever one sends the
-// other receives. Both are closed at cleanup, which also stops their flush timers.
-func pipeChannels(t *testing.T, opts ...Option) (client, server *channel) {
+// payloadFrame is a payload ready to be read by fakeRecver.
+func payloadFrame(t *testing.T, m any) []byte {
 	t.Helper()
-	cliConn, srvConn := net.Pipe()
-	cli := newChannel(cliConn, opts...)
-	srv := newChannel(srvConn, opts...)
-	t.Cleanup(func() {
-		_ = cli.Close()
-		_ = srv.Close()
-	})
-	return cli, srv
+	return pooledPayload(mustMarshal(t, m))
 }
 
 // newTestClient builds a client on conn and starts its receive loop, so a call
-// can be issued without a server: the test plays the server through the other
-// end of the connection.
+// can be made against a hand-written server end.
 func newTestClient(t *testing.T, conn net.Conn, opts ...Option) *client {
 	t.Helper()
 	ch := newChannel(conn, opts...)
@@ -169,19 +159,22 @@ func newTestClient(t *testing.T, conn net.Conn, opts ...Option) *client {
 		SendCloser: ch,
 		Options:    o,
 		streams:    make(map[uint32]*clientStream),
+		// Close calls cancel unconditionally; a hand-built client is never wired
+		// to DialContext, which is where the real cancel is installed.
+		cancel: func() {},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, stop := context.WithCancel(context.Background())
 	go func() { _ = c.Handle(ctx, ch) }()
 	t.Cleanup(func() {
-		cancel()
+		stop()
 		_ = c.Close()
 	})
 	return c
 }
 
-// startPipeServer serves one net.Pipe connection through ServerOptions.Handle and
-// connects a client to the other end. handleErr receives the error Handle
-// returns once the connection ends, so a test can assert the shutdown path.
+// startPipeServer serves one net.Pipe connection through ServerOptions.Handle
+// and dials a client to the other end. handleErr receives what Handle returns
+// once the connection ends.
 func startPipeServer(t *testing.T, opts ...ServerOption) (cli *client, cancel context.CancelFunc, handleErr <-chan error) {
 	t.Helper()
 	cliConn, srvConn := net.Pipe()
@@ -189,22 +182,22 @@ func startPipeServer(t *testing.T, opts ...ServerOption) (cli *client, cancel co
 	for _, v := range opts {
 		v(&so)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, stop := context.WithCancel(context.Background())
 	errs := make(chan error, 1)
 	go func() { errs <- so.Handle(ctx, srvConn) }()
 	cli = newTestClient(t, cliConn)
-	t.Cleanup(cancel)
-	return cli, cancel, errs
+	t.Cleanup(stop)
+	return cli, stop, errs
 }
 
-// echoService registers the generated Echo service, which is the shape a real
-// service descriptor arrives in: a method table dispatched by name.
+// echoService registers the generated Echo service, the shape a real service
+// descriptor arrives in.
 func echoService(impl api.EchoServiceServer) ServerOption {
 	return RegisterService(&api.EchoService_ServiceDesc, impl)
 }
 
-// newStreamUnderTest builds a clientStream with the frame pool, a cancellable
-// context and a counter for its deregistrations.
+// newStreamUnderTest builds a clientStream over the frame pool, with a
+// cancellable context and a counter for its deregistrations.
 func newStreamUnderTest(sender SendCloser) (*clientStream, *atomic.Int32) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var deleted atomic.Int32
@@ -222,10 +215,9 @@ func newStreamUnderTest(sender SendCloser) (*clientStream, *atomic.Int32) {
 	return s, &deleted
 }
 
-// answeringSender stands in for the connection on the client side: it decodes the
-// header of a request frame, finds the stream it belongs to and replies through
-// respond. It is a SendCloser, so a client built on it exercises Invoke and
-// RoundTrip without a socket.
+// answeringSender stands in for the client connection: it reads the stream id
+// off the request header and answers through respond, so Invoke and RoundTrip
+// can be exercised without a socket.
 type answeringSender struct {
 	mu      sync.Mutex
 	c       *client
@@ -274,8 +266,8 @@ func (a *answeringSender) closeCount() int {
 	return a.closes
 }
 
-// newClientOnSender builds a client whose connection is answeringSender, with
-// the respond hook installed before the client is handed out.
+// newClientOnSender builds a client whose connection is an answeringSender,
+// with the respond hook installed before the client is handed out.
 func newClientOnSender(t *testing.T, respond func(*clientStream, *api.CallOptions, []byte) error, opts ...Option) (*client, *answeringSender) {
 	t.Helper()
 	o := DefaultOptions()
@@ -283,16 +275,17 @@ func newClientOnSender(t *testing.T, respond func(*clientStream, *api.CallOption
 		v(&o)
 	}
 	a := &answeringSender{respond: respond}
-	c := &client{Options: o, streams: make(map[uint32]*clientStream)}
+	// cancel stands in for the receive loop's cancel: a hand-built client is never
+	// wired to DialContext, and Close calls it unconditionally.
+	c := &client{Options: o, streams: make(map[uint32]*clientStream), cancel: func() {}}
 	c.SendCloser = a
 	a.c = c
 	t.Cleanup(func() { _ = c.Close() })
 	return c, a
 }
 
-// replyOnSlot is the respond hook most tests want: it drops a response into the
-// stream's receive slot, which is exactly what clientStream.Handle does once the
-// frame is off the wire.
+// replyOnSlot is the respond hook most tests want: it fills the stream's receive
+// slot exactly the way clientStream.Handle does once the frame is off the wire.
 func replyOnSlot(code codes.Code, desc string) func(*clientStream, *api.CallOptions, []byte) error {
 	return func(s *clientStream, _ *api.CallOptions, payload []byte) error {
 		reply := make([]byte, len(payload))
@@ -305,9 +298,8 @@ func replyOnSlot(code codes.Code, desc string) func(*clientStream, *api.CallOpti
 	}
 }
 
-// replyEcho answers the way the echo service does: the request is decoded and the
-// reply carries its message plus "!". The code and description travel in the
-// response header, so a test can hand a failing call through the same hook.
+// replyEcho answers the way the echo service does, so a call can be handed a
+// failing status through the same hook.
 func replyEcho(t *testing.T, code codes.Code, desc string) func(*clientStream, *api.CallOptions, []byte) error {
 	t.Helper()
 	return func(s *clientStream, _ *api.CallOptions, payload []byte) error {
@@ -325,3 +317,18 @@ func replyEcho(t *testing.T, code codes.Code, desc string) func(*clientStream, *
 }
 
 var _ grpc.ClientStream = (*clientStream)(nil)
+
+// joinPairs renders a flat metadata slice so a test can compare it in one
+// expression.
+func joinPairs(pairs []string) string {
+	var b strings.Builder
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(pairs[i])
+		b.WriteByte('=')
+		b.WriteString(pairs[i+1])
+	}
+	return b.String()
+}

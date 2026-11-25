@@ -26,33 +26,33 @@ const (
 type rrBuilder struct {
 	dial    func(context.Context) (transport.RoundTripper, error)
 	resolve func(context.Context) ([]resolver.Address, error)
-	cancel  context.CancelFunc // Cancelled on close.
 }
 
 // Build builds a round robin balancer.
 func (b *rrBuilder) Build(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
+	childCtx, cancel := context.WithCancel(context.Background())
 	// Create a round robin balancer.
 	var x = RoundRobin{
 		dial:    b.dial,
 		resolve: b.resolve,
-		cancel:  b.cancel,
+		cancel:  cancel,
 		limit:   defaultLimit,
 	}
 	go func() {
 		// The keepalive loop ends with the balancer's context, so only an
 		// unexpected exit is worth reporting.
-		if err := x.Keepalive(ctx, opts...); err != nil {
+		if err := x.Keepalive(childCtx, opts...); err != nil {
 			slog.Debug("balancer: keepalive exited", "endpoint", endpoint, "error", err)
 		}
 		x.Lock()
 		defer x.Unlock()
-		for _, rt := range x.rts {
-			_ = rt.Close()
-		}
+		// Emptying the pool is enough: each connection is closed by its own
+		// receive loop on the read deadline, so nothing here tears them down.
 		x.limit = 0
 		x.rts = x.rts[:0]
 	}()
 	if err := x.Ping(ctx); err != nil {
+		cancel()
 		return nil, err
 	}
 	// Return the round robin balancer.
@@ -76,7 +76,7 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 	defer rr.RUnlock()
 	rts := rr.rts
 	if len(rts) == 0 {
-		return nil, status.ResourceExhausted.Err()
+		return nil, status.Unavailable.Err()
 	}
 	idx := rr.step.Add(defaultStep) % uint32(len(rts))
 	return rts[idx], nil
@@ -84,7 +84,7 @@ func (rr *RoundRobin) Pick(_ context.Context, _ PickInfo) (transport.RoundTrippe
 
 // Limit returns the maximum number of backend connections the pool may hold.
 // Build installs defaultLimit and the keepalive loop zeroes it when it exits, so
-// a zero limit means the pool admits no backend: Ping closes what is left and
+// a zero limit means the pool admits no backend: Ping drops what is left and
 // dials nothing.
 func (rr *RoundRobin) Limit() int {
 	rr.RLock()
@@ -94,11 +94,11 @@ func (rr *RoundRobin) Limit() int {
 
 // DialContext builds a round robin balancer for endpoint: it resolves the
 // endpoint to the number of backends, dials one round tripper per backend and
-// starts the keepalive loop under ctx.
+// starts the keepalive loop. That loop runs on a context of its own, so Close —
+// not the ctx passed here — ends it; ctx only bounds the resolve and the first
+// health pass.
 func DialContext(ctx context.Context, endpoint string, opts ...transport.Option) (Picker, error) {
-	childCtx, cancel := context.WithCancel(ctx)
 	b := rrBuilder{
-		cancel: cancel,
 		dial: func(childCtx context.Context) (transport.RoundTripper, error) {
 			return transport.DialContext(childCtx, endpoint, opts...)
 		},
@@ -111,12 +111,18 @@ func DialContext(ctx context.Context, endpoint string, opts ...transport.Option)
 			return address, nil
 		},
 	}
-	p, err := b.Build(childCtx, endpoint, opts...)
+	p, err := b.Build(ctx, endpoint, opts...)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 	return p, nil
+}
+
+// Dial builds a Picker with no dial deadline, keeping one connection per address
+// resolved from endpoint. Pick decides which of those connections carries a call;
+// the endpoint's own redundancy is the K8s Service in front of it.
+func Dial(endpoint string, opts ...transport.Option) (Picker, error) {
+	return DialContext(context.Background(), endpoint, opts...)
 }
 
 // Keepalive pings every backend once per keepalive period until ctx is canceled.
@@ -145,25 +151,29 @@ func (rr *RoundRobin) Keepalive(ctx context.Context, opts ...transport.Option) e
 
 // Ping re-resolves the endpoint, drops round trippers that no longer answer,
 // dials replacements up to the number of pods the endpoint resolves to, and
-// returns each surviving round tripper's ping result. It is the periodic health
-// pass behind Keepalive.
+// replaces the pool with what survived. Only a failed resolve is reported: a
+// backend that fails its ping is closed and replaced rather than returned as an
+// error, and a failed replacement dial leaves the pool short of the resolved
+// count instead of failing the pass. A backend dropped for being surplus is not
+// closed here — its receive loop closes it when the read deadline fires. It is
+// the periodic health pass behind Keepalive.
 func (rr *RoundRobin) Ping(ctx context.Context) error {
-	// Resolve the endpoint to get the addresses.
 	ips, err := rr.resolve(ctx)
 	if err != nil {
 		return err
 	}
 	limit := rr.Limit()
-	// Create a request to send to the round trippers.
 	var rts []transport.RoundTripper
-	// Check the existing round trippers and remove any that are no longer valid.
+	// Keep every round tripper that answers and still fits both under the
+	// number of resolved addresses and under the limit. A backend whose ping
+	// fails is closed at once; a surplus one is only dropped here, and its own
+	// receive loop closes it when the read deadline fires.
 	for _, rt := range rr.clone() {
 		if err := rt.Ping(ctx); err != nil {
 			_ = rt.Close()
 			continue
 		}
 		if len(rts) >= len(ips) || len(rts) >= limit {
-			_ = rt.Close()
 			continue
 		}
 		rts = append(rts, rt)
@@ -190,10 +200,10 @@ func (rr *RoundRobin) clone() []transport.RoundTripper {
 }
 
 // Close stops the balancer by cancelling its context. It does not close the
-// backend round trippers itself: the keepalive loop closes every one it holds
-// after the loop returns, so the connections are torn down by the goroutine that
-// owned them, without racing a concurrent Ping. Close is safe to call more than
-// once, and returns nil either way.
+// backend round trippers: after the keepalive loop returns the pool is emptied
+// and the limit is zeroed, and every connection is left to its own receive loop,
+// which closes it once its read deadline (defaultReadTimeout) fires. Close is
+// safe to call more than once, and returns nil either way.
 func (rr *RoundRobin) Close() error {
 	if rr.cancel != nil {
 		rr.cancel()

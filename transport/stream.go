@@ -19,6 +19,7 @@ package transport
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -166,13 +167,14 @@ type CallOption interface {
 // counterpart in the header.
 type CallOptions api.CallOptions
 
-// apply merges c into opts field by field. Non-zero values in c win, except
-// Timeout, where the smaller of the two is kept so a short caller deadline is
-// never silently extended.
+// apply merges c into opts field by field: a non-zero field in c replaces what
+// an earlier option put there, and a zero one leaves it alone. Timeout is no
+// exception — apply never fills in a default, so "this header named no timeout"
+// survives to the call site, which is where the default is applied: createStream
+// and Invoke keep the transport's own, defaultMethodHandler.Handle falls back to
+// WithServerTimeout.
 func (c *CallOptions) apply(opts *api.CallOptions) {
-	if c.Timeout > 0 {
-		opts.Timeout = min(cmp.Or(opts.Timeout, c.Timeout), c.Timeout)
-	}
+	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
 	opts.FullMethodName = cmp.Or(c.FullMethodName, opts.FullMethodName)
 	opts.Service = cmp.Or(c.Service, opts.Service)
 	opts.Length = cmp.Or(c.Length, opts.Length)
@@ -235,8 +237,12 @@ type defaultMethodHandler struct {
 
 // Handle consumes the request payload, applies the call metadata and the
 // deadline, runs the unary interceptor chain over the generated method handler
-// and writes the reply back as one response frame. A handler error is reported
-// in the response header's status code instead of tearing the connection down.
+// and writes the reply back as one response frame. The deadline is the first
+// non-zero of the header timeout, the server's WithServerTimeout value and
+// defaultTimeout, capped at defaultTimeout: a header that names a timeout wins
+// over the option, and the option can only tighten the 3s ceiling. A handler
+// error is reported in the response header's status code instead of tearing the
+// connection down.
 func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
 	for _, v := range opts {
@@ -249,15 +255,25 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	defer putmbuf(p)
 	codec := d.codec
 	metadatas := metadata.Pairs(options.Metadatas...)
-	timeout := cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout)
+	timeout := min(cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout), defaultTimeout)
 	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 	defer cancel()
 	info := &CallOptions{Code: uint32(codes.OK)}
 	s := sender{Codec: d.codec, Sender: d.Sender}
 	dec := func(in any) error { return codec.Unmarshal(p, in) }
+	defer func() {
+		if r := recover(); r != nil {
+			info.Code, info.Desc = uint32(codes.Internal), fmt.Sprintf("handler panic: %v", r)
+			_ = s.send(options.StreamID, &api.Empty{}, info)
+		}
+	}()
 	reply, err := d.Handler(d.imp, timeoutCtx, dec, d.unaryInt)
 	if err != nil {
 		info.Code, info.Desc = uint32(status.Code(err)), err.Error()
+		return s.send(options.StreamID, &api.Empty{}, info)
+	}
+	if timeoutCtx.Err() != nil {
+		info.Code, info.Desc = uint32(codes.DeadlineExceeded), timeoutCtx.Err().Error()
 		return s.send(options.StreamID, &api.Empty{}, info)
 	}
 	return s.send(options.StreamID, reply, info)

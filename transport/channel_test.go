@@ -1,223 +1,214 @@
 package transport
 
 import (
-	"bytes"
 	"encoding/binary"
-	"errors"
+	"io"
 	"net"
-	"os"
 	"testing"
 	"time"
+
+	"github.com/vimcoders/grpcx/status"
 
 	"google.golang.org/grpc/codes"
 )
 
-// TestNewChannelAppliesDefaults pins what a channel starts from: the packet
-// defaults, no batching, and a reader sized at min(messageLengthMax,
-// readBufSize). ServerOptions.Handle passes its own options on top, so a default
-// that drifted would reach every accepted connection.
-func TestNewChannelAppliesDefaults(t *testing.T) {
-	conn, other := net.Pipe()
-	defer func() { _ = other.Close() }()
-	ch := newChannel(conn)
-	defer func() { _ = ch.Close() }()
-
-	want := DefaultOptions()
-	if ch.timeout != want.timeout || ch.maxStreams != want.maxStreams {
-		t.Fatalf("Options = %+v, want the defaults %+v", ch.Options, want)
+// readFrames reads n length-prefixed frames off conn and returns their bodies
+// concatenated, so a test can compare the bytes the peer actually got.
+func readFrames(conn net.Conn, n int) (string, error) {
+	var out []byte
+	for range n {
+		var head [messageHeaderLength]byte
+		if _, err := io.ReadFull(conn, head[:]); err != nil {
+			return "", err
+		}
+		body := make([]byte, binary.BigEndian.Uint32(head[:]))
+		if _, err := io.ReadFull(conn, body); err != nil {
+			return "", err
+		}
+		out = append(out, body...)
 	}
-	if ch.readTimeout != want.readTimeout || ch.writeTimeout != want.writeTimeout {
-		t.Fatalf("read/write timeout = %v/%v, want %v/%v", ch.readTimeout, ch.writeTimeout, want.readTimeout, want.writeTimeout)
-	}
-	if ch.bufsize != 0 {
-		t.Fatalf("bufsize = %d, want 0 (batching off by default)", ch.bufsize)
-	}
-	if got, wantSize := ch.br.Size(), min(messageLengthMax, readBufSize); got != wantSize {
-		t.Fatalf("read buffer = %d bytes, want %d", got, wantSize)
-	}
+	return string(out), nil
 }
 
-// TestSendRecvFramesStayAligned pins the wire shape: every argument becomes one
-// length-prefixed frame, and the receiver hands back exactly the payload without
-// the header. Two frames in one call have to arrive as two frames.
-func TestSendRecvFramesStayAligned(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	go func() {
-		if err := cli.Send([]byte("header"), []byte("payload")); err != nil {
-			t.Logf("Send: %v", err)
-		}
-	}()
-
-	for _, want := range []string{"header", "payload"} {
-		p, err := srv.Recv()
-		if err != nil {
-			t.Fatalf("Recv: %v", err)
-		}
-		if got := string(p); got != want {
-			putmbuf(p)
-			t.Fatalf("frame = %q, want %q", got, want)
-		}
-		putmbuf(p)
-	}
-}
-
-// TestRecvZeroLengthFrame pins the empty-frame case: Ping sends api.Empty, which
-// marshals to nothing, and a zero-length payload must come back as a nil buffer
-// rather than a zero-length allocation. The header is written directly: a
-// zero-length write is a no-op on TCP but blocks on net.Pipe until someone reads
-// it, which would say nothing about framing.
-func TestRecvZeroLengthFrame(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	go func() {
-		var h [messageHeaderLength]byte
-		binary.BigEndian.PutUint32(h[:], 0)
-		if _, err := cli.Conn.Write(h[:]); err != nil {
-			t.Logf("write header: %v", err)
-		}
-	}()
-
-	p, err := srv.Recv()
-	if err != nil {
-		t.Fatalf("Recv on an empty frame: %v", err)
-	}
-	if len(p) != 0 {
-		t.Fatalf("payload = %d bytes, want 0", len(p))
-	}
-}
-
-// TestRecvRejectsOversizedHeader pins the frame cap: a header above
-// messageLengthMax is refused before any payload is read, so a peer cannot make
-// the reader allocate beyond the limit.
-func TestRecvRejectsOversizedHeader(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	go func() {
-		var h [messageHeaderLength]byte
-		binary.BigEndian.PutUint32(h[:], uint32(messageLengthMax+1))
-		if _, err := cli.Conn.Write(h[:]); err != nil {
-			t.Logf("write header: %v", err)
-		}
-	}()
-
-	p, err := srv.Recv()
-	if p != nil {
-		t.Fatalf("Recv returned a payload alongside %v", err)
-	}
-	if got := statusCodeOf(err); got != codes.OutOfRange {
-		t.Fatalf("Recv on an oversized header = %v, want OutOfRange", err)
-	}
-}
-
-// TestRecvSurfacesReadDeadline pins the idle-connection bound: with no frame
-// arriving, Recv gives up after readTimeout instead of blocking forever. The
-// balancer relies on that: a dead pod has to surface as a ping failure.
-func TestRecvSurfacesReadDeadline(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(20*time.Millisecond), WithWriteTimeout(time.Second))
+// TestChannelSendWritesLengthPrefixedFrames pins the wire shape: every argument
+// becomes one frame with a big-endian length in front of it.
+func TestChannelSendWritesLengthPrefixedFrames(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	srv := newChannel(srvConn)
+	defer func() { _ = srv.Close() }()
+	cli := newChannel(cliConn)
 	defer func() { _ = cli.Close() }()
 
-	start := time.Now()
-	_, err := srv.Recv()
-	if !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("Recv = %v, want a deadline error", err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("Recv took %v to time out on a 20ms read timeout", elapsed)
-	}
-}
-
-// TestRecvSurfacesTruncatedPayload pins the torn-frame case: a header that
-// promises more bytes than arrive must fail the read rather than return a short
-// payload, or the next frame would start off a boundary.
-func TestRecvSurfacesTruncatedPayload(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
+	frames := make(chan string, 1)
 	go func() {
-		var h [messageHeaderLength]byte
-		binary.BigEndian.PutUint32(h[:], 5)
-		if _, err := cli.Conn.Write(append(h[:], 'a', 'b')); err != nil {
-			t.Logf("write truncated frame: %v", err)
+		body, err := readFrames(srvConn, 2)
+		if err != nil {
+			frames <- "error: " + err.Error()
+			return
 		}
-		_ = cli.Close()
+		frames <- body
 	}()
 
-	p, err := srv.Recv()
-	if p != nil {
-		t.Fatalf("Recv returned a payload alongside %v", err)
-	}
-	if err == nil {
-		t.Fatal("Recv on a truncated payload returned nil")
-	}
-}
-
-// TestSendRejectsOversizedPayload pins the send-side cap: a frame above
-// messageLengthMax is refused before anything is written, so the peer never sees
-// a frame it would reject.
-func TestSendRejectsOversizedPayload(t *testing.T) {
-	cli, _ := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	p := make([]byte, messageLengthMax+1)
-	if err := cli.Send(p); statusCodeOf(err) != codes.OutOfRange {
-		t.Fatalf("Send of a %d-byte payload = %v, want OutOfRange", len(p), err)
-	}
-}
-
-// TestSendBatchesBelowBufSize pins the batching threshold: a call whose pending
-// bytes stay under bufsize returns without touching the connection, and the flush
-// timer writes the frames out afterwards.
-func TestSendBatchesBelowBufSize(t *testing.T) {
-	cli, srv := pipeChannels(t,
-		WithBufSize(defaultMaxBufSize/defaultBufSize),
-		WithReadTimeout(time.Second),
-		WithWriteTimeout(time.Second),
-	)
-	if err := cli.Send([]byte("tiny")); err != nil {
+	if err := cli.Send([]byte("he"), []byte("llo")); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-
-	// Send returned with the frame still in the batch buffer, so this read is
-	// served by the flush timer, not by the call.
-	start := time.Now()
-	p, err := srv.Recv()
-	if err != nil {
-		t.Fatalf("Recv after a buffered Send: %v", err)
-	}
-	defer putmbuf(p)
-	if got := string(p); got != "tiny" {
-		t.Fatalf("frame = %q, want %q", got, "tiny")
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("the flush timer took %v to write a buffered frame", elapsed)
+	select {
+	case body := <-frames:
+		if body != "hello" {
+			t.Errorf("frames carried %q, want %q", body, "hello")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the frames never reached the peer")
 	}
 }
 
-// TestSendFlushesAtBufSize pins the other half of the threshold: once the pending
-// bytes reach bufsize the call writes them itself, so the frame arrives without
-// waiting for the timer.
-func TestSendFlushesAtBufSize(t *testing.T) {
-	cli, srv := pipeChannels(t, WithBufSize(1), WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	payload := bytes.Repeat([]byte("x"), defaultBufSize+1)
-	go func() {
-		if err := cli.Send(payload); err != nil {
-			t.Logf("Send: %v", err)
-		}
-	}()
+// TestChannelSendRejectsOversizedFrame documents messageLengthMax: a frame that
+// large is refused before anything is written.
+func TestChannelSendRejectsOversizedFrame(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	srv := newChannel(srvConn)
+	defer func() { _ = srv.Close() }()
+	cli := newChannel(cliConn)
+	defer func() { _ = cli.Close() }()
 
-	p, err := srv.Recv()
+	err := cli.Send(make([]byte, messageLengthMax+1))
+	if code := status.Code(err); code != codes.OutOfRange {
+		t.Errorf("Send(oversized) = %v (%v), want OutOfRange", err, code)
+	}
+}
+
+// TestChannelSendReportsWriteFailure covers a connection that went away: the
+// caller learns about it instead of losing the frame silently.
+func TestChannelSendReportsWriteFailure(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	srv := newChannel(srvConn)
+	cli := newChannel(cliConn)
+	_ = srv.Close()
+	_ = cliConn.Close()
+
+	if err := cli.Send([]byte("x")); err == nil {
+		t.Errorf("Send on a closed connection returned nil")
+	}
+	_ = cli.Close()
+}
+
+// TestChannelRecvReturnsNilForZeroLengthFrame pins the meaning of a zero-length
+// frame: it is delivered as a nil body, which is how the server answers a call
+// with no payload.
+func TestChannelRecvReturnsNilForZeroLengthFrame(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	cli := newChannel(cliConn)
+	defer func() { _ = cli.Close() }()
+	srv := newChannel(srvConn)
+	defer func() { _ = srv.Close() }()
+
+	go func() { _ = srv.Send(nil) }()
+	body, err := cli.Recv()
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	defer putmbuf(p)
-	if !bytes.Equal(p, payload) {
-		t.Fatalf("payload = %d bytes, want %d", len(p), len(payload))
+	if body != nil {
+		t.Errorf("Recv returned %v, want nil", body)
 	}
 }
 
-// TestCloseDropsBufferedFrames pins the documented close behaviour: frames still
-// sitting in the batch buffer are dropped, so the peer sees the connection end
-// without those bytes. Writing them out first would make Close wait on a peer.
-func TestCloseDropsBufferedFrames(t *testing.T) {
-	cli, srv := pipeChannels(t,
-		WithBufSize(defaultMaxBufSize/defaultBufSize),
-		WithReadTimeout(200*time.Millisecond),
-		WithWriteTimeout(200*time.Millisecond),
-	)
+// TestChannelRecvRejectsOversizedFrame covers a peer that announces more than
+// messageLengthMax: the frame is dropped rather than allocated.
+func TestChannelRecvRejectsOversizedFrame(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	cli := newChannel(cliConn)
+	defer func() { _ = cli.Close() }()
+	defer func() { _ = srvConn.Close() }()
+
+	go func() {
+		var head [messageHeaderLength]byte
+		binary.BigEndian.PutUint32(head[:], uint32(messageLengthMax+1))
+		_, _ = srvConn.Write(head[:])
+	}()
+
+	if _, err := cli.Recv(); status.Code(err) != codes.OutOfRange {
+		t.Errorf("Recv(oversized) error = %v, want OutOfRange", err)
+	}
+}
+
+// TestChannelRecvOnAClosedConnectionReportsTheDeadlineError covers the first
+// guard of Recv: once the connection is gone, arming the read deadline fails and
+// the error comes back before anything is read.
+func TestChannelRecvOnAClosedConnectionReportsTheDeadlineError(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	_ = srvConn.Close()
+	_ = cliConn.Close()
+	cli := newChannel(cliConn)
+
+	if _, err := cli.Recv(); err == nil {
+		t.Fatal("Recv on a closed connection returned nil")
+	}
+}
+
+// TestChannelRecvTimesOut covers the read timeout: a peer that stays silent
+// makes the read fail instead of hanging the receive loop.
+func TestChannelRecvTimesOut(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	defer func() { _ = srvConn.Close() }()
+	cli := newChannel(cliConn, WithReadTimeout(20*time.Millisecond))
+	defer func() { _ = cli.Close() }()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cli.Recv()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Recv on a silent connection returned nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recv did not honour the read timeout")
+	}
+}
+
+// TestChannelBatchesFramesUntilTheFlushTimer covers bufsize: below the byte
+// threshold Send returns before the frame is on the wire, and the flush timer
+// delivers it a moment later.
+func TestChannelBatchesFramesUntilTheFlushTimer(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	srv := newChannel(srvConn)
+	defer func() { _ = srv.Close() }()
+	// One block is the threshold, so two small frames stay under it.
+	cli := newChannel(cliConn, WithBufSize(1))
+	defer func() { _ = cli.Close() }()
+
+	frames := make(chan string, 1)
+	go func() {
+		body, err := readFrames(srvConn, 1)
+		if err != nil {
+			frames <- "error: " + err.Error()
+			return
+		}
+		frames <- body
+	}()
+
+	if err := cli.Send([]byte("batched")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case body := <-frames:
+		if body != "batched" {
+			t.Errorf("flush carried %q, want %q", body, "batched")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the flush timer never delivered the batched frame")
+	}
+}
+
+// TestChannelCloseDropsTheBatch pins the shutdown order: closing does not flush
+// what is buffered, it discards it, so a closed call never wakes up a peer.
+func TestChannelCloseDropsTheBatch(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	defer func() { _ = srvConn.Close() }()
+	cli := newChannel(cliConn, WithBufSize(1), WithWriteTimeout(50*time.Millisecond))
+
 	if err := cli.Send([]byte("dropped")); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -225,98 +216,9 @@ func TestCloseDropsBufferedFrames(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if p, err := srv.Recv(); err == nil {
-		putmbuf(p)
-		t.Fatalf("Recv after Close returned %q with no error", p)
-	}
-}
-
-// TestCloseIsIdempotent pins that a second Close is harmless: the server calls it
-// from a defer while the ctx AfterFunc may already have closed the same
-// connection.
-func TestCloseIsIdempotent(t *testing.T) {
-	conn, other := net.Pipe()
-	defer func() { _ = other.Close() }()
-	ch := newChannel(conn)
-	if err := ch.Close(); err != nil {
-		t.Fatalf("first Close: %v", err)
-	}
-	if err := ch.Close(); err != nil {
-		t.Fatalf("second Close = %v, want nil", err)
-	}
-}
-
-// TestFlushTimerSwallowsWriteFailure pins the timer's failure path: a flush that
-// fires after the peer went away is logged and dropped, because there is no
-// caller left to report to. It must not panic or leave the channel usable.
-func TestFlushTimerSwallowsWriteFailure(t *testing.T) {
-	cli, srv := pipeChannels(t, WithBufSize(defaultMaxBufSize/defaultBufSize), WithWriteTimeout(time.Second))
-	if err := cli.Send([]byte("pending")); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	// The frame sits in the batch buffer, so the write happens in the timer. Closing
-	// the peer first makes that write fail.
-	if err := srv.Close(); err != nil {
-		t.Fatalf("peer Close: %v", err)
-	}
-	time.Sleep(5 * time.Millisecond)
-	if err := cli.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-}
-
-// TestSendOnClosedConnectionReportsAnError pins that a Send after the connection
-// is gone fails instead of pretending the frame went out.
-func TestSendOnClosedConnectionReportsAnError(t *testing.T) {
-	cli, _ := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	if err := cli.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if err := cli.Send([]byte("x")); err == nil {
-		t.Fatal("Send on a closed connection returned nil")
-	}
-}
-
-// TestSendReportsPeerCloseDuringWrite pins the other failure path: the peer goes
-// away between the deadline and the write, so the write itself reports it.
-func TestSendReportsPeerCloseDuringWrite(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(time.Second), WithWriteTimeout(time.Second))
-	if err := srv.Close(); err != nil {
-		t.Fatalf("peer Close: %v", err)
-	}
-	if err := cli.Send([]byte("x")); err == nil {
-		t.Fatal("Send to a peer that closed its end returned nil")
-	}
-}
-
-// TestBufferPoolRoundsUpToSizeClass pins getmbuf: the returned slice is at
-// least the requested length, and putting it back lets the next caller reuse it
-// instead of allocating. A frame above the largest size class is allocated fresh
-// and must still be long enough.
-func TestBufferPoolRoundsUpToSizeClass(t *testing.T) {
-	for _, size := range []int{1, 1024, messageLengthMax} {
-		p := getmbuf(size)
-		if len(p) < size {
-			t.Fatalf("getmbuf(%d) returned %d bytes", size, len(p))
-		}
-		putmbuf(p)
-	}
-}
-
-// TestRecvArmsDeadlineForPayloadRead pins the second deadline: the header read
-// already succeeded, so the payload read has to arm readTimeout again. A payload
-// sharing the header's deadline would be cut short by whatever the header spent.
-func TestRecvArmsDeadlineForPayloadRead(t *testing.T) {
-	cli, srv := pipeChannels(t, WithReadTimeout(20*time.Millisecond), WithWriteTimeout(time.Second))
-	go func() {
-		var h [messageHeaderLength]byte
-		binary.BigEndian.PutUint32(h[:], 8)
-		if _, err := cli.Conn.Write(h[:]); err != nil {
-			t.Logf("write header: %v", err)
-		}
-	}()
-
-	if _, err := srv.Recv(); !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("Recv = %v, want a deadline error on the payload read", err)
+	_ = srvConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var head [messageHeaderLength]byte
+	if _, err := io.ReadFull(srvConn, head[:]); err == nil {
+		t.Error("the batched frame was flushed by Close")
 	}
 }

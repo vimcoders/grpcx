@@ -42,8 +42,8 @@ func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 }
 
 // WithTimeout sets the default call timeout. The value is forwarded to the
-// transport, which writes it into the request header, and is overridden by a
-// shorter caller deadline.
+// transport, which writes it into the request header. A caller deadline replaces
+// it, shorter or longer: the default only bounds a call that names no deadline.
 func WithTimeout(d time.Duration) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, transport.WithTimeout(d))
@@ -138,8 +138,10 @@ func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 }
 
 // Close closes the picker, which cancels the balancer's context. The keepalive
-// loop returns on that cancel and closes every backend transport it holds, so
-// Close itself does not block on the connections.
+// loop returns on that cancel and empties the pool, but it does not close the
+// backend transports: each one is closed by its own receive loop once the read
+// deadline (defaultReadTimeout, 18s) fires. Close therefore returns without
+// blocking, and the fds are released a read timeout later.
 func (c *client) Close() error {
 	return c.Picker.Close()
 }

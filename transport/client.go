@@ -53,18 +53,20 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithReadTimeout sets how long the server waits for the next frame before
-// giving up on the connection. ServerOptions.Handle passes it to every accepted
-// connection's channel; the client side ignores it.
+// WithReadTimeout sets how long a channel waits for the next frame before
+// giving up on the connection. Both sides use it: ServerOptions.Handle passes it
+// to every accepted connection's channel, and the client's own channel reads
+// replies under it. It defaults to 2*keepalive.
 func WithReadTimeout(d time.Duration) Option {
 	return func(so *Options) {
 		so.readTimeout = d
 	}
 }
 
-// WithWriteTimeout sets how long the server waits for a write to flush before
-// failing the call. ServerOptions.Handle passes it to every accepted
-// connection's channel; the client side ignores it.
+// WithWriteTimeout sets how long a write may take to flush before failing the
+// call. Both sides use it: ServerOptions.Handle passes it to every accepted
+// connection's channel, and the client's own channel writes requests under it.
+// It defaults to defaultTimeout.
 func WithWriteTimeout(d time.Duration) Option {
 	return func(so *Options) {
 		so.writeTimeout = d
@@ -134,6 +136,7 @@ type client struct {
 	streamID uint32
 	sync.Once
 	sync.RWMutex
+	cancel context.CancelFunc
 }
 
 // Dial connects to endpoint over TCP with the background context.
@@ -151,17 +154,19 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	if err != nil {
 		return nil, err
 	}
+	childCtx, cancel := context.WithCancel(context.Background())
 	ch := newChannel(cc, opts...)
 	rt := &client{
 		SendCloser: ch,
 		Options:    DefaultOptions(),
 		streams:    make(map[uint32]*clientStream),
+		cancel:     cancel,
 	}
 	for _, o := range opts {
 		o(&rt.Options)
 	}
 	go func() {
-		if err := rt.Handle(ctx, ch); err != nil {
+		if err := rt.Handle(childCtx, ch); err != nil {
 			slog.Debug("transport: receive loop exited", "endpoint", endpoint, "error", err)
 		}
 	}()
@@ -170,6 +175,9 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
+// The loop gets its own context, so the ctx that dialed a connection has no say
+// over how long that connection lives: Close is the cancel, and it is the only
+// way down.
 func (c *client) Handle(ctx context.Context, recv Recver) error {
 	// The receive loop is the owner of the connection; a close error here has
 	// nobody left to report to, and the loop's own error is what it returns.
@@ -217,7 +225,13 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 // overwriting it. Call options are ignored here: Invoke and RoundTrip build and
 // marshal the request header themselves, so opts never reach the wire through
 // this path.
-func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
+func (c *client) createStream(_ context.Context, opts ...CallOption) (*clientStream, error) {
+	options := &api.CallOptions{
+		Timeout: c.timeout.Milliseconds(),
+	}
+	for _, opt := range opts {
+		opt.apply(options)
+	}
 	c.Lock()
 	defer c.Unlock()
 	// maxStreams is never zero while the transport is open — WithMaxStreams
@@ -233,7 +247,7 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	if _, ok := c.streams[streamID]; ok {
 		return nil, status.ResourceExhausted.Err()
 	}
-	childCtx, cancel := context.WithCancel(ctx)
+	childCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(options.Timeout))
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
@@ -271,11 +285,16 @@ func (c *client) getStream(sid uint32) *clientStream {
 }
 
 // Invoke performs one unary call: it opens a stream, sends the request with
-// the collected metadata and deadline, then waits for the reply.
+// the collected metadata and deadline, then waits for the reply. The
+// grpc.CallOption values are accepted for interface compatibility and ignored:
+// metadata and the deadline travel through ctx. The header carries a timeout
+// only when ctx has a deadline; without one the server falls back to its own
+// WithServerTimeout value, while the stream itself still runs under the
+// transport's default. A reply whose status code is not OK comes back as a
+// status error carrying that code and its description.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
 	info := CallOptions{
 		FullMethodName: method,
-		Timeout:        c.timeout.Milliseconds(),
 	}
 	if medatas, ok := metadata.GetMetadata(ctx); ok {
 		for k, v := range medatas {
@@ -289,7 +308,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 		}
 		opts = append(opts, &opt)
 	}
-	s, err := c.createStream(ctx)
+	s, err := c.createStream(ctx, opts...)
 	if err != nil {
 		return err
 	}
@@ -306,27 +325,30 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // for the matching response. The payload is sent as the caller handed it in;
 // the header is re-marshalled here, so it carries this transport's stream id and
 // default timeout, with the caller's deadline folded in when the context has one.
+// A reply whose status code is not OK comes back as a status error carrying that
+// code and its description.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	options := cmp.Or(req.Options, &api.CallOptions{})
+	opts := []CallOption{WithCallOptions(cmp.Or(req.Options, &api.CallOptions{}))}
 	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
+		opts = append(opts, &CallOptions{
 			Timeout: time.Until(dl).Milliseconds(),
-		}
-		opt.apply(options)
+		})
 	}
-	s, err := c.createStream(ctx)
+	s, err := c.createStream(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
 	// The half-close is best effort: a failure to send it is already covered by
 	// whatever error the call returns.
 	defer func() { _ = s.CloseSend() }()
-	info := CallOptions{
+	opts = append(opts, &CallOptions{
 		StreamID: s.id,
-		Timeout:  c.timeout.Milliseconds(),
+	})
+	var options api.CallOptions
+	for _, opt := range opts {
+		opt.apply(&options)
 	}
-	info.apply(options)
-	h, err := encoding.Marshal(options)
+	h, err := encoding.Marshal(&options)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +356,14 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 	if err := s.Sender.Send(h, req.Payload); err != nil {
 		return nil, err
 	}
-	return s.recv()
+	resp, err := s.recv()
+	if err != nil {
+		return nil, err
+	}
+	if code := codes.Code(resp.Options.Code); code != codes.OK {
+		return nil, status.Error(code, resp.Options.Desc)
+	}
+	return resp, nil
 }
 
 // Ping keeps the connection active by opening a stream, sending an empty
@@ -372,6 +401,7 @@ func (c *client) Ping(ctx context.Context) error {
 // already being thrown away has nothing left to report to, so its error is
 // dropped.
 func (c *client) Close() error {
+	defer c.cancel()
 	c.Once.Do(func() {
 		defer c.SendCloser.Close()
 		c.Lock()

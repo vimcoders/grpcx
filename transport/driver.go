@@ -30,7 +30,10 @@ const (
 	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
 	// settles on, so it is the shortest useful flush delay.
 	defaultFlushInterval = time.Millisecond
-	// defaultBufSize is one batching block. bufsize is counted in blocks.
+	// defaultBufSize is the size of one batching block. WithBufSize multiplies
+	// its argument by it, so Options.bufsize — the field channel.Send compares
+	// the pending frames against — is counted in bytes. The server option keeps
+	// its argument as a block count instead, and Handle does the conversion.
 	defaultBufSize = 1024
 	// defaultMaxBufSize bounds the send buffer at 16 blocks, matching the
 	// default TCP send buffer on Linux.

@@ -17,7 +17,6 @@ concurrency:
 env:
   GOLANGCI_LINT_VERSION: v2.15.0
   GOVULNCHECK_VERSION: v1.10.0
-  SHADOW_VERSION: v0.53.0
 
 jobs:
   lint:
@@ -67,11 +66,6 @@ jobs:
 
       - name: go vet
         run: go vet ./...
-
-      - name: shadow
-        run: |
-          go install golang.org/x/tools/go/analysis/passes/shadow/cmd/shadow@${SHADOW_VERSION}
-          go vet -vettool="$(go env GOPATH)/bin/shadow" ./...
 
       - name: go test -race
         run: go test -race -shuffle=on -count=1 -coverprofile=coverage.out ./...

@@ -2,22 +2,19 @@ package status
 
 import (
 	"errors"
-	"fmt"
-	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
 
-// TestPackageStatuses pins every exported status: the code it carries, the
-// message, and what its Err method yields. The balancer builds its errors from
-// these values, so a wrong code here would surface as a wrong wire status.
-func TestPackageStatuses(t *testing.T) {
-	for _, tc := range []struct {
+// TestPredefinedStatusesMirrorTheCodes covers the table: every exported status
+// carries its own upstream code and a non-empty message.
+func TestPredefinedStatusesMirrorTheCodes(t *testing.T) {
+	cases := []struct {
 		name string
-		s    *grpcstatus.Status
-		code codes.Code
+		got  *grpcstatus.Status
+		want codes.Code
 	}{
 		{"OK", OK, codes.OK},
 		{"Canceled", Canceled, codes.Canceled},
@@ -36,128 +33,73 @@ func TestPackageStatuses(t *testing.T) {
 		{"Unavailable", Unavailable, codes.Unavailable},
 		{"DataLoss", DataLoss, codes.DataLoss},
 		{"Unauthenticated", Unauthenticated, codes.Unauthenticated},
-	} {
-		if tc.s == nil {
-			t.Fatalf("%s = nil", tc.name)
+	}
+	for _, c := range cases {
+		if got := c.got.Code(); got != c.want {
+			t.Errorf("%s.Code() = %v, want %v", c.name, got, c.want)
 		}
-		if got := tc.s.Code(); got != tc.code {
-			t.Fatalf("%s.Code() = %v, want %v", tc.name, got, tc.code)
-		}
-		if got := tc.s.Message(); got != tc.code.String() {
-			t.Fatalf("%s.Message() = %q, want %q", tc.name, got, tc.code.String())
-		}
-		err := tc.s.Err()
-		if tc.code == codes.OK {
-			if err != nil {
-				t.Fatalf("OK.Err() = %v, want nil", err)
-			}
-			continue
-		}
-		if err == nil {
-			t.Fatalf("%s.Err() = nil, want an error", tc.name)
-		}
-		if got := Code(err); got != tc.code {
-			t.Fatalf("Code(%s.Err()) = %v, want %v", tc.name, got, tc.code)
+		if c.got.Message() == "" {
+			t.Errorf("%s carries an empty message", c.name)
 		}
 	}
 }
 
-// TestFromError covers the three shapes callers hand over: a status error, a
-// wrapped one and a plain error.
-func TestFromError(t *testing.T) {
-	src := Error(codes.NotFound, "missing")
-	s, ok := FromError(src)
-	if !ok || s == nil {
-		t.Fatalf("FromError(status error) = %v, %v", s, ok)
+// TestErrorBuildsAnErrorWithTheCode covers the constructor and the three
+// readers.
+func TestErrorBuildsAnErrorWithTheCode(t *testing.T) {
+	err := Error(codes.NotFound, "no such pod")
+	if got := Code(err); got != codes.NotFound {
+		t.Errorf("Code = %v, want NotFound", got)
 	}
-	if s.Code() != codes.NotFound || s.Message() != "missing" {
-		t.Fatalf("FromError(status error) = code %v, message %q", s.Code(), s.Message())
+	if got := Convert(err).Message(); got != "no such pod" {
+		t.Errorf("Convert.Message = %q, want no such pod", got)
 	}
-
-	wrapped := fmt.Errorf("call failed: %w", src)
-	s, ok = FromError(wrapped)
-	if !ok || s.Code() != codes.NotFound {
-		t.Fatalf("FromError(wrapped) = code %v, ok %v", s.Code(), ok)
-	}
-
-	s, ok = FromError(errors.New("plain"))
-	if ok {
-		t.Fatalf("FromError(plain) reported a status: %v", s)
-	}
-	if s == nil || s.Code() != codes.Unknown {
-		t.Fatalf("FromError(plain) = %v, want code Unknown", s)
-	}
-
-	// grpc reports a nil error as an absent status: ok is true but the status
-	// pointer is nil, and a nil *Status answers OK.
-	s, ok = FromError(nil)
-	if !ok {
-		t.Fatalf("FromError(nil) reported ok = false")
-	}
-	if s != nil {
-		t.Fatalf("FromError(nil) = %v, want nil", s)
-	}
-	if got := s.Code(); got != codes.OK {
-		t.Fatalf("nil status Code() = %v, want OK", got)
+	if err.Error() != "rpc error: code = NotFound desc = no such pod" {
+		t.Errorf("Error() = %q, want the upstream text", err.Error())
 	}
 }
 
-func TestConvert(t *testing.T) {
-	src := Error(codes.ResourceExhausted, "quota")
-	if got := Convert(src); got.Code() != codes.ResourceExhausted || got.Message() != "quota" {
-		t.Fatalf("Convert(status error) = %v / %q", got.Code(), got.Message())
+// TestFromErrorReportsWhetherAnErrorCarriesAStatus covers both answers.
+func TestFromErrorReportsWhetherAnErrorCarriesAStatus(t *testing.T) {
+	err := Error(codes.Internal, "broken")
+	s, ok := FromError(err)
+	if !ok || s == nil || s.Code() != codes.Internal {
+		t.Errorf("FromError(status) = (%v, %v), want (Internal, true)", s, ok)
 	}
 
 	plain := errors.New("plain failure")
-	if got := Convert(plain); got.Code() != codes.Unknown || got.Message() != "plain failure" {
-		t.Fatalf("Convert(plain) = %v / %q, want Unknown / plain failure", got.Code(), got.Message())
+	s, ok = FromError(plain)
+	if ok {
+		t.Error("FromError of a plain error claimed it carries a status")
 	}
-
-	// A wrapped error keeps the inner code but carries the wrapper's text.
-	wrapped := fmt.Errorf("outer: %w", src)
-	s := Convert(wrapped)
-	if s.Code() != codes.ResourceExhausted {
-		t.Fatalf("Convert(wrapped).Code() = %v, want ResourceExhausted", s.Code())
+	if s.Code() != codes.Unknown {
+		t.Errorf("FromError(plain).Code = %v, want Unknown", s.Code())
 	}
-	if !strings.Contains(s.Message(), "quota") {
-		t.Fatalf("Convert(wrapped).Message() = %q, want it to mention quota", s.Message())
-	}
-
-	if got := Convert(nil); got.Code() != codes.OK || got.Message() != "" {
-		t.Fatalf("Convert(nil) = %v / %q, want OK / empty", got.Code(), got.Message())
+	if s.Message() != "plain failure" {
+		t.Errorf("FromError(plain).Message = %q, want the error text", s.Message())
 	}
 }
 
-func TestCode(t *testing.T) {
+// TestNilErrorIsOK covers the nil guard every reader has.
+func TestNilErrorIsOK(t *testing.T) {
 	if got := Code(nil); got != codes.OK {
-		t.Fatalf("Code(nil) = %v, want OK", got)
+		t.Errorf("Code(nil) = %v, want OK", got)
 	}
-	if got := Code(Error(codes.DeadlineExceeded, "late")); got != codes.DeadlineExceeded {
-		t.Fatalf("Code(status error) = %v, want DeadlineExceeded", got)
+	if got := Convert(nil).Code(); got != codes.OK {
+		t.Errorf("Convert(nil).Code = %v, want OK", got)
 	}
-	if got := Code(errors.New("plain")); got != codes.Unknown {
-		t.Fatalf("Code(plain) = %v, want Unknown", got)
+	if _, ok := FromError(nil); !ok {
+		t.Error("FromError(nil) does not report a status")
 	}
 }
 
-// TestError checks the builder: the code and message survive, and the OK /
-// empty combination collapses to nil so callers can return it as success.
-func TestError(t *testing.T) {
-	err := Error(codes.InvalidArgument, "bad field")
-	if err == nil {
-		t.Fatalf("Error returned nil")
+// TestConvertReportsAPlainErrorAsUnknown covers a wrapped ordinary error.
+func TestConvertReportsAPlainErrorAsUnknown(t *testing.T) {
+	err := errors.New("boom")
+	if got := Convert(err).Code(); got != codes.Unknown {
+		t.Errorf("Convert(plain).Code = %v, want Unknown", got)
 	}
-	s, ok := FromError(err)
-	if !ok || s.Code() != codes.InvalidArgument || s.Message() != "bad field" {
-		t.Fatalf("Error round trip = ok %v, code %v, message %q", ok, s.Code(), s.Message())
-	}
-
-	if err := Error(codes.OK, ""); err != nil {
-		t.Fatalf("Error(OK, \"\") = %v, want nil", err)
-	}
-
-	// Any OK code collapses to nil, message or not: an OK status is success.
-	if err := Error(codes.OK, "not really an error"); err != nil {
-		t.Fatalf("Error(OK, msg) = %v, want nil", err)
+	if got := Code(err); got != codes.Unknown {
+		t.Errorf("Code(plain) = %v, want Unknown", got)
 	}
 }

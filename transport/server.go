@@ -98,8 +98,21 @@ func WithServerBufSize(n int) ServerOption {
 	}
 }
 
+// WithServerTimeout sets the fallback deadline for a call whose header names no
+// timeout. Values above defaultTimeout are clamped: the server never lets a
+// handler run longer than 3s.
+func WithServerTimeout(d time.Duration) ServerOption {
+	return func(so *ServerOptions) {
+		so.timeout = d
+	}
+}
+
 // Handle serves the connection until it breaks: it wraps the connection in a
-// channel and loops dispatching one call at a time through interceptor.
+// channel and loops dispatching one call at a time through interceptor. One call
+// at a time is by design, not a gap: the wire is a single length-prefixed frame
+// stream per connection, so reads cannot run in parallel without risking a frame
+// boundary, and concurrency comes from connections instead — the K8s Service in
+// front of the pods fans requests out across them.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	ch := newChannel(c, WithBufSize(so.bufsize), WithReadTimeout(so.readTimeout), WithWriteTimeout(so.writeTimeout))
 	defer func() { _ = ch.Close() }()

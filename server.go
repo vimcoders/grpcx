@@ -83,15 +83,17 @@ func NewServer(opts ...ServerOption) *Server {
 // ListenAndServe accepts connections on addr and serves each one in its own
 // goroutine until the listener fails or ctx is canceled. An AfterFunc closes the
 // listener when ctx is done, which is what wakes the loop out of Accept; the
-// closed listener then surfaces as the returned error, so a canceled context
-// comes back as net.ErrClosed rather than nil. The ctx also reaches the
-// handlers, so they see the same cancellation.
+// net.ErrClosed that Accept then reports is folded into nil, so a canceled
+// context is a clean stop rather than an error the caller has to explain. Any
+// other accept error is returned as itself. The ctx also reaches the handlers,
+// so they see the same cancellation.
 //
 // The handlers started here are waited for before the return: the deferred wait
 // runs after the accept loop has exited, so by the time ListenAndServe returns
-// every accepted connection has been served to its end. That wait is also why a
-// handler parked on an idle connection delays the return until its read
-// deadline fires.
+// every accepted connection has been served to its end. A handler parked on an
+// idle connection is woken by the same AfterFunc that closed the listener —
+// Handle closes its channel on that cancel — so the wait is as long as the
+// handler takes to notice, not as long as its read deadline.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

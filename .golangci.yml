@@ -21,6 +21,12 @@ linters:
       exclude-functions:
         - (io.Closer).Close
         - (*os.File).Close
+    govet:
+      # The shadow pass (x/tools shadow) is off on purpose: short
+      # `if err := f(); err != nil` declarations are the house style, the same as
+      # grpc-go, and go vet does not run that pass by default either.
+      disable:
+        - shadow
     gosec:
       # Frame lengths are range-checked against messageLengthMax before use, and
       # the uint32 conversions are bounded by the status enum and the frame cap.

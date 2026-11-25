@@ -42,7 +42,7 @@ func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
 // TestOptionsAccessors pins the values the balancer reads off the options.
 func TestOptionsAccessors(t *testing.T) {
 	o := DefaultOptions()
-	if got, want := o.Keepalive(), 9*time.Second; got != want {
+	if got, want := o.Keepalive(), 10*time.Second; got != want {
 		t.Errorf("Keepalive() = %v, want %v", got, want)
 	}
 	if got, want := o.Timeout(), 3*time.Second; got != want {

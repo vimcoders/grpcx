@@ -72,9 +72,10 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 
 // WithServerReadTimeout sets how long the server waits for the next frame
 // before giving up on the connection. Handle passes it to the frame channel of
-// every accepted connection, where it bounds the header read and the payload read
-// separately. Zero leaves defaultReadTimeout in place, so the deadline cannot be
-// expired merely by passing the zero value; any other value is stored as given.
+// every accepted connection, where it arms the header read; the payload read
+// shares that deadline. Zero leaves defaultReadTimeout in place, so the deadline
+// cannot be expired merely by passing the zero value; any other value is stored
+// as given.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.readTimeout = cmp.Or(d, defaultReadTimeout)
@@ -83,9 +84,9 @@ func WithServerReadTimeout(d time.Duration) ServerOption {
 
 // WithServerWriteTimeout sets how long the server waits for a write to flush
 // before failing the call. Handle passes it to the frame channel of every
-// accepted connection; a batched flush runs under the deadline the last Send
-// installed. Zero leaves defaultWriteTimeout in place, for the same reason as
-// WithServerReadTimeout; any other value is stored as given.
+// accepted connection, and both the synchronous write and the batched flush arm
+// the deadline themselves. Zero leaves defaultWriteTimeout in place, for the same
+// reason as WithServerReadTimeout; any other value is stored as given.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)

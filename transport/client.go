@@ -56,7 +56,7 @@ func WithTimeout(d time.Duration) Option {
 // WithReadTimeout sets how long a channel waits for the next frame before
 // giving up on the connection. Both sides use it: ServerOptions.Handle passes it
 // to every accepted connection's channel, and the client's own channel reads
-// replies under it. It defaults to 2*keepalive; zero leaves the default in
+// replies under it. It defaults to 3*keepalive; zero leaves the default in
 // place, and any other value is stored as given.
 func WithReadTimeout(d time.Duration) Option {
 	return func(so *Options) {

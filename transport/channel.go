@@ -74,6 +74,9 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 	push := func() {
 		x.Lock()
 		defer x.Unlock()
+		if err := x.SetWriteDeadline(time.Now().Add(x.writeTimeout)); err != nil {
+			slog.Debug("channel push", "err", err.Error())
+		}
 		if _, err := x.bw.WriteTo(x.Conn); err != nil {
 			slog.Debug("channel push", "err", err.Error())
 		}
@@ -121,14 +124,15 @@ func (ch *channel) Recv() ([]byte, error) {
 // Send writes the given byte slices as one or more frames, each prefixed with
 // a 4-byte payload length. Callers pass the header slice and the payload slice
 // as separate frames; the stream id lives in the header slice, not the frame
-// header. Every call arms the write deadline before it touches the connection.
+// header.
 //
-// With bufsize <= 0 every call goes straight to the connection. Otherwise the
-// frames are appended to a pending write buffer and flushed as soon as it grows
-// past bufsize, or by a timer after flushInterval, whichever comes first. The
-// timer does not arm a deadline of its own: it writes under the deadline the last
-// Send installed. A write that fails is returned as it is, unwrapped; the
-// connection is left in place for the next call to discover.
+// With bufsize <= 0 every call goes straight to the connection and arms the
+// write deadline first. Otherwise the frames are appended to a pending write
+// buffer and flushed as soon as it grows past bufsize, or by the timer after
+// flushInterval, whichever comes first; both paths arm the deadline before the
+// write. A failed write is wrapped with codes.Unavailable: a frame that never
+// made it out leaves the peer with nothing to run, so the call can be retried,
+// and the connection is left in place for the next call to discover.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {

@@ -105,10 +105,6 @@ func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
 				if s, ok := status.FromError(err); ok {
 					switch s.Code() {
 					case codes.Unavailable:
-						fallthrough
-					case codes.Internal:
-						fallthrough
-					case codes.DeadlineExceeded:
 						continue
 					default:
 						return err

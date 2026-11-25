@@ -299,8 +299,10 @@ func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 
 // TestCloseLeavesAnInFlightCallToItsOwnDeadline covers the other half of the
 // shutdown: Close closes the connection but does not wake the streams on it, so a
-// call in flight keeps waiting and ends on its own deadline with
-// DeadlineExceeded — not Canceled, which would read as the caller giving up.
+// call in flight keeps waiting and ends on its own deadline with Canceled. The
+// code is Canceled on purpose: no reply arrived, so whether the peer ran the
+// handler is unknown, and reporting a code callers retry on would invite them to
+// replay a call that may already have taken effect.
 func TestCloseLeavesAnInFlightCallToItsOwnDeadline(t *testing.T) {
 	c, _ := newClientOnSender(t, nil, WithTimeout(50*time.Millisecond))
 	s, err := c.createStream(context.Background())
@@ -318,8 +320,8 @@ func TestCloseLeavesAnInFlightCallToItsOwnDeadline(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if code := status.Code(err); code != codes.DeadlineExceeded {
-			t.Errorf("in-flight call after Close = %v (%v), want DeadlineExceeded", err, code)
+		if code := status.Code(err); code != codes.Canceled {
+			t.Errorf("in-flight call after Close = %v (%v), want Canceled", err, code)
 		}
 		if d := time.Since(start); d < 30*time.Millisecond {
 			t.Errorf("the call ended %v after it started, want it to wait out its 50ms deadline", d)

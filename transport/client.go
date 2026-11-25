@@ -395,8 +395,8 @@ func (c *client) Ping(ctx context.Context) error {
 // Close tears the transport down once: it closes the underlying connection from
 // a defer in the same sync.Once, so a second call is a no-op and nothing is
 // closed twice. A call in flight when this runs is deliberately left alone: its
-// stream ends on its own deadline and reports codes.DeadlineExceeded, so nothing
-// here turns a broken connection into a cancellation. The stream table is left as
+// stream ends on its own deadline and reports codes.Canceled, since no reply
+// arrived and nothing here can tell whether the peer ran the handler. The stream table is left as
 // it was, but the limit is zeroed as the closed marker: WithMaxStreams never
 // stores zero, so zero can only mean "closed" and createStream refuses every
 // later call with codes.Unavailable instead of filling a table nothing will

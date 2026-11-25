@@ -19,6 +19,7 @@ package transport
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -83,10 +84,11 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 
 // Recv reads one frame: a 4-byte header carrying the payload length, followed
 // by the payload itself. The stream id is not in the frame header; it travels
-// inside the protobuf header frame that Recv returns first. Each of the two
-// reads is armed with its own readTimeout, so a large payload cannot spend the
-// deadline the header was read under. The payload comes from the pool and the
-// caller must putmbuf it. A zero-length frame returns a nil payload.
+// inside the protobuf header frame that Recv returns first. Only the header read
+// is armed with readTimeout: the payload read shares that deadline, so a large
+// payload arriving slowly spends the rest of the same budget. The payload comes
+// from the pool and the caller must putmbuf it. A zero-length frame returns a nil
+// payload.
 func (ch *channel) Recv() ([]byte, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -105,9 +107,6 @@ func (ch *channel) Recv() ([]byte, error) {
 	}
 
 	if h > 0 {
-		if err := ch.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
-			return nil, err
-		}
 		payload := getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, payload); err != nil {
 			putmbuf(payload)
@@ -154,11 +153,11 @@ func (ch *channel) Send(p ...[]byte) error {
 	}
 
 	if err := ch.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-		return err
+		return errors.Join(err, status.Unavailable.Err())
 	}
 	defer ch.t.Stop()
 	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return err
+		return errors.Join(err, status.Unavailable.Err())
 	}
 	return nil
 }

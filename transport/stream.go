@@ -19,7 +19,6 @@ package transport
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -143,18 +142,18 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 	return s.Close()
 }
 
-// recv blocks until the response slot is filled or the stream is canceled,
-// returning codes.Canceled when the call ends without a reply. A broken
-// connection does not cancel the stream, so it surfaces as the stream's own
-// deadline (codes.DeadlineExceeded) instead of arriving here as a cancel. The
-// closed-slot branch never fires today — nothing closes the slot — and only
-// guards against a future sender doing so.
+// recv blocks until the response slot is filled or the stream ends, returning
+// codes.Canceled when the call ends without a reply. The stream ends when the
+// caller cancels its context or when its own deadline expires (WithTimeout,
+// clamped by the caller's ctx deadline); a broken connection does not cancel it,
+// so it ends there too, only later. All three report Canceled on purpose: no
+// reply arrived, so whether the peer ran the handler is unknown, and a code
+// callers retry on would invite replaying a call that may already have taken
+// effect. The closed-slot branch never fires today — nothing closes the slot —
+// and only guards against a future sender doing so.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():
-		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
-			return nil, status.DeadlineExceeded.Err()
-		}
 		return nil, status.Canceled.Err()
 	case response, ok := <-s.c:
 		if !ok {

@@ -42,11 +42,13 @@ const (
 	// defaultMaxStreams is the default maximum number of concurrent streams
 	// per connection.
 	defaultMaxStreams = math.MaxUint16
-	// defaultTimeout is the default per-request timeout stored in Options, and the
-	// value defaultWriteTimeout derives from. Client streams no longer run under
-	// it: they are cut at defaultReadTimeout, and the server clamps a handler to
-	// WithServerTimeout.
-	defaultTimeout = 3 * time.Second
+	// defaultTimeout is the default per-request timeout stored in Options, the
+	// value defaultWriteTimeout derives from, and the starting point of a ping's
+	// budget. Client streams no longer run under it: they are cut at
+	// defaultReadTimeout, and the server clamps a handler to WithServerTimeout.
+	// Ping caps it at defaultKeepalive, so raising it past that does not lengthen
+	// a health check.
+	defaultTimeout = time.Second
 	// defaultReadTimeout bounds how long the reader waits for the next frame
 	// before treating the connection as dead. It must stay well above the
 	// keepalive period, or idle connections would be torn down between pings.
@@ -55,12 +57,13 @@ const (
 	// every call, and the flush timer arms one of its own before it writes.
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the idle period at which the round robin balancer pings
-	// a connection. It deliberately equals defaultTimeout rather than the ten
-	// seconds gRPC uses as its client keepalive floor: grpcx carries the ping
-	// itself, so no peer applies that policy. The read timeout is three of these
+	// a connection. It is three defaultTimeouts rather than the ten seconds gRPC
+	// uses as its client keepalive floor: grpcx carries the ping itself, so no
+	// peer applies that policy, and a ping has to fail before the next one is due
+	// instead of running for the whole interval. The read timeout is three of these
 	// intervals, so an idle connection gets two pings before the reader gives up on
 	// it.
-	defaultKeepalive = defaultTimeout
+	defaultKeepalive = 3 * defaultTimeout
 )
 
 // RoundTripper is the client-side transport: it dials a connection, dispatches

@@ -408,8 +408,8 @@ func TestDefaultMethodHandlerCapsTheHandlerDeadline(t *testing.T) {
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 1, Timeout: 3_600_000}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if seen > 3*time.Second || seen <= 0 {
-		t.Errorf("handler deadline is %v away, want at most the 3s cap", seen)
+	if seen > defaultTimeout || seen <= 0 {
+		t.Errorf("handler deadline is %v away, want at most the %v cap", seen, defaultTimeout)
 	}
 }
 

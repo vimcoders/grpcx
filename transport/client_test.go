@@ -228,6 +228,20 @@ func TestPingFailsOnAClosedTransport(t *testing.T) {
 	}
 }
 
+// TestPingEndsAtItsOwnBudget covers the budget Ping picks: with a short call
+// timeout and a long read timeout, the health check dies at the timeout instead
+// of waiting out the reader's budget.
+func TestPingEndsAtItsOwnBudget(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithTimeout(50*time.Millisecond), WithReadTimeout(time.Second))
+	start := time.Now()
+	if err := c.Ping(context.Background()); err == nil {
+		t.Fatal("Ping on a silent connection returned nil")
+	}
+	if d := time.Since(start); d > 300*time.Millisecond {
+		t.Errorf("Ping returned after %v, want it cut at its 50ms budget, not the 1s read timeout", d)
+	}
+}
+
 // TestCreateStreamEnforcesMaxStreams covers the cap: the call past the limit is
 // refused with ResourceExhausted.
 func TestCreateStreamEnforcesMaxStreams(t *testing.T) {
@@ -351,6 +365,64 @@ func TestCreateStreamDeadlineFollowsTheReadTimeout(t *testing.T) {
 	}
 	if d := time.Since(start); d < 50*time.Millisecond {
 		t.Errorf("the call ended %v after it started, want it to wait for the 100ms read timeout", d)
+	}
+}
+
+// TestCreateStreamShortensItsDeadlineToTheCaller pins one half of the min: a
+// caller deadline nearer than the read timeout wins, so the stream ends with the
+// caller instead of outliving it.
+func TestCreateStreamShortensItsDeadlineToTheCaller(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithReadTimeout(time.Second))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	s, err := c.createStream(ctx)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	dl, ok := s.ctx.Deadline()
+	if !ok {
+		t.Fatal("the stream context carries no deadline")
+	}
+	if left := time.Until(dl); left > 80*time.Millisecond {
+		t.Errorf("the stream deadline is %v away, want it within the caller's 50ms", left)
+	}
+}
+
+// TestCreateStreamKeepsTheReadTimeoutWhenTheCallerIsLater pins the other half: a
+// caller deadline further out must not widen the stream past the read timeout,
+// which is the regression a bare cmp.Or — without the min around it — introduces.
+func TestCreateStreamKeepsTheReadTimeoutWhenTheCallerIsLater(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithReadTimeout(100*time.Millisecond))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s, err := c.createStream(ctx)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	dl, ok := s.ctx.Deadline()
+	if !ok {
+		t.Fatal("the stream context carries no deadline")
+	}
+	if left := time.Until(dl); left > 150*time.Millisecond {
+		t.Errorf("the stream deadline is %v away, want the 100ms read timeout to win", left)
+	}
+}
+
+// TestCreateStreamIsBornExpiredWhenTheCallerDeadlineHasPassed pins the negative
+// branch: min picks the already-expired deadline, so the stream never falls back
+// to the read timeout and never waits for one.
+func TestCreateStreamIsBornExpiredWhenTheCallerDeadlineHasPassed(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithReadTimeout(100*time.Millisecond))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	s, err := c.createStream(ctx)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	select {
+	case <-s.ctx.Done():
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("the stream outlived a caller deadline that had already passed")
 	}
 }
 

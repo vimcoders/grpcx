@@ -46,9 +46,10 @@ func WithMaxStreams(n uint32) Option {
 }
 
 // WithTimeout sets Options.timeout, which Options.Timeout reports. The request
-// path no longer reads it: a client stream is cut at WithReadTimeout and the
+// path does not read it: a client stream is cut at WithReadTimeout and the
 // header's timeout comes from the caller's context deadline, while the server
-// clamps a handler to WithServerTimeout. Zero falls back to defaultTimeout.
+// clamps a handler to WithServerTimeout. It does reach Ping, which caps it at
+// Keepalive(). Zero falls back to defaultTimeout.
 func WithTimeout(d time.Duration) Option {
 	return func(t *Options) {
 		t.timeout = cmp.Or(d, defaultTimeout)
@@ -114,8 +115,9 @@ func (o Options) Keepalive() time.Duration {
 }
 
 // Timeout returns the per-request timeout stored on the options, as set by
-// WithTimeout. No request path reads it any more: client streams run under
-// WithReadTimeout, and the server clamps a handler to WithServerTimeout.
+// WithTimeout. No request path reads it: client streams run under
+// WithReadTimeout, and the server clamps a handler to WithServerTimeout. Ping is
+// the exception, and it caps the value at Keepalive().
 func (o Options) Timeout() time.Duration {
 	return o.timeout
 }
@@ -229,9 +231,11 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 // free, so a wrap past MaxUint32 that lands on a live stream is refused rather
 // than overwriting it. Call options are ignored here: Invoke and RoundTrip build
 // and marshal the request header themselves, so opts never reach the wire through
-// this path. The stream context is cut at readTimeout rather than at the
-// per-request timeout in Options, so a call outlives what WithTimeout configured
-// and ends when the reader would.
+// this path. The stream context is cut at readTimeout, or at the caller's own
+// deadline when that is nearer: the two are combined with a min, so a caller
+// deadline further out never widens the stream past readTimeout. It is still not
+// the per-request timeout in Options, so a call outlives what WithTimeout
+// configured and ends when the reader or the caller gives up.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
@@ -248,7 +252,11 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	if _, ok := c.streams[streamID]; ok {
 		return nil, status.ResourceExhausted.Err()
 	}
-	childCtx, cancel := context.WithTimeout(ctx, c.readTimeout)
+	timeout := c.readTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		timeout = min(cmp.Or(time.Until(dl), timeout), timeout)
+	}
+	childCtx, cancel := context.WithTimeout(ctx, timeout)
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
@@ -369,12 +377,15 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 
 // Ping keeps the connection active by opening a stream, sending an empty
 // request and waiting for the reply. It is the health check the balancer relies
-// on, so an idle connection never reaches the read deadline and gets torn
-// down. The ping has no timeout of its own: the stream runs under WithReadTimeout
-// (defaultReadTimeout, 3*keepalive), the same budget the reader gives the next
-// frame, so a ping cannot outlive the connection it is checking.
+// on, so an idle connection never reaches the read deadline and gets torn down.
+// Its budget is min(Timeout(), Keepalive()) rather than the stream's read timeout:
+// a health check has to fail before the next one is due, or two pings pile up on
+// one connection. Under the defaults that is defaultTimeout, a third of the
+// keepalive period; the cap only bites once WithTimeout climbs past Keepalive().
 func (c *client) Ping(ctx context.Context) error {
-	s, err := c.createStream(ctx)
+	childCtx, cancel := context.WithTimeout(ctx, min(c.Timeout(), c.Keepalive()))
+	defer cancel()
+	s, err := c.createStream(childCtx)
 	if err != nil {
 		return err
 	}

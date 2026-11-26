@@ -16,8 +16,8 @@ import (
 // measured against them.
 func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
 	o := DefaultOptions()
-	if o.timeout != 3*time.Second {
-		t.Errorf("timeout = %v, want 3s", o.timeout)
+	if o.timeout != defaultTimeout {
+		t.Errorf("timeout = %v, want %v", o.timeout, defaultTimeout)
 	}
 	if o.maxStreams != uint32(defaultMaxStreams) {
 		t.Errorf("maxStreams = %d, want %d", o.maxStreams, uint32(defaultMaxStreams))
@@ -36,6 +36,19 @@ func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
 	}
 }
 
+// TestKeepaliveOutlastsThePingBudget covers the ordering the two periods must keep:
+// a ping runs under min(Timeout(), Keepalive()), so an interval no longer than the
+// budget lets the next ping start before this one has failed and both queue on one
+// connection.
+func TestKeepaliveOutlastsThePingBudget(t *testing.T) {
+	if defaultKeepalive <= defaultTimeout {
+		t.Errorf("defaultKeepalive = %v, want it above defaultTimeout = %v, or pings overlap", defaultKeepalive, defaultTimeout)
+	}
+	if defaultReadTimeout <= defaultKeepalive {
+		t.Errorf("defaultReadTimeout = %v, want it above defaultKeepalive = %v, or an idle connection is torn down between pings", defaultReadTimeout, defaultKeepalive)
+	}
+}
+
 // TestOptionsAccessors pins the values the balancer reads off the options. The
 // keepalive assertion follows defaultKeepalive rather than a literal, because the
 // period is a package decision: this test only proves the accessor reports it.
@@ -44,7 +57,7 @@ func TestOptionsAccessors(t *testing.T) {
 	if got, want := o.Keepalive(), defaultKeepalive; got != want {
 		t.Errorf("Keepalive() = %v, want %v", got, want)
 	}
-	if got, want := o.Timeout(), 3*time.Second; got != want {
+	if got, want := o.Timeout(), defaultTimeout; got != want {
 		t.Errorf("Timeout() = %v, want %v", got, want)
 	}
 }

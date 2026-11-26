@@ -283,10 +283,9 @@ func mustStreamError(t *testing.T, c *client) error {
 
 // TestCloseClosesTheConnectionOnceAndRefusesNewStreams covers the shutdown: the
 // connection is closed exactly once and the limit is zeroed so no later stream
-// can be created. Close cancels the live streams it finds and closes their slots,
-// so a call in flight is over as soon as Close returns instead of sitting out its
-// deadline; the code it reports depends on which wake-up the stream's select picks
-// — Unavailable from the canceled context, or Canceled from the closed slot.
+// can be created. Close cancels the live streams it finds, so a call in flight is
+// over as soon as Close returns instead of sitting out its deadline; the wake-up
+// is the context cancel, so it reports Canceled.
 func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 	c, sender := newClientOnSender(t, nil)
 	first, err := c.createStream(context.Background())
@@ -304,15 +303,14 @@ func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 	if got := sender.closeCount(); got != 1 {
 		t.Errorf("connection closed %d times, want 1", got)
 	}
-	// Close cancels the stream context and closes its receive slot, so the call is
-	// over as soon as it returns; the code is whichever wake-up the stream's select
-	// picks.
+	// Close cancels the stream context, so the call is over as soon as it returns
+	// and the context reports it.
 	if err := first.Context().Err(); err == nil {
 		t.Error("Close did not cancel the live stream context")
 	}
 	var reply api.Empty
-	if code := status.Code(first.RecvMsg(&reply)); code != codes.Unavailable && code != codes.Canceled {
-		t.Errorf("RecvMsg after Close = %v, want Unavailable or Canceled", code)
+	if code := status.Code(first.RecvMsg(&reply)); code != codes.Canceled {
+		t.Errorf("RecvMsg after Close = %v, want Canceled", code)
 	}
 	if _, err := c.createStream(context.Background()); status.Code(err) != codes.Unavailable {
 		t.Errorf("createStream after Close = %v, want Unavailable", err)
@@ -320,11 +318,11 @@ func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 }
 
 // TestCloseWakesAnInFlightCall covers the shutdown path: Close walks the stream
-// table, cancels each context and closes each receive slot, so a call waiting on
-// a reply returns at once instead of sitting out its deadline. Both wake-ups are
-// armed at the same moment, so the call reports whichever case the stream's
-// select picks: Canceled from the closed slot, or Unavailable from the canceled
-// context. The test therefore pins the call returning, not one code.
+// table and cancels each context, so a call waiting on a reply returns at once
+// instead of sitting out its deadline. The wake-up is the context cancel, so the
+// call reports Canceled; no reply arrived, so whether the peer ran the handler is
+// still unknown. A call whose own deadline fired first reports Unavailable, which
+// the deadline cases pin separately.
 func TestCloseWakesAnInFlightCall(t *testing.T) {
 	c, _ := newClientOnSender(t, nil)
 	s, err := c.createStream(context.Background())
@@ -341,8 +339,8 @@ func TestCloseWakesAnInFlightCall(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if code := status.Code(err); code != codes.Canceled && code != codes.Unavailable {
-			t.Errorf("in-flight call after Close = %v (%v), want Canceled or Unavailable", err, code)
+		if code := status.Code(err); code != codes.Canceled {
+			t.Errorf("in-flight call after Close = %v (%v), want Canceled", err, code)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the in-flight call did not return after Close")

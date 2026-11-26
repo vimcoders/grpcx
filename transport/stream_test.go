@@ -216,18 +216,18 @@ func TestClientStreamRecvMsgUnmarshalsTheReply(t *testing.T) {
 	}
 }
 
-// TestClientStreamRecvReportsUnavailableWhenTheCallContextEnds covers a call
-// whose context is canceled before its reply arrives. Every exit through
-// ctx.Done reports Unavailable today, whether the caller canceled or a deadline
-// fired, so a caller cannot tell the two apart from the code alone.
-func TestClientStreamRecvReportsUnavailableWhenTheCallContextEnds(t *testing.T) {
+// TestClientStreamRecvReportsCanceledWhenTheCallContextIsCanceled covers a call
+// the caller canceled before its reply arrived: the stream context reports
+// context.Canceled, so the recv reports Canceled while a deadline reports
+// Unavailable.
+func TestClientStreamRecvReportsCanceledWhenTheCallContextIsCanceled(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
 	s.cancel()
 
 	var reply api.EchoResponse
 	err := s.RecvMsg(&reply)
-	if code := status.Code(err); code != codes.Unavailable {
-		t.Errorf("RecvMsg on a canceled stream = %v (%v), want Unavailable", err, code)
+	if code := status.Code(err); code != codes.Canceled {
+		t.Errorf("RecvMsg on a canceled stream = %v (%v), want Canceled", err, code)
 	}
 }
 
@@ -246,19 +246,53 @@ func TestClientStreamRecvReportsCanceledWhenTheSlotIsClosed(t *testing.T) {
 	}
 }
 
-// TestClientStreamCloseSendDeregistersTheStream covers one CloseSend: the stream
-// leaves the table once and its context ends. CloseSend runs the deregistration
-// outside its once, so this pins a single call rather than a repeated one.
-func TestClientStreamCloseSendDeregistersTheStream(t *testing.T) {
+// TestClientStreamCloseSendDeregistersTheStreamOnce covers the once: a second
+// CloseSend skips the delete instead of removing an entry that may already belong
+// to a new stream, and the context is done either way.
+func TestClientStreamCloseSendDeregistersTheStreamOnce(t *testing.T) {
 	s, deleted := newStreamUnderTest(&fakeSender{})
 	if err := s.CloseSend(); err != nil {
 		t.Fatalf("CloseSend: %v", err)
+	}
+	if err := s.CloseSend(); err != nil {
+		t.Fatalf("second CloseSend: %v", err)
 	}
 	if deleted.Load() != 1 {
 		t.Errorf("deleteStream called %d times, want 1", deleted.Load())
 	}
 	if s.Context().Err() == nil {
 		t.Error("the stream context is still alive after CloseSend")
+	}
+}
+
+// TestClientStreamCloseIsRepeatable covers the no-once Close: a cancel is
+// idempotent, so calling Close twice is harmless and the second call neither
+// panics nor changes the outcome.
+func TestClientStreamCloseIsRepeatable(t *testing.T) {
+	s, _ := newStreamUnderTest(&fakeSender{})
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if s.Context().Err() == nil {
+		t.Error("the stream context is still alive after Close")
+	}
+}
+
+// TestClientStreamCloseLeavesTheSlotOpenForLateReplies pins the fix for the
+// send-on-closed-channel panic: Close cancels the context but never closes the
+// slot, so a reply that arrives after the call is torn down still lands in the
+// slot instead of panicking Handle. Nothing reads it afterwards — the caller is
+// already gone — but the sender stays safe.
+func TestClientStreamCloseLeavesTheSlotOpenForLateReplies(t *testing.T) {
+	s, _ := newStreamUnderTest(&fakeSender{})
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := s.Handle(context.Background(), &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoResponse{Message: "late"})}}); err != nil {
+		t.Fatalf("Handle after Close: %v", err)
 	}
 }
 

@@ -246,16 +246,13 @@ func TestClientStreamRecvReportsCanceledWhenTheSlotIsClosed(t *testing.T) {
 	}
 }
 
-// TestClientStreamCloseSendIsIdempotent covers the once-only cleanup: a second
-// CloseSend does not deregister the stream again, and the stream context is done
-// either way.
-func TestClientStreamCloseSendIsIdempotent(t *testing.T) {
+// TestClientStreamCloseSendDeregistersTheStream covers one CloseSend: the stream
+// leaves the table once and its context ends. CloseSend runs the deregistration
+// outside its once, so this pins a single call rather than a repeated one.
+func TestClientStreamCloseSendDeregistersTheStream(t *testing.T) {
 	s, deleted := newStreamUnderTest(&fakeSender{})
 	if err := s.CloseSend(); err != nil {
 		t.Fatalf("CloseSend: %v", err)
-	}
-	if err := s.CloseSend(); err != nil {
-		t.Fatalf("second CloseSend: %v", err)
 	}
 	if deleted.Load() != 1 {
 		t.Errorf("deleteStream called %d times, want 1", deleted.Load())

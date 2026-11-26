@@ -50,28 +50,33 @@ type clientStream struct {
 	sync.Once
 }
 
-// CloseSend deregisters the stream exactly once, then closes it. The end-of-
-// stream frame is intentionally not sent: grpcx only carries unary calls, so
-// there is no stream to terminate.
+// CloseSend deregisters the stream and then closes it. The end-of-stream frame
+// is intentionally not sent: grpcx only carries unary calls, so there is no stream
+// to terminate. Deregistration runs on every call — the once lives in Close — so
+// a second CloseSend deletes the id again.
 func (s *clientStream) CloseSend() error {
 	// CloseSend always reports success, so the close error is only cleanup.
 	defer func() { _ = s.Close() }()
-	s.Once.Do(func() {
-		if s.deleteStream != nil {
-			s.deleteStream(s.id)
-		}
-		// TODO: send the Closed frame once streaming lands.
-		// opt := CallOptions{Closed: true}
-		// _ = s.Send(&api.Empty{}, &opt)
-	})
+	if s.deleteStream != nil {
+		s.deleteStream(s.id)
+	}
+	// TODO: send the Closed frame once streaming lands.
+	// opt := CallOptions{Closed: true}
+	// _ = s.Send(&api.Empty{}, &opt)
 	return nil
 }
 
-// Close cancels the stream context, unblocking any pending recv.
+// Close cancels the stream context and closes the receive slot, both under the
+// stream's once so a second call is a no-op. The two wake-ups arm together, so a
+// recv blocked in the slot reports whichever its select picks: Canceled from the
+// closed slot, Unavailable from the canceled context.
 func (s *clientStream) Close() error {
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.Once.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		close(s.c)
+	})
 	return nil
 }
 
@@ -143,11 +148,12 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 }
 
 // recv blocks until the response slot is filled or the stream ends. The code
-// depends on which exit fired, not on the outcome: a done stream context
-// reports Unavailable, and a closed receive slot reports Canceled. The stream
-// context ends when the caller cancels it, when its own deadline expires, or
-// when Close cancels every live stream while it walks the table. The closed-slot
-// branch is a guard only: nothing closes the slot today.
+// depends on which exit fired, not on the outcome: a done stream context reports
+// Unavailable, and a closed receive slot reports Canceled. The stream context ends
+// when the caller cancels it, when its own deadline expires, or when Close cancels
+// every live stream while it walks the table. The slot is closed by Close as well,
+// so both exits fire from the same call and select decides which one a waiting
+// recv sees.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():

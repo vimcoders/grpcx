@@ -120,11 +120,10 @@ func (s *clientStream) Context() context.Context {
 }
 
 // Handle reads the response payload frame off the connection and hands it to
-// the waiting RecvMsg through the receive slot. It does not consult the call
-// state: an empty slot accepts the response even after the caller has gone, and
-// the payload goes back to the pool only when the slot already holds a reply.
-// One call delivers one response per stream, so that second case needs a slot
-// left occupied by an earlier reply.
+// the waiting RecvMsg through the receive slot. A call that has already ended —
+// the stream context is done — drops the payload back to the pool instead of
+// parking it in a slot nobody will read, and an occupied slot drops it the same
+// way.
 func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	var options api.CallOptions
 	for _, v := range opts {
@@ -137,6 +136,10 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 	response := &api.Response{
 		Options: &options,
 		Payload: p,
+	}
+	if s.ctx.Err() != nil {
+		putmbuf(p)
+		return s.Close()
 	}
 	select {
 	case s.c <- response:

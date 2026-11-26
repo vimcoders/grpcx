@@ -281,18 +281,20 @@ func TestClientStreamCloseIsRepeatable(t *testing.T) {
 	}
 }
 
-// TestClientStreamCloseLeavesTheSlotOpenForLateReplies pins the fix for the
-// send-on-closed-channel panic: Close cancels the context but never closes the
-// slot, so a reply that arrives after the call is torn down still lands in the
-// slot instead of panicking Handle. Nothing reads it afterwards — the caller is
-// already gone — but the sender stays safe.
-func TestClientStreamCloseLeavesTheSlotOpenForLateReplies(t *testing.T) {
+// TestClientStreamCloseDropsLateReplies covers a reply that arrives after the
+// call ended: Handle sees the done stream context and returns the payload to the
+// pool instead of parking it in the slot, so nothing is left for a reader that
+// will never come.
+func TestClientStreamCloseDropsLateReplies(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if err := s.Handle(context.Background(), &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoResponse{Message: "late"})}}); err != nil {
 		t.Fatalf("Handle after Close: %v", err)
+	}
+	if len(s.c) != 0 {
+		t.Errorf("late reply left in the slot (%d), want dropped", len(s.c))
 	}
 }
 

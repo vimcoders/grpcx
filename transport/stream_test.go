@@ -216,16 +216,33 @@ func TestClientStreamRecvMsgUnmarshalsTheReply(t *testing.T) {
 	}
 }
 
-// TestClientStreamRecvReturnsCanceledWhenTheCallEnds covers a stream canceled
-// before its reply arrives.
-func TestClientStreamRecvReturnsCanceledWhenTheCallEnds(t *testing.T) {
+// TestClientStreamRecvReportsUnavailableWhenTheCallContextEnds covers a call
+// whose context is canceled before its reply arrives. Every exit through
+// ctx.Done reports Unavailable today, whether the caller canceled or a deadline
+// fired, so a caller cannot tell the two apart from the code alone.
+func TestClientStreamRecvReportsUnavailableWhenTheCallContextEnds(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
 	s.cancel()
 
 	var reply api.EchoResponse
 	err := s.RecvMsg(&reply)
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("RecvMsg on a canceled stream = %v (%v), want Unavailable", err, code)
+	}
+}
+
+// TestClientStreamRecvReportsCanceledWhenTheSlotIsClosed covers the guard on a
+// closed receive slot. Nothing closes the slot today — Close cancels the stream
+// context instead — so the case pins the code a future closer would produce
+// rather than a path a caller can reach.
+func TestClientStreamRecvReportsCanceledWhenTheSlotIsClosed(t *testing.T) {
+	s, _ := newStreamUnderTest(&fakeSender{})
+	close(s.c)
+
+	var reply api.EchoResponse
+	err := s.RecvMsg(&reply)
 	if code := status.Code(err); code != codes.Canceled {
-		t.Errorf("RecvMsg on a canceled stream = %v (%v), want Canceled", err, code)
+		t.Errorf("RecvMsg on a closed slot = %v (%v), want Canceled", err, code)
 	}
 }
 

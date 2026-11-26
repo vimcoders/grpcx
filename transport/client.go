@@ -45,8 +45,10 @@ func WithMaxStreams(n uint32) Option {
 	}
 }
 
-// WithTimeout sets the default call timeout advertised in the request header.
-// Zero falls back to defaultTimeout.
+// WithTimeout sets Options.timeout, which Options.Timeout reports. The request
+// path no longer reads it: a client stream is cut at WithReadTimeout and the
+// header's timeout comes from the caller's context deadline, while the server
+// clamps a handler to WithServerTimeout. Zero falls back to defaultTimeout.
 func WithTimeout(d time.Duration) Option {
 	return func(t *Options) {
 		t.timeout = cmp.Or(d, defaultTimeout)
@@ -111,7 +113,9 @@ func (o Options) Keepalive() time.Duration {
 	return defaultKeepalive
 }
 
-// Timeout returns the default call timeout.
+// Timeout returns the per-request timeout stored on the options, as set by
+// WithTimeout. No request path reads it any more: client streams run under
+// WithReadTimeout, and the server clamps a handler to WithServerTimeout.
 func (o Options) Timeout() time.Duration {
 	return o.timeout
 }
@@ -224,14 +228,10 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 // free, so a wrap past MaxUint32 that lands on a live stream is refused rather
 // than overwriting it. Call options are ignored here: Invoke and RoundTrip build
 // and marshal the request header themselves, so opts never reach the wire through
-// this path.
-func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientStream, error) {
-	options := &api.CallOptions{
-		Timeout: c.timeout.Milliseconds(),
-	}
-	for _, opt := range opts {
-		opt.apply(options)
-	}
+// this path. The stream context is cut at readTimeout rather than at the
+// per-request timeout in Options, so a call outlives what WithTimeout configured
+// and ends when the reader would.
+func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
 	// maxStreams is never zero while the transport is open — WithMaxStreams
@@ -247,7 +247,7 @@ func (c *client) createStream(ctx context.Context, opts ...CallOption) (*clientS
 	if _, ok := c.streams[streamID]; ok {
 		return nil, status.ResourceExhausted.Err()
 	}
-	childCtx, cancel := context.WithTimeout(ctx, time.Millisecond*time.Duration(options.Timeout))
+	childCtx, cancel := context.WithTimeout(ctx, c.readTimeout)
 	s := clientStream{
 		ctx:          childCtx,
 		id:           streamID,
@@ -289,8 +289,8 @@ func (c *client) getStream(sid uint32) *clientStream {
 // grpc.CallOption values are accepted for interface compatibility and ignored:
 // metadata and the deadline travel through ctx. The header carries a timeout
 // only when ctx has a deadline; without one the server falls back to its own
-// WithServerTimeout value, while the stream itself still runs under the
-// transport's default. A reply whose status code is not OK comes back as a
+// WithServerTimeout value, while the stream itself still runs under
+// WithReadTimeout. A reply whose status code is not OK comes back as a
 // status error carrying that code and its description.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
 	info := CallOptions{
@@ -323,8 +323,8 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 
 // RoundTrip sends an already framed request — header plus payload — and waits
 // for the matching response. The payload is sent as the caller handed it in;
-// the header is re-marshalled here, so it carries this transport's stream id and
-// default timeout, with the caller's deadline folded in when the context has one.
+// the header is re-marshalled here, so it carries this transport's stream id, and
+// the caller's deadline folded into the header timeout when the context has one.
 // A reply whose status code is not OK comes back as a status error carrying that
 // code and its description.
 func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
@@ -369,9 +369,9 @@ func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response
 // Ping keeps the connection active by opening a stream, sending an empty
 // request and waiting for the reply. It is the health check the balancer relies
 // on, so an idle connection never reaches the read deadline and gets torn
-// down. The ping has no timeout of its own: the stream carries the transport's
-// call timeout (the default is defaultTimeout, 3s, or whatever WithTimeout set),
-// so a larger WithTimeout also makes a ping wait longer before it gives up.
+// down. The ping has no timeout of its own: the stream runs under WithReadTimeout
+// (defaultReadTimeout, 3*keepalive), the same budget the reader gives the next
+// frame, so a ping cannot outlive the connection it is checking.
 func (c *client) Ping(ctx context.Context) error {
 	s, err := c.createStream(ctx)
 	if err != nil {
@@ -392,21 +392,25 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close tears the transport down once: it closes the underlying connection from
-// a defer in the same sync.Once, so a second call is a no-op and nothing is
-// closed twice. A call in flight when this runs is deliberately left alone: its
-// stream ends on its own deadline and reports codes.Canceled, since no reply
-// arrived and nothing here can tell whether the peer ran the handler. The stream table is left as
-// it was, but the limit is zeroed as the closed marker: WithMaxStreams never
-// stores zero, so zero can only mean "closed" and createStream refuses every
-// later call with codes.Unavailable instead of filling a table nothing will
-// send from. Closing a connection that is already being thrown away has nothing
-// left to report to, so its error is dropped.
+// Close tears the transport down once: from a defer in the same sync.Once it
+// cancels every live stream, empties the stream table, then closes the
+// connection, so a second call is a no-op and nothing is closed twice. A call in
+// flight is woken by its own stream cancel and reports codes.Unavailable, since
+// no reply arrived and nothing here can tell whether the peer ran the handler. The
+// limit is then zeroed as the closed marker: WithMaxStreams never stores zero, so
+// zero can only mean "closed" and createStream refuses every later call with
+// codes.Unavailable instead of filling a table nothing will send from. Closing a
+// connection that is already being thrown away has nothing left to report to, so
+// its error is dropped.
 func (c *client) Close() error {
 	c.Once.Do(func() {
 		defer c.SendCloser.Close()
 		c.Lock()
 		defer c.Unlock()
+		for _, s := range c.streams {
+			_ = s.Close()
+		}
+		clear(c.streams)
 		// Zero is the closed marker, not a "no cap" request: createStream compares
 		// against it, and WithMaxStreams can never produce it.
 		c.maxStreams = 0

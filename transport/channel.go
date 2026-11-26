@@ -136,10 +136,18 @@ func (ch *channel) Recv() ([]byte, error) {
 // first; the timer writes under the deadline this call armed.
 //
 // A write that fails closes the connection and returns the raw I/O error joined
-// with the Close error. Neither carries a gRPC status, so callers see
-// codes.Unknown. The pending batch is left where it is, which is harmless: the
-// connection is already closed, so the next call fails on its own deadline and
-// the leftover can never be flushed into a fresh call.
+// with the Close error and codes.Unavailable. The pending batch is left where it
+// is, which is harmless: the connection is already closed, so the next Send fails
+// arming its own write deadline, and the leftover can never be flushed into a
+// fresh call.
+//
+// The timer flush is the one failure no caller hears: Send had already returned
+// nil, so the error only reaches the log and the connection it closes. The next
+// Send then fails arming its deadline as described above, which covers a batch
+// queued in the middle of a burst — but a batch queued by the last Send of a burst
+// has no next Send, and only that one is lost without a word. Closing the window
+// needs Send to surface a flush it never saw; bufsize <= 0 is the only setting
+// where every write failure reaches its caller.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -154,7 +162,7 @@ func (ch *channel) Send(p ...[]byte) error {
 	ch.Lock()
 	defer ch.Unlock()
 	if err := ch.SetWriteDeadline(time.Now().Add(ch.writeTimeout)); err != nil {
-		return errors.Join(err, ch.Conn.Close())
+		return errors.Join(err, ch.Conn.Close(), status.Unavailable.Err())
 	}
 	var n int
 	ch.bw = append(ch.bw, bw...)
@@ -167,7 +175,7 @@ func (ch *channel) Send(p ...[]byte) error {
 	}
 	defer ch.t.Stop()
 	if _, err := ch.bw.WriteTo(ch.Conn); err != nil {
-		return errors.Join(err, ch.Conn.Close())
+		return errors.Join(err, ch.Conn.Close(), status.Unavailable.Err())
 	}
 	return nil
 }
@@ -175,9 +183,9 @@ func (ch *channel) Send(p ...[]byte) error {
 // Close closes the connection. It takes the same lock as Send, so a flush cannot
 // be in flight while the connection goes away, and it stops the flush timer:
 // frames still sitting in the batch buffer are dropped rather than written out.
-// The client calls it from sync.Once when the transport goes down, leaving the
-// streams on it to their own deadlines; the server calls it from a defer when the
-// connection ends.
+// The client calls it from sync.Once after it has canceled every live stream, so
+// no call is left waiting on the connection; the server calls it from a defer
+// when the connection ends.
 func (ch *channel) Close() error {
 	ch.Lock()
 	defer ch.Unlock()

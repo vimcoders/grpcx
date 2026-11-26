@@ -77,8 +77,10 @@ func TestChannelSendRejectsOversizedFrame(t *testing.T) {
 	}
 }
 
-// TestChannelSendReportsWriteFailure covers a connection that went away: the
-// caller learns about it instead of losing the frame silently.
+// TestChannelSendReportsWriteFailure covers a connection that is already closed
+// before the write starts: the deadline cannot be armed, the connection is
+// closed again, and the joined status makes the failure Unavailable instead of
+// Unknown.
 func TestChannelSendReportsWriteFailure(t *testing.T) {
 	cliConn, srvConn := net.Pipe()
 	srv := newChannel(srvConn)
@@ -86,8 +88,31 @@ func TestChannelSendReportsWriteFailure(t *testing.T) {
 	_ = srv.Close()
 	_ = cliConn.Close()
 
-	if err := cli.Send([]byte("x")); err == nil {
-		t.Errorf("Send on a closed connection returned nil")
+	err := cli.Send([]byte("x"))
+	if err == nil {
+		t.Fatal("Send on a closed connection returned nil")
+	}
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("Send on a closed connection = %v (%v), want Unavailable", err, code)
+	}
+	_ = cli.Close()
+}
+
+// TestChannelSendMapsAWriteFailureToUnavailable covers the other failing point:
+// the deadline is armed on a live connection and the write itself fails because
+// the peer went away. Both failing points must report Unavailable, or a caller
+// sees the same fault under two different codes.
+func TestChannelSendMapsAWriteFailureToUnavailable(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	cli := newChannel(cliConn)
+	_ = srvConn.Close()
+
+	err := cli.Send([]byte("x"))
+	if err == nil {
+		t.Fatal("Send to a closed pipe returned nil")
+	}
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("Send to a closed pipe = %v (%v), want Unavailable", err, code)
 	}
 	_ = cli.Close()
 }

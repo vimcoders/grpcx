@@ -142,22 +142,19 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 	return s.Close()
 }
 
-// recv blocks until the response slot is filled or the stream ends, returning
-// codes.Canceled when the call ends without a reply. The stream ends when the
-// caller cancels its context or when its own deadline expires (WithTimeout,
-// clamped by the caller's ctx deadline); a broken connection does not cancel it,
-// so it ends there too, only later. All three report Canceled on purpose: no
-// reply arrived, so whether the peer ran the handler is unknown, and a code
-// callers retry on would invite replaying a call that may already have taken
-// effect. The closed-slot branch never fires today — nothing closes the slot —
-// and only guards against a future sender doing so.
+// recv blocks until the response slot is filled or the stream ends. The code
+// depends on which exit fired, not on the outcome: a done stream context
+// reports Unavailable, and a closed receive slot reports Canceled. The stream
+// context ends when the caller cancels it, when its own deadline expires, or
+// when Close cancels every live stream while it walks the table. The closed-slot
+// branch is a guard only: nothing closes the slot today.
 func (s *clientStream) recv() (*api.Response, error) {
 	select {
 	case <-s.ctx.Done():
-		return nil, status.Canceled.Err()
+		return nil, status.Unavailable.Err()
 	case response, ok := <-s.c:
 		if !ok {
-			return nil, status.Unavailable.Err()
+			return nil, status.Canceled.Err()
 		}
 		return response, nil
 	}
@@ -175,9 +172,8 @@ type CallOptions api.CallOptions
 // apply merges c into opts field by field: a non-zero field in c replaces what
 // an earlier option put there, and a zero one leaves it alone. Timeout is no
 // exception — apply never fills in a default, so "this header named no timeout"
-// survives to the call site, which is where the default is applied: createStream
-// and Invoke keep the transport's own, defaultMethodHandler.Handle falls back to
-// WithServerTimeout.
+// survives to the call site: Invoke folds the caller's context deadline into the
+// header, and defaultMethodHandler.Handle falls back to WithServerTimeout.
 func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
 	opts.FullMethodName = cmp.Or(c.FullMethodName, opts.FullMethodName)

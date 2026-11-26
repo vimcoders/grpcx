@@ -42,7 +42,10 @@ const (
 	// defaultMaxStreams is the default maximum number of concurrent streams
 	// per connection.
 	defaultMaxStreams = math.MaxUint16
-	// defaultTimeout is the default timeout of one request.
+	// defaultTimeout is the default per-request timeout stored in Options, and the
+	// value defaultWriteTimeout derives from. Client streams no longer run under
+	// it: they are cut at defaultReadTimeout, and the server clamps a handler to
+	// WithServerTimeout.
 	defaultTimeout = 3 * time.Second
 	// defaultReadTimeout bounds how long the reader waits for the next frame
 	// before treating the connection as dead. It must stay well above the

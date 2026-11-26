@@ -269,9 +269,9 @@ func mustStreamError(t *testing.T, c *client) error {
 
 // TestCloseClosesTheConnectionOnceAndRefusesNewStreams covers the shutdown: the
 // connection is closed exactly once and the limit is zeroed so no later stream
-// can be created. Close deliberately leaves live streams alone — each one ends
-// on its own deadline instead, so a call in flight is never reported as the
-// caller cancelling it, and it is not woken early either.
+// can be created. Close cancels the live streams it finds, so a call in flight is
+// over as soon as Close returns and reports Unavailable instead of sitting out
+// its deadline.
 func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 	c, sender := newClientOnSender(t, nil)
 	first, err := c.createStream(context.Background())
@@ -289,28 +289,32 @@ func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
 	if got := sender.closeCount(); got != 1 {
 		t.Errorf("connection closed %d times, want 1", got)
 	}
-	if first.Context().Err() != nil {
-		t.Error("Close canceled a live stream; it is meant to end on its own deadline")
+	// Close cancels the stream context, so the call is over as soon as it
+	// returns and the context reports it.
+	if err := first.Context().Err(); err == nil {
+		t.Error("Close did not cancel the live stream context")
+	}
+	var reply api.Empty
+	if err := first.RecvMsg(&reply); status.Code(err) != codes.Unavailable {
+		t.Errorf("RecvMsg after Close = %v (%v), want Unavailable", err, status.Code(err))
 	}
 	if _, err := c.createStream(context.Background()); status.Code(err) != codes.Unavailable {
 		t.Errorf("createStream after Close = %v, want Unavailable", err)
 	}
 }
 
-// TestCloseLeavesAnInFlightCallToItsOwnDeadline covers the other half of the
-// shutdown: Close closes the connection but does not wake the streams on it, so a
-// call in flight keeps waiting and ends on its own deadline with Canceled. The
-// code is Canceled on purpose: no reply arrived, so whether the peer ran the
-// handler is unknown, and reporting a code callers retry on would invite them to
-// replay a call that may already have taken effect.
-func TestCloseLeavesAnInFlightCallToItsOwnDeadline(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithTimeout(50*time.Millisecond))
+// TestCloseWakesAnInFlightCall covers the shutdown path: Close walks the stream
+// table and cancels each stream context, so a call waiting on a reply returns at
+// once instead of sitting out its deadline. The code is Unavailable because the
+// canceled context is what wakes it; no reply arrived, so whether the peer ran
+// the handler is still unknown.
+func TestCloseWakesAnInFlightCall(t *testing.T) {
+	c, _ := newClientOnSender(t, nil)
 	s, err := c.createStream(context.Background())
 	if err != nil {
 		t.Fatalf("stream: %v", err)
 	}
 
-	start := time.Now()
 	done := make(chan error, 1)
 	go func() { done <- s.RecvMsg(&api.Empty{}) }()
 
@@ -320,14 +324,51 @@ func TestCloseLeavesAnInFlightCallToItsOwnDeadline(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if code := status.Code(err); code != codes.Canceled {
-			t.Errorf("in-flight call after Close = %v (%v), want Canceled", err, code)
-		}
-		if d := time.Since(start); d < 30*time.Millisecond {
-			t.Errorf("the call ended %v after it started, want it to wait out its 50ms deadline", d)
+		if code := status.Code(err); code != codes.Unavailable {
+			t.Errorf("in-flight call after Close = %v (%v), want Unavailable", err, code)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("the in-flight call never returned")
+		t.Fatal("the in-flight call did not return after Close")
+	}
+}
+
+// TestCreateStreamDeadlineFollowsTheReadTimeout pins the wiring today: the
+// stream context is cut at the transport's read timeout, so a call with no reply
+// ends there and reports Unavailable. WithTimeout no longer reaches this point —
+// when createStream starts honouring it again, this case has to change with it.
+func TestCreateStreamDeadlineFollowsTheReadTimeout(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithReadTimeout(100*time.Millisecond))
+	s, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	start := time.Now()
+	var reply api.Empty
+	err = s.RecvMsg(&reply)
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("RecvMsg after the read timeout = %v (%v), want Unavailable", err, code)
+	}
+	if d := time.Since(start); d < 50*time.Millisecond {
+		t.Errorf("the call ended %v after it started, want it to wait for the 100ms read timeout", d)
+	}
+}
+
+// TestCloseClearsTheStreamTable covers what the receive loop looks up after
+// shutdown: Close empties the table, so a late reply frame finds no stream and
+// the interceptor reads it off the wire and drops it instead of delivering it to
+// a call that is already over.
+func TestCloseClearsTheStreamTable(t *testing.T) {
+	c, _ := newClientOnSender(t, nil)
+	s, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := c.getStream(s.id); got != nil {
+		t.Errorf("getStream(%d) after Close = %v, want nil", s.id, got)
 	}
 }
 

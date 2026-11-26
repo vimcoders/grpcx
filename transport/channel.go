@@ -130,10 +130,10 @@ func (ch *channel) Recv() ([]byte, error) {
 // The write deadline is armed once at the top of the call, before any frame is
 // queued, so both paths below write under a deadline that was just set.
 //
-// With bufsize <= 0 every call goes straight to the connection. Otherwise the
-// frames are appended to a pending write buffer and flushed as soon as it grows
-// past bufsize, or by the timer after defaultFlushInterval, whichever comes
-// first; the timer writes under the deadline this call armed.
+// With bufsize <= 0 — the default — every call goes straight to the connection.
+// Otherwise the frames are appended to a pending write buffer and flushed as soon
+// as it grows past bufsize, or by the timer after defaultFlushInterval, whichever
+// comes first; the timer writes under the deadline this call armed.
 //
 // A write that fails closes the connection and returns the raw I/O error joined
 // with the Close error and codes.Unavailable. The pending batch is left where it

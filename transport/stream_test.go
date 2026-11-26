@@ -493,3 +493,22 @@ func TestEmptyHandleRepliesUnimplemented(t *testing.T) {
 		t.Errorf("reply StreamID = %d, want 8", header.StreamID)
 	}
 }
+
+// TestClientStreamHandleDropsASecondReply covers a stream whose receive slot is
+// already full: the second response cannot be delivered, so Handle hands its
+// payload back to the pool and closes the stream instead of parking the receive
+// loop. A unary stream carries one reply, so this only fires on a peer that
+// answers twice.
+func TestClientStreamHandleDropsASecondReply(t *testing.T) {
+	s, _ := newStreamUnderTest(&fakeSender{})
+	// Occupy the one-slot buffer so the next delivery has nowhere to go.
+	s.c <- &api.Response{Options: &api.CallOptions{}}
+
+	recv := &fakeRecver{frames: [][]byte{{}}}
+	if err := s.Handle(context.Background(), recv); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if s.Context().Err() == nil {
+		t.Error("Handle did not close the stream after dropping a second reply")
+	}
+}

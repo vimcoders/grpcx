@@ -36,10 +36,12 @@ func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
 	}
 }
 
-// TestOptionsAccessors pins the values the balancer reads off the options.
+// TestOptionsAccessors pins the values the balancer reads off the options. The
+// keepalive assertion follows defaultKeepalive rather than a literal, because the
+// period is a package decision: this test only proves the accessor reports it.
 func TestOptionsAccessors(t *testing.T) {
 	o := DefaultOptions()
-	if got, want := o.Keepalive(), 10*time.Second; got != want {
+	if got, want := o.Keepalive(), defaultKeepalive; got != want {
 		t.Errorf("Keepalive() = %v, want %v", got, want)
 	}
 	if got, want := o.Timeout(), 3*time.Second; got != want {

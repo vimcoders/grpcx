@@ -140,8 +140,8 @@ func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 // Close closes the picker, which cancels the balancer's context. The keepalive
 // loop returns on that cancel and empties the pool, but it does not close the
 // backend transports: each one is closed by its own receive loop once the read
-// deadline (defaultReadTimeout, 30s) fires. Close therefore returns without
-// blocking, and the fds are released a read timeout later.
+// deadline (defaultReadTimeout, three keepalive periods) fires. Close therefore
+// returns without blocking, and the fds are released a read timeout later.
 func (c *client) Close() error {
 	return c.Picker.Close()
 }

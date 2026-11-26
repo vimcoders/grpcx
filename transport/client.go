@@ -86,8 +86,8 @@ func WithCodec(c encoding.Codec) Option {
 
 // WithBufSize sets the send buffer in blocks of defaultBufSize, clamped to
 // defaultMaxBufSize. A value of zero disables batching and makes every Send
-// synchronous. The flush interval is not configurable: the timer wakes at
-// defaultFlushInterval.
+// synchronous; zero is also the package default, so batching is opt-in. The flush
+// interval is not configurable: the timer wakes at defaultFlushInterval.
 func WithBufSize(n int) Option {
 	return func(c *Options) {
 		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
@@ -106,9 +106,8 @@ type Options struct {
 }
 
 // Keepalive returns the period at which an idle connection is pinged to keep it
-// alive. It is the fixed defaultKeepalive — the floor gRPC puts on a client
-// keepalive — rather than a multiple of the call timeout, so every connection is
-// pinged at the same cadence.
+// alive. It is the fixed defaultKeepalive, shared by every connection so they all
+// ping at the same cadence; it is not derived from a caller's timeout.
 func (o Options) Keepalive() time.Duration {
 	return defaultKeepalive
 }
@@ -168,8 +167,8 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	for _, o := range opts {
 		o(&rt.Options)
 	}
-	go func() { //nolint:gosec // G118: the receive loop belongs to the connection, so it outlives the caller's context.
-		if err := rt.Handle(context.Background(), ch); err != nil {
+	go func() {
+		if err := rt.Handle(context.WithoutCancel(ctx), ch); err != nil {
 			slog.Debug("transport: receive loop exited", "endpoint", endpoint, "error", err)
 		}
 	}()
@@ -178,7 +177,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 
 // Handle runs the receive loop: it keeps reading frames and dispatching them
 // until the connection breaks or ctx is canceled, then closes the transport.
-// DialContext starts it with context.Background(), so the ctx that dialed a
+// DialContext starts it with a context that never ends, so the ctx that dialed a
 // connection has no say over how long that connection lives: the loop's lifetime
 // is the connection's. Close is how it ends — it closes the connection, which is
 // what the next read reports — and that is the only way down.

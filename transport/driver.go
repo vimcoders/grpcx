@@ -55,10 +55,12 @@ const (
 	// every call, and the flush timer arms one of its own before it writes.
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the idle period at which the round robin balancer pings
-	// a connection. Ten seconds is the floor gRPC puts on a client keepalive, and
-	// the read timeout is three of these intervals, so an idle connection gets two
-	// pings before the reader gives up on it.
-	defaultKeepalive = 10 * time.Second
+	// a connection. It deliberately equals defaultTimeout rather than the ten
+	// seconds gRPC uses as its client keepalive floor: grpcx carries the ping
+	// itself, so no peer applies that policy. The read timeout is three of these
+	// intervals, so an idle connection gets two pings before the reader gives up on
+	// it.
+	defaultKeepalive = defaultTimeout
 )
 
 // RoundTripper is the client-side transport: it dials a connection, dispatches

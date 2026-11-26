@@ -247,3 +247,31 @@ func TestChannelCloseDropsTheBatch(t *testing.T) {
 		t.Error("the batched frame was flushed by Close")
 	}
 }
+
+// TestChannelTimerFlushFailureOnlyReachesTheLog pins the one write failure no
+// caller hears. A queued batch is flushed by the timer to a peer that is already
+// gone: Send reported success long before, so the error only reaches the log, and
+// the closed connection is all that is left for the next call to trip over.
+//
+// This is the known gap P1-2. When Send learns to report a flush it never saw,
+// this case changes with it.
+func TestChannelTimerFlushFailureOnlyReachesTheLog(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	cli := newChannel(cliConn, WithBufSize(1))
+	defer func() { _ = cli.Close() }()
+
+	// Below the threshold, so the call only queues the frame and reports success
+	// while the peer is still there.
+	if err := cli.Send([]byte("x")); err != nil {
+		t.Fatalf("Send below the buffer: %v", err)
+	}
+	// The peer goes away before the flush timer fires.
+	_ = srvConn.Close()
+	time.Sleep(5 * defaultFlushInterval)
+
+	// The failed flush closed the connection, so this Send fails arming its own
+	// deadline. That is the only way the caller ever learns about it.
+	if err := cli.Send([]byte("y")); err == nil {
+		t.Fatal("Send after a failed timer flush returned nil")
+	}
+}

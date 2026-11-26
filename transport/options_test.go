@@ -49,61 +49,6 @@ func TestOptionsAccessors(t *testing.T) {
 	}
 }
 
-// TestWithKeepaliveMovesTheReadTimeoutWithIt pins the relation the two knobs
-// share: the read timeout is the budget a connection has to produce a frame, so
-// it has to stay above the ping period, and moving keepalive moves it.
-func TestWithKeepaliveMovesTheReadTimeoutWithIt(t *testing.T) {
-	o := DefaultOptions()
-	WithKeepalive(10 * time.Second)(&o)
-	if got, want := o.Keepalive(), 10*time.Second; got != want {
-		t.Errorf("Keepalive() = %v, want %v", got, want)
-	}
-	if got, want := o.readTimeout, 30*time.Second; got != want {
-		t.Errorf("readTimeout = %v, want three ping periods, %v", got, want)
-	}
-}
-
-// TestWithKeepaliveLeavesAnExplicitReadTimeoutAlone pins the precedence: a
-// caller who named a read timeout keeps it, whichever order the two options arrive
-// in, because only an unset read timeout follows keepalive.
-func TestWithKeepaliveLeavesAnExplicitReadTimeoutAlone(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		opts []Option
-	}{
-		{"read timeout first", []Option{WithReadTimeout(5 * time.Second), WithKeepalive(10 * time.Second)}},
-		{"keepalive first", []Option{WithKeepalive(10 * time.Second), WithReadTimeout(5 * time.Second)}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			o := DefaultOptions()
-			for _, opt := range tc.opts {
-				opt(&o)
-			}
-			if got, want := o.readTimeout, 5*time.Second; got != want {
-				t.Errorf("readTimeout = %v, want the explicit %v", got, want)
-			}
-			if got, want := o.Keepalive(), 10*time.Second; got != want {
-				t.Errorf("Keepalive() = %v, want %v", got, want)
-			}
-		})
-	}
-}
-
-// TestWithKeepaliveZeroRestoresBothDefaults pins the fallback: zero puts the
-// ping period back on the default and, since nothing was set explicitly, so does
-// the read timeout it had moved.
-func TestWithKeepaliveZeroRestoresBothDefaults(t *testing.T) {
-	o := DefaultOptions()
-	WithKeepalive(10 * time.Second)(&o)
-	WithKeepalive(0)(&o)
-	if got, want := o.Keepalive(), defaultKeepalive; got != want {
-		t.Errorf("Keepalive() = %v, want the default %v", got, want)
-	}
-	if got, want := o.readTimeout, defaultReadTimeout; got != want {
-		t.Errorf("readTimeout = %v, want the default %v", got, want)
-	}
-}
-
 // TestWithTimeoutFallsBackToTheDefault documents that zero means "unset": there
 // is no way to configure a zero timeout, and a caller deadline is what shortens
 // a call instead.

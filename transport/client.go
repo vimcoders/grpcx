@@ -58,43 +58,11 @@ func WithTimeout(d time.Duration) Option {
 // WithReadTimeout sets how long a channel waits for the next frame before
 // giving up on the connection. Both sides use it: ServerOptions.Handle passes it
 // to every accepted connection's channel, and the client's own channel reads
-// replies under it. It defaults to three keepalive periods; zero puts it back on
-// that default, and any other value is stored as given and marked explicit, so a
-// later WithKeepalive leaves it alone.
+// replies under it. It defaults to 3*keepalive; zero leaves the default in
+// place, and any other value is stored as given.
 func WithReadTimeout(d time.Duration) Option {
 	return func(so *Options) {
-		if d <= 0 {
-			so.readTimeout = defaultReadTimeout
-			so.readTimeoutSet = false
-			return
-		}
-		so.readTimeout = d
-		so.readTimeoutSet = true
-	}
-}
-
-// WithKeepalive sets the period at which an idle connection is pinged. The
-// balancer drives one ticker at this period and pings every backend it holds, so
-// the period is a client-side knob and the server never reads it. Zero falls back
-// to defaultKeepalive.
-//
-// The read timeout is the budget a connection has to produce a frame, so it has
-// to stay above the ping period, or an idle connection is torn down between two
-// pings. Unless WithReadTimeout was applied explicitly, this option moves the
-// read timeout to three of these periods — the relation the defaults already use.
-func WithKeepalive(d time.Duration) Option {
-	return func(o *Options) {
-		if d <= 0 {
-			o.keepalive = defaultKeepalive
-			if !o.readTimeoutSet {
-				o.readTimeout = defaultReadTimeout
-			}
-			return
-		}
-		o.keepalive = d
-		if !o.readTimeoutSet {
-			o.readTimeout = 3 * d
-		}
+		so.readTimeout = cmp.Or(d, defaultReadTimeout)
 	}
 }
 
@@ -129,19 +97,18 @@ func WithBufSize(n int) Option {
 // Options holds the transport configuration shared by the client and the
 // server sides.
 type Options struct {
-	maxStreams     uint32
-	timeout        time.Duration
-	readTimeout    time.Duration
-	writeTimeout   time.Duration
-	keepalive      time.Duration
-	readTimeoutSet bool
-	codec          encoding.Codec
-	bufsize        int
+	maxStreams   uint32
+	timeout      time.Duration
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	keepalive    time.Duration
+	codec        encoding.Codec
+	bufsize      int
 }
 
 // Keepalive returns the period at which an idle connection is pinged to keep it
-// alive. It defaults to defaultKeepalive and moves with WithKeepalive; it is not
-// derived from a caller's timeout, so every connection pings at one cadence.
+// alive. It is the fixed defaultKeepalive, shared by every connection so they all
+// ping at the same cadence; it is not derived from a caller's timeout.
 func (o Options) Keepalive() time.Duration {
 	return o.keepalive
 }

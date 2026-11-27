@@ -1,6 +1,7 @@
 package grpcx
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"sync/atomic"
@@ -28,13 +29,16 @@ func (e *echoServer) Echo(_ context.Context, req *api.EchoRequest) (*api.EchoRes
 }
 
 // recordingRT stands in for a backend transport: it answers RoundTrip with a
-// fixed response and remembers the methods it was invoked with. rtErr, when set,
-// makes RoundTrip fail instead.
+// fixed response and remembers what it was handed — the method of an Invoke, and
+// the payload and option count of a RoundTrip. rtErr, when set, makes RoundTrip
+// fail instead.
 type recordingRT struct {
-	invokes    atomic.Int32
-	roundTrips atomic.Int32
-	lastMethod atomic.Value
-	rtErr      error
+	invokes     atomic.Int32
+	roundTrips  atomic.Int32
+	lastMethod  atomic.Value
+	lastPayload atomic.Pointer[[]byte]
+	lastOpts    atomic.Int32
+	rtErr       error
 }
 
 func (r *recordingRT) Invoke(_ context.Context, method string, _, _ any, _ ...grpc.CallOption) error {
@@ -43,8 +47,12 @@ func (r *recordingRT) Invoke(_ context.Context, method string, _, _ any, _ ...gr
 	return nil
 }
 
-func (r *recordingRT) RoundTrip(context.Context, []byte, ...CallOption) (mem.Buffer, error) {
+func (r *recordingRT) RoundTrip(_ context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
 	r.roundTrips.Add(1)
+	if p != nil {
+		r.lastPayload.Store(&p)
+	}
+	r.lastOpts.Store(int32(len(opts)))
 	if r.rtErr != nil {
 		return nil, r.rtErr
 	}
@@ -182,13 +190,14 @@ func TestDialSucceedsWithAnEmptyPoolWhenTheEndpointRefuses(t *testing.T) {
 // TestRoundTripPicksWithoutNamingAMethod covers the framed path: the pick
 // carries no method name. Backend selection is left to the K8s Service or DNS,
 // so every endpoint in the pool is equally eligible and the method travels only
-// as frame content.
+// as frame content. The payload and the options reach the backend untouched —
+// that transfer, not the pick, is what this client is for.
 func TestRoundTripPicksWithoutNamingAMethod(t *testing.T) {
 	rt := &recordingRT{}
 	p := &stubPicker{rt: rt}
 	c := &client{Picker: p}
 
-	buf, err := c.RoundTrip(context.Background(), []byte("body"), &transport.CallOptions{FullMethodName: "/api.EchoService/Echo"})
+	buf, err := c.RoundTrip(context.Background(), []byte("body"), &CallOptions{FullMethodName: "/api.EchoService/Echo"})
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
@@ -197,6 +206,12 @@ func TestRoundTripPicksWithoutNamingAMethod(t *testing.T) {
 	}
 	if rt.roundTrips.Load() != 1 {
 		t.Errorf("RoundTrip on the backend ran %d times, want 1", rt.roundTrips.Load())
+	}
+	if got := rt.lastPayload.Load(); got == nil || !bytes.Equal(*got, []byte("body")) {
+		t.Errorf("backend payload = %v, want the caller's bytes verbatim", got)
+	}
+	if got := rt.lastOpts.Load(); got != 1 {
+		t.Errorf("backend options = %d, want the single option the caller passed", got)
 	}
 	if got := string(buf.ReadOnlyData()); got != "reply" {
 		t.Errorf("payload = %q, want reply", got)

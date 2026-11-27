@@ -217,10 +217,10 @@ func TestRoundTripHandsBackAPooledBuffer(t *testing.T) {
 	_ = buf.ReadOnlyData()
 }
 
-// TestRoundTripSmallReplyFreesAsANoop covers the other side of the pool's
-// threshold: a reply of 256 bytes or less never entered a pool tier worth
-// keeping, so it comes back as a SliceBuffer whose Free is a no-op and whose
-// bytes stay readable.
+// TestRoundTripSmallReplyFreesAsANoop covers the lower side of the pool
+// threshold: a reply of 256 bytes or less arrives in a buffer whose capacity
+// stays under the 1KB pooling threshold, so it comes back as a SliceBuffer whose
+// Free is a no-op and whose bytes stay readable.
 func TestRoundTripSmallReplyFreesAsANoop(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
 	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
@@ -230,7 +230,7 @@ func TestRoundTripSmallReplyFreesAsANoop(t *testing.T) {
 		t.Fatalf("RoundTrip: %v", err)
 	}
 	if _, ok := buf.(mem.SliceBuffer); !ok {
-		t.Fatalf("buffer type = %T, want a SliceBuffer below the pool's smallest tier", buf)
+		t.Fatalf("buffer type = %T, want a SliceBuffer: its capacity stays under the 1KB pooling threshold", buf)
 	}
 	buf.Free()
 

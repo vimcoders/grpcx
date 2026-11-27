@@ -15,10 +15,15 @@ import (
 )
 
 // CallOption is transport.CallOption, re-exported so a caller that only relays
-// bytes can name the option type without importing the transport package. The
-// implementations stay there: the frame header a request rides on is built in
-// transport.
+// bytes can configure a call without importing the transport package. The
+// interface has a single concrete implementation, CallOptions, re-exported just
+// below.
 type CallOption = transport.CallOption
+
+// CallOptions is transport.CallOptions, the value a caller builds to carry the
+// method name, the metadata pairs and the timeout of a framed call. Re-exported
+// for the same reason: naming the type should not cost an import.
+type CallOptions = transport.CallOptions
 
 // ClientConnInterface is the client-side connection: unary and framed calls
 // plus Close.

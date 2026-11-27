@@ -248,14 +248,12 @@ func TestChannelCloseDropsTheBatch(t *testing.T) {
 	}
 }
 
-// TestChannelTimerFlushFailureOnlyReachesTheLog pins the one write failure no
-// caller hears. A queued batch is flushed by the timer to a peer that is already
-// gone: Send reported success long before, so the error only reaches the log, and
-// the closed connection is all that is left for the next call to trip over.
-//
-// This is the known gap P1-2. When Send learns to report a flush it never saw,
-// this case changes with it.
-func TestChannelTimerFlushFailureOnlyReachesTheLog(t *testing.T) {
+// TestChannelTimerFlushFailureClosesTheConnection covers the one write failure no
+// caller hears: a queued batch is flushed by the timer to a peer that is already
+// gone. Send reported success long before, so the batch is lost, and the close it
+// leaves behind is the only signal — the next Send cannot arm its deadline, and a
+// Recv waiting for a reply fails at once instead of sitting out the read timeout.
+func TestChannelTimerFlushFailureClosesTheConnection(t *testing.T) {
 	cliConn, srvConn := net.Pipe()
 	cli := newChannel(cliConn, WithBufSize(1))
 	defer func() { _ = cli.Close() }()
@@ -270,8 +268,13 @@ func TestChannelTimerFlushFailureOnlyReachesTheLog(t *testing.T) {
 	time.Sleep(5 * defaultFlushInterval)
 
 	// The failed flush closed the connection, so this Send fails arming its own
-	// deadline. That is the only way the caller ever learns about it.
+	// deadline. That is how the next caller learns about the batch it lost.
 	if err := cli.Send([]byte("y")); err == nil {
 		t.Fatal("Send after a failed timer flush returned nil")
+	}
+	// A caller already blocked on a reply hears the close too: Recv fails now
+	// rather than waiting out its read deadline.
+	if _, err := cli.Recv(); err == nil {
+		t.Fatal("Recv on the connection a failed flush closed returned nil")
 	}
 }

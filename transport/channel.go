@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -72,14 +71,17 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 		Options: defaultOptions,
 	}
 	// push is the timer flush. It writes the pending batch under the deadline the
-	// last Send armed; a failure closes the connection and logs the joined error.
-	// The caller was already told that Send succeeded, so the next Send is what
-	// surfaces the broken connection.
+	// last Send armed. A failure closes the connection: Send already returned nil
+	// for the frames in this batch, so they are lost, and the close is the only
+	// signal left for anyone waiting — the read side fails at once instead of
+	// sitting out the read timeout. The error itself is not logged here: the
+	// close is what the caller can act on, and the next Send reports a closed
+	// connection of its own.
 	push := func() {
 		x.Lock()
 		defer x.Unlock()
 		if _, err := x.bw.WriteTo(x.Conn); err != nil {
-			slog.Debug("channel push", "err", errors.Join(err, x.Conn.Close()))
+			_ = x.Conn.Close()
 		}
 	}
 	x.t = time.AfterFunc(defaultFlushInterval, push)
@@ -142,12 +144,15 @@ func (ch *channel) Recv() ([]byte, error) {
 // fresh call.
 //
 // The timer flush is the one failure no caller hears: Send had already returned
-// nil, so the error only reaches the log and the connection it closes. The next
-// Send then fails arming its deadline as described above, which covers a batch
-// queued in the middle of a burst — but a batch queued by the last Send of a burst
-// has no next Send, and only that one is lost without a word. Closing the window
-// needs Send to surface a flush it never saw; bufsize <= 0 is the only setting
-// where every write failure reaches its caller.
+// nil for the frames it queued, so that batch is lost, and the close that follows
+// is the only signal left. The next Send fails arming its own write deadline as
+// described above, which covers a batch queued in the middle of a burst — but a
+// batch queued by the last Send of a burst has no next Send, and what the caller
+// loses is the delivery itself, not the knowledge that the connection died: a
+// call already waiting for a reply wakes on the closed connection instead of
+// sitting out the read timeout. Closing the rest needs Send to surface a flush it
+// never saw; bufsize <= 0 is the only setting where every write failure reaches
+// its caller.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {

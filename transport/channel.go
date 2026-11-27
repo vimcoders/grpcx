@@ -29,6 +29,8 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
+// defaultBuffer is a frame payload whose storage comes from buffers. Free
+// returns it to the pool and must be called exactly once.
 type defaultBuffer []byte
 
 func (e defaultBuffer) Free() {
@@ -39,13 +41,13 @@ func (e defaultBuffer) ReadOnlyData() []byte {
 	return e
 }
 
-// buffers is the process-wide buffer pool every frame payload is allocated
-// from, so a payload is recycled instead of allocated per call. The pool tops
-// out at its largest size class (1MB); a frame above that is allocated fresh.
+// buffers is the process-wide pool every frame payload is taken from, so a
+// payload is recycled instead of allocated per call. The pool tops out at its
+// largest size class; a frame above that is allocated fresh.
 var buffers = mem.DefaultBufferPool()
 
-// getmbuf returns a buffer from the pool, guaranteed to be at least size bytes
-// long. The pool rounds up to its own size classes.
+// getmbuf returns a pooled buffer of at least size bytes. The pool rounds
+// the request up to its next size class, so the result can be longer.
 func getmbuf(size int) defaultBuffer {
 	// we can't use the standard New method on pool because we want to allocate
 	// based on size.
@@ -57,8 +59,8 @@ func putmbuf(p []byte) {
 	buffers.Put(&p)
 }
 
-// channel owns one net.Conn: it frames messages, allocates payloads from the
-// pool, and batches writes when a non-zero bufsize is configured.
+// channel owns one net.Conn: it frames outbound messages, reads inbound frames,
+// and batches writes when bufsize is non-zero.
 type channel struct {
 	Options
 	net.Conn
@@ -68,8 +70,8 @@ type channel struct {
 	sync.Mutex
 }
 
-// newChannel wraps c with a buffered reader and applies the options on top of
-// the defaults.
+// newChannel wraps c with a buffered reader and applies opts on top of the
+// defaults.
 func newChannel(c net.Conn, opts ...Option) *channel {
 	defaultOptions := DefaultOptions()
 	for _, opt := range opts {
@@ -80,13 +82,12 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 		br:      bufio.NewReaderSize(c, min(messageLengthMax, readBufSize)),
 		Options: defaultOptions,
 	}
-	// push is the timer flush. It writes the pending batch under the deadline the
-	// last Send armed. A failure closes the connection: Send already returned nil
-	// for the frames in this batch, so they are lost, and the close is the only
-	// signal left for anyone waiting — the read side fails at once instead of
-	// sitting out the read timeout. The error itself is not logged here: the
-	// close is what the caller can act on, and the next Send reports a closed
-	// connection of its own.
+	// push is the timer flush. It writes the pending batch under the deadline
+	// the last Send armed. A failure closes the connection: Send already
+	// returned nil for the frames in that batch, so they are lost, and the
+	// close is the only signal left — the read side fails at once instead of
+	// sitting out the read timeout. The error is not logged here; the next
+	// Send reports a closed connection of its own.
 	push := func() {
 		x.Lock()
 		defer x.Unlock()
@@ -98,14 +99,15 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 	return x
 }
 
-// Recv reads one frame: a 4-byte header carrying the payload length, followed
-// by the payload itself. The stream id is not in the frame header; it travels
-// inside the protobuf header frame that Recv returns first. Only the header read
-// is armed with readTimeout: the payload read shares that deadline, so a large
-// payload arriving slowly spends the rest of the same budget. The payload comes
-// from the pool and the caller owns it: Free returns it. A zero-length frame still
-// returns a Buffer — an empty one — so every call gets something to free and none
-// has to nil-check.
+// Recv reads one frame: a 4-byte length header, then the payload. The stream id
+// is not in the frame header; it travels inside the protobuf header frame.
+//
+// Only the header read arms the read deadline. The payload read shares it, so
+// a slow large payload spends the rest of the same budget.
+//
+// The payload comes from the pool and the caller owns it: Free returns it.
+// A zero-length frame returns an empty Buffer, not nil, so every call has
+// something to free and no caller has to nil-check.
 func (ch *channel) Recv() (Buffer, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
@@ -135,42 +137,29 @@ func (ch *channel) Recv() (Buffer, error) {
 	return &defaultBuffer{}, nil
 }
 
-// Send writes the given byte slices as one or more frames, each prefixed with
-// a 4-byte payload length. Callers pass the header slice and the payload slice
-// as separate frames; the stream id lives in the header slice, not the frame
-// header.
+// Send writes each slice as one frame: a 4-byte length header, then the bytes.
+// A caller sends a call as two frames — the marshalled header and the payload.
 //
-// With batching on — bufsize > 0 — the slices are queued by reference, not
-// copied, and the batch is flushed by the next Send that fills bufsize or by the
-// timer at defaultFlushInterval. The caller therefore owns the bytes again only
-// after that flush; until then it must leave them as they were. With batching off
-// the write completes inside this call and the slices are free to reuse the
-// moment it returns.
+// With bufsize == 0 (the default) the write completes inside this call, and
+// the slices are free to reuse when it returns.
 //
-// The write deadline is armed once at the top of the call, before any frame is
-// queued, so both paths below write under a deadline that was just set.
+// With bufsize > 0 the frames are appended to the pending batch by reference,
+// not copied. They are written when the batch reaches bufsize, or by the timer
+// after defaultFlushInterval. The caller's slices must not change until that
+// write happens.
 //
-// With bufsize <= 0 — the default — every call goes straight to the connection.
-// Otherwise the frames are appended to a pending write buffer and flushed as soon
-// as it grows past bufsize, or by the timer after defaultFlushInterval, whichever
-// comes first; the timer writes under the deadline this call armed.
+// The write deadline is armed once, at the top of the call, before any frame
+// is queued, so both paths write under a deadline that was just set.
 //
-// A write that fails closes the connection and returns the raw I/O error joined
-// with the Close error and codes.Unavailable. The pending batch is left where it
-// is, which is harmless: the connection is already closed, so the next Send fails
-// arming its own write deadline, and the leftover can never be flushed into a
-// fresh call.
+// A failed write closes the connection and returns the I/O error joined with
+// the Close error and codes.Unavailable. Frames left in the batch are dropped:
+// the connection is closed, so no later flush can write them.
 //
-// The timer flush is the one failure no caller hears: Send had already returned
-// nil for the frames it queued, so that batch is lost, and the close that follows
-// is the only signal left. The next Send fails arming its own write deadline as
-// described above, which covers a batch queued in the middle of a burst — but a
-// batch queued by the last Send of a burst has no next Send, and what the caller
-// loses is the delivery itself, not the knowledge that the connection died: a
-// call already waiting for a reply wakes on the closed connection instead of
-// sitting out the read timeout. Closing the rest needs Send to surface a flush it
-// never saw; bufsize <= 0 is the only setting where every write failure reaches
-// its caller.
+// The timer flush has no caller to report to. Send already returned nil for
+// those frames, so a failure there only closes the connection: the next Send
+// fails arming its deadline, and a call already waiting for a reply wakes on
+// the closed connection. bufsize == 0 is the only setting where every write
+// failure reaches its caller.
 func (ch *channel) Send(p ...[]byte) error {
 	var bw net.Buffers
 	for _, b := range p {
@@ -203,12 +192,11 @@ func (ch *channel) Send(p ...[]byte) error {
 	return nil
 }
 
-// Close closes the connection. It takes the same lock as Send, so a flush cannot
-// be in flight while the connection goes away, and it stops the flush timer:
-// frames still sitting in the batch buffer are dropped rather than written out.
-// The client calls it from sync.Once after it has canceled every live stream, so
-// no call is left waiting on the connection; the server calls it from a defer
-// when the connection ends.
+// Close closes the connection under the same lock as Send, so no flush is
+// in flight while the connection goes away, and stops the flush timer: frames
+// still in the batch are dropped, not written. The client calls it from a
+// sync.Once after canceling every live stream; the server calls it on
+// connection end.
 func (ch *channel) Close() error {
 	ch.Lock()
 	defer ch.Unlock()

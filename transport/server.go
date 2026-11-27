@@ -18,10 +18,12 @@ import (
 type ServerOption func(c *ServerOptions)
 
 // ServerOptions holds the options for a grpcx server: the registered service
-// descriptor and implementation, the unary interceptor, plus the embedded
-// transport Options shared with the client side. It also implements Handler,
-// which is what serves each accepted connection; the built-in handler answers
-// unary methods only, so there is no stream interceptor to configure.
+// descriptor and implementation, the unary interceptor, plus the transport
+// Options shared with the client side.
+//
+// It also implements Handler, which is what serves each accepted connection.
+// The built-in handler answers unary methods only, so there is no stream
+// interceptor to configure.
 type ServerOptions struct {
 	Options
 	desc     *grpc.ServiceDesc
@@ -62,10 +64,10 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	}
 }
 
-// WithServerCodec sets the codec used to unmarshal requests and marshal
-// replies on the server side. It covers the message body only: the call header
-// is always decoded with the built-in codec in package encoding, so a client and
-// a server agree on it whatever each side configured here.
+// WithServerCodec sets the codec for request and reply bodies on the server
+// side. The call header is always decoded with the built-in codec in package
+// encoding, so a client and a server agree on it whatever each side configured
+// here.
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return func(so *ServerOptions) {
 		so.codec = codec
@@ -75,9 +77,7 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 // WithServerReadTimeout sets how long the server waits for the next frame
 // before giving up on the connection. Handle passes it to the frame channel of
 // every accepted connection, where it arms the header read; the payload read
-// shares that deadline. Zero leaves defaultReadTimeout in place, so the deadline
-// cannot be expired merely by passing the zero value; any other value is stored
-// as given.
+// shares that deadline. Zero falls back to defaultReadTimeout.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.readTimeout = cmp.Or(d, defaultReadTimeout)
@@ -86,18 +86,17 @@ func WithServerReadTimeout(d time.Duration) ServerOption {
 
 // WithServerWriteTimeout sets how long the server waits for a write to flush
 // before failing the call. Handle passes it to the frame channel of every
-// accepted connection, and both the synchronous write and the batched flush arm
-// the deadline themselves. Zero leaves defaultWriteTimeout in place, for the same
-// reason as WithServerReadTimeout; any other value is stored as given.
+// accepted connection; both the synchronous write and the batched flush arm
+// the deadline themselves. Zero falls back to defaultWriteTimeout.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)
 	}
 }
 
-// WithServerBufSize caps the send buffer in blocks of defaultBufSize,
-// clamped to defaultMaxBufSize/defaultBufSize. A value of zero disables
-// batching and makes every Send synchronous.
+// WithServerBufSize caps the send buffer in blocks of defaultBufSize, clamped
+// to defaultMaxBufSize/defaultBufSize. Zero disables batching and makes every
+// Send synchronous.
 func WithServerBufSize(n int) ServerOption {
 	return func(so *ServerOptions) {
 		so.bufsize = min(n, defaultMaxBufSize/defaultBufSize)
@@ -105,9 +104,9 @@ func WithServerBufSize(n int) ServerOption {
 }
 
 // WithServerTimeout sets the fallback deadline for a call whose header names no
-// timeout. The option stores the value as given; Handle is what applies it under
-// the 3s ceiling, so a value above defaultTimeout never lets a handler run
-// longer than defaultTimeout, and zero falls through to the ceiling at use time.
+// timeout. The option only stores the value; Handle applies it under the
+// defaultTimeout ceiling, so a value above that never lets a handler run longer,
+// and zero falls through to the ceiling at use time.
 func WithServerTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.timeout = d
@@ -115,11 +114,12 @@ func WithServerTimeout(d time.Duration) ServerOption {
 }
 
 // Handle serves the connection until it breaks: it wraps the connection in a
-// channel and loops dispatching one call at a time through interceptor. One call
-// at a time is by design, not a gap: the wire is a single length-prefixed frame
-// stream per connection, so reads cannot run in parallel without risking a frame
-// boundary, and concurrency comes from connections instead — the K8s Service in
-// front of the pods fans requests out across them.
+// channel and dispatches one call at a time through interceptor.
+//
+// One call at a time is by design: the wire is a single length-prefixed frame
+// stream per connection, so reads cannot run in parallel without risking a
+// frame boundary. Concurrency comes from connections instead — the K8s Service
+// in front of the pods fans requests out across them.
 func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	ch := newChannel(c, WithBufSize(so.bufsize), WithReadTimeout(so.readTimeout), WithWriteTimeout(so.writeTimeout))
 	defer func() { _ = ch.Close() }()
@@ -139,9 +139,12 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 
 // interceptor reads one request frame, resolves the target method from the
 // header, and dispatches it to the matching unary method handler, handing it the
-// same channel for the request payload and the reply. Anything that does not
-// resolve to a registered unary method — an unknown name, or a stream method,
-// which grpcx does not serve — is answered with codes.Unimplemented.
+// same channel for the request payload and the reply.
+//
+// Anything that does not resolve to a registered unary method — an unknown
+// name, or a stream method, which grpcx does not serve — is answered with
+// codes.Unimplemented. The lookup walks the method table and compares with
+// path.Join each entry, so it is linear per request.
 func (so *ServerOptions) interceptor(ctx context.Context, ch Channel) error {
 	options, err := decodeCallOptions(ch)
 	if err != nil {

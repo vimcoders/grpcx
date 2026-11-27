@@ -33,9 +33,9 @@ import (
 )
 
 // reply is one response frame as it comes off the wire: the header options and
-// the payload travel together, because the caller needs the status and the bytes
-// at the same point in time. Buffer is embedded so Free and ReadOnlyData reach
-// whoever takes the frame out of the receive slot.
+// the payload together, because the caller needs the status and the bytes at
+// the same point. Buffer is embedded so Free and ReadOnlyData reach whoever
+// takes the frame out of the receive slot.
 type reply struct {
 	CallOption
 	Buffer
@@ -44,10 +44,12 @@ type reply struct {
 // clientStream is the client-side state of one call: the stream id, the
 // connection that carries it, the receive slot and the cleanup hooks. It embeds
 // grpc.ClientStream so the generated stubs and the interceptor chain see the
-// surface they are typed against. SendMsg, RecvMsg, Context and CloseSend are
-// implemented here, plus grpcx's own synchronous Send used by Ping. Header and
-// Trailer are not: they fall through to the embedded interface, which is never
-// assigned, and would panic if called.
+// surface they are typed against.
+//
+// SendMsg, RecvMsg, Context and CloseSend are implemented here, plus grpcx's
+// own synchronous Send used by Ping. Header and Trailer are not: they fall
+// through to the embedded interface, which is never assigned, and would panic
+// if called.
 type clientStream struct {
 	grpc.ClientStream
 	Sender
@@ -60,10 +62,10 @@ type clientStream struct {
 	sync.Once
 }
 
-// CloseSend deregisters the stream exactly once, then closes it. The end-of-
-// stream frame is intentionally not sent: grpcx only carries unary calls, so
-// there is no stream to terminate. The once covers deregistration, so a second
-// CloseSend skips the delete while Close itself stays repeatable.
+// CloseSend deregisters the stream exactly once, then closes it. No end-of-
+// stream frame is sent: grpcx carries unary calls only, so there is no stream
+// to terminate. The once covers deregistration, so a second CloseSend skips the
+// delete while Close stays repeatable.
 func (s *clientStream) CloseSend() error {
 	// CloseSend always reports success, so the close error is only cleanup.
 	defer func() { _ = s.Close() }()
@@ -77,11 +79,11 @@ func (s *clientStream) CloseSend() error {
 	return nil
 }
 
-// Close cancels the stream context, waking any pending recv through its context
-// branch. The cancel is idempotent, so a repeated Close is harmless. The receive
-// slot is left open: a reply that arrives after Close lands in the slot instead
-// of panicking a sender, so Handle stays safe no matter when the call is torn
-// down.
+// Close cancels the stream context, waking any pending recv through its
+// context branch. The cancel is idempotent, so a repeated Close is harmless.
+// The receive slot is left open: a reply that arrives after Close lands in the
+// slot instead of panicking a sender, so Handle stays safe whenever the call
+// is torn down.
 func (s *clientStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
@@ -96,8 +98,8 @@ func (s *clientStream) SendMsg(m any) error {
 	return send.send(s.id, m)
 }
 
-// Recv waits for the reply frame, checks its code and unmarshals its payload
-// into m.
+// RecvMsg waits for the reply frame, checks its code and unmarshals its payload
+// into m. The payload buffer is freed here, whatever the outcome.
 func (s *clientStream) RecvMsg(m any) error {
 	reply, err := s.recv()
 	if err != nil {
@@ -119,8 +121,8 @@ func (s *clientStream) RecvMsg(m any) error {
 }
 
 // Send marshals m and writes it as one request frame on the stream. The stream
-// id is passed separately and applied last, so a caller cannot route the frame
-// onto another stream by passing an id of its own.
+// id is applied last, so a caller cannot route the frame onto another stream by
+// passing an id of its own.
 func (s *clientStream) Send(m any, opts ...CallOption) error {
 	send := sender{Codec: s.codec, Sender: s.Sender}
 	return send.send(s.id, m, opts...)
@@ -132,10 +134,11 @@ func (s *clientStream) Context() context.Context {
 }
 
 // Handle reads the response payload frame off the connection and hands it to
-// the waiting RecvMsg through the receive slot. A call that has already ended —
-// the stream context is done — drops the payload back to the pool instead of
-// parking it in a slot nobody will read, and an occupied slot drops it the same
-// way.
+// the waiting RecvMsg through the receive slot.
+//
+// A call that has already ended — the stream context is done — drops the
+// payload back to the pool, and so does an occupied slot: neither would ever
+// be read.
 func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	var opt api.CallOptions
 	for _, o := range opts {
@@ -162,13 +165,16 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 	}
 }
 
-// recv blocks until the response slot is filled or the call ends. The code
-// depends on why the context ended, not on the outcome: a context the caller
-// canceled reports Canceled, and a deadline that expired reports Unavailable.
-// Two deadlines share that branch — the caller's own and the transport's read
-// timeout — and they are not told apart here, because the stream context cannot
-// say which one fired. Close cancels every live stream while it walks the table,
-// which lands here as Canceled too. The closed-slot branch is a guard only: nothing closes the slot today, so a recv
+// recv waits for the reply slot or for the call to end.
+//
+// The code depends on why the context ended, not on the outcome: a canceled
+// context reports Canceled, an expired deadline reports Unavailable. Two
+// deadlines land on the deadline branch and are not told apart here — the
+// caller's own and the transport's read timeout — because the stream context
+// cannot say which one fired. Close cancels every live stream while it walks
+// the table, which lands here as Canceled too.
+//
+// The slot is never closed today, so the !ok branch is a guard only: a recv
 // parked here is woken by the context, never by the slot.
 func (s *clientStream) recv() (*reply, error) {
 	select {
@@ -191,16 +197,15 @@ type CallOption interface {
 }
 
 // CallOptions is the concrete CallOption: each non-zero field overrides its
-// counterpart in the header. Metadatas is the one field that does not override
-// anything — the pairs accumulate across the options applied.
+// counterpart in the header. Metadatas is the exception — the pairs accumulate
+// across the options applied.
 type CallOptions api.CallOptions
 
 // apply merges c into opts field by field: a non-zero field in c replaces what
-// an earlier option put there, and a zero one leaves it alone. Timeout is no
-// exception — apply never fills in a default, so "this header named no timeout"
-// survives to the call site: Invoke and RoundTrip fold the caller's context
-// deadline into the header, and defaultMethodHandler.Handle falls back to
-// WithServerTimeout.
+// an earlier option put there, and a zero one leaves it alone. apply never
+// fills in a default, so "this header named no timeout" survives to the call
+// site: Invoke and RoundTrip fold the context deadline in, and
+// defaultMethodHandler.Handle falls back to WithServerTimeout.
 func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
 	opts.FullMethodName = cmp.Or(c.FullMethodName, opts.FullMethodName)
@@ -212,8 +217,9 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 }
 
 // decodeCallOptions reads the request header frame off recv and returns the
-// header the wire actually carried. Callers use it for dispatch and hand it to
-// WithCallOptions when the handler should see the same metadata and deadline.
+// header the wire actually carried. Callers use it for dispatch and hand it
+// to WithCallOptions when the handler should see the same metadata and
+// deadline.
 func decodeCallOptions(recv Recver) (*api.CallOptions, error) {
 	p, err := recv.Recv()
 	if err != nil {
@@ -243,13 +249,15 @@ func WithCallOptions(readonly *api.CallOptions) CallOption {
 }
 
 // defaultMethodHandler is the server-side view of one unary request: the sender
-// it replies through, the service implementation and the method handler resolved
-// from the service descriptor, plus the interceptor to run. It embeds Options so
-// the server-side settings, the timeout among them, apply. A unary request is a
-// single payload already off the wire, so the handler is called through
-// grpc.MethodHandler with a decode function instead of a grpc.ServerStream.
-// The stream id is not a field: it arrives with the call options the dispatcher
-// hands in, so the reply lands back on the stream the request came from.
+// it replies through, the service implementation and the method handler
+// resolved from the service descriptor, plus the interceptor to run. It embeds
+// Options, so the server-side settings apply, the timeout among them.
+//
+// A unary request is a single payload already off the wire, so the handler is
+// called through grpc.MethodHandler with a decode function instead of a
+// grpc.ServerStream. The stream id is not a field: it arrives with the call
+// options the dispatcher hands in, so the reply lands on the stream the request
+// came from.
 type defaultMethodHandler struct {
 	Sender
 	Options
@@ -260,12 +268,13 @@ type defaultMethodHandler struct {
 
 // Handle consumes the request payload, applies the call metadata and the
 // deadline, runs the unary interceptor chain over the generated method handler
-// and writes the reply back as one response frame. The deadline is the first
-// non-zero of the header timeout, the server's WithServerTimeout value and
-// defaultTimeout, capped at defaultTimeout: a header that names a timeout wins
-// over the option, and the option can only tighten the 3s ceiling. A handler
-// error is reported in the response header's status code instead of tearing the
-// connection down.
+// and writes the reply back as one response frame.
+//
+// The deadline is the first non-zero of the header timeout, WithServerTimeout
+// and defaultTimeout, capped at defaultTimeout: a header that names a timeout
+// wins over the option, and the option can only tighten the ceiling. A handler
+// error is reported in the response header's status code instead of tearing
+// the connection down.
 func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	// Nothing below reads Code or Desc back out of options, and the reply status
 	// is built separately in info, so both stay zero: zero is codes.OK, which is

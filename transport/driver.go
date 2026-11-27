@@ -12,27 +12,27 @@ import (
 
 const (
 	// messageHeaderLength is the fixed frame header: a 4-byte payload length.
-	// The stream id travels inside the protobuf header frame, not the frame header.
+	// The stream id travels inside the protobuf header frame, not the frame
+	// header.
 	messageHeaderLength = 4
 	// messageLengthMax caps a single frame payload, aligned with the standard
 	// gRPC default.
 	messageLengthMax = 4 * 1024 * 1024
 	// readBufSize is the per-connection read-ahead; the channel sizes its
-	// bufio.Reader to min(messageLengthMax, readBufSize). It is kept at a
-	// quarter of messageLengthMax, because the reader only has to cover the
-	// 4-byte frame header and the payloads that arrive in bursts: a payload at
-	// least this large is read directly once the buffer drains, while a
-	// smaller one comes out of the buffer. messageLengthMax itself cost 4MB
-	// of heap per connection.
+	// bufio.Reader to min(messageLengthMax, readBufSize). A quarter of
+	// messageLengthMax is enough: the reader only has to cover the 4-byte frame
+	// header and payloads that arrive in bursts. A payload at least this large
+	// is read directly once the buffer drains. messageLengthMax itself cost
+	// 4MB of heap per connection.
 	readBufSize = 1024 * 1024
 	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
-	// settles on, so it is the shortest useful flush delay, and it is also the
-	// only one a batched connection runs at: Options carries no interval field.
+	// settles on, so it is the shortest useful flush delay, and the only one a
+	// batched connection runs at: Options carries no interval field.
 	defaultFlushInterval = time.Millisecond
 	// defaultBufSize is the size of one batching block. WithBufSize multiplies
 	// its argument by it, so Options.bufsize — the field channel.Send compares
 	// the pending frames against — is counted in bytes. The server option keeps
-	// its argument as a block count instead, and Handle does the conversion.
+	// its argument as a block count and Handle converts it.
 	defaultBufSize = 1024
 	// defaultMaxBufSize bounds the send buffer at 16 blocks, matching the
 	// default TCP send buffer on Linux.
@@ -42,25 +42,23 @@ const (
 	defaultMaxStreams = math.MaxUint16
 	// defaultTimeout is the default per-request timeout stored in Options, the
 	// value defaultWriteTimeout derives from, and the starting point of a ping's
-	// budget. Client streams no longer run under it: they are cut at
+	// budget. Client streams do not run under it: they are cut at
 	// defaultReadTimeout, and the server clamps a handler to WithServerTimeout.
-	// Ping caps it at defaultKeepalive, so raising it past that does not lengthen
-	// a health check.
+	// Ping caps it at defaultKeepalive.
 	defaultTimeout = time.Second
 	// defaultReadTimeout bounds how long the reader waits for the next frame
 	// before treating the connection as dead. It must stay well above the
-	// keepalive period, or idle connections would be torn down between pings.
+	// keepalive period, or idle connections are torn down between pings.
 	defaultReadTimeout = 3 * defaultKeepalive
 	// defaultWriteTimeout bounds a single write: Send arms the write deadline on
-	// every call, and the flush timer arms one of its own before it writes.
+	// every call, and the flush timer arms one before it writes.
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the idle period at which the round robin balancer pings
-	// a connection. It is three defaultTimeouts rather than the ten seconds gRPC
-	// uses as its client keepalive floor: grpcx carries the ping itself, so no
-	// peer applies that policy, and a ping has to fail before the next one is due
-	// instead of running for the whole interval. The read timeout is three of these
-	// intervals, so an idle connection gets two pings before the reader gives up on
-	// it.
+	// a connection. It is three defaultTimeouts rather than gRPC's ten-second
+	// client keepalive floor: grpcx carries the ping itself, so no peer applies
+	// that policy, and a ping has to fail before the next one is due. The read
+	// timeout is three of these intervals, so an idle connection gets two pings
+	// before the reader gives up on it.
 	defaultKeepalive = 3 * defaultTimeout
 )
 
@@ -68,14 +66,14 @@ const (
 // unary calls over it and keeps it alive. A RoundTripper is safe for concurrent
 // use by multiple goroutines.
 type RoundTripper interface {
-	// RoundTrip sends payload as one frame on a fresh stream and returns the
-	// reply payload. It works on the wire representation: payload is the message
-	// body the caller already has, not an object to encode, and the reply comes
-	// back as the bytes the peer sent. The caller owns the returned Buffer and
-	// frees it. The payload it passes in is written before RoundTrip returns only
-	// while batching is off, which is the default; once WithBufSize is set, the
-	// frame can sit in the connection's pending batch for up to one flush
-	// interval, and the caller must leave the bytes untouched until then.
+	// RoundTrip sends p as one payload frame on a fresh stream and returns the
+	// reply payload as a Buffer the caller owns and frees. The bytes go on the
+	// wire as given: p is a message body the caller already has, not an object
+	// to encode.
+	//
+	// With batching off (the default) p is written before RoundTrip returns.
+	// Once WithBufSize is set, the frame can sit in the pending batch for up to
+	// one flush interval, and the caller must not touch the bytes until then.
 	RoundTrip(context.Context, []byte, ...CallOption) (Buffer, error)
 	// Ping sends an empty request to keep the connection from hitting the read
 	// deadline.
@@ -121,8 +119,8 @@ type Handler interface {
 }
 
 // Channel is one connection seen as both ends of the framing: a handler reads
-// the request frame with Recv and writes the reply frame with Send, on the same
-// connection, so the two are passed together rather than as separate halves.
+// the request frame with Recv and writes the reply frame with Send on the same
+// connection, so the two are passed together.
 type Channel interface {
 	Sender
 	Recver
@@ -134,11 +132,12 @@ type Channel interface {
 type ServiceRegistrar = grpc.ServiceRegistrar
 
 // Buffer is one frame payload and the right to free it: ReadOnlyData is the
-// bytes as they arrived, Free returns the storage to the pool. Free is not
-// idempotent — the value carries no reference count — so a Buffer has exactly one
-// owner at a time and is freed exactly once. RoundTrip hands the reply over to
-// the caller under that rule; the server side frees a buffer it took off a
-// connection as soon as the handler is done with it.
+// bytes as they arrived, Free returns the storage to the pool.
+//
+// Free is not idempotent — the value carries no reference count — so a Buffer
+// has exactly one owner at a time and is freed exactly once. RoundTrip hands
+// the reply over to the caller under that rule; the server side frees a
+// buffer as soon as the handler is done with it.
 type Buffer interface {
 	Free()
 	ReadOnlyData() []byte

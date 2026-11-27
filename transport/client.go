@@ -45,11 +45,11 @@ func WithMaxStreams(n uint32) Option {
 	}
 }
 
-// WithTimeout sets Options.timeout, which Options.Timeout reports. The request
-// path does not read it: a client stream is cut at WithReadTimeout and the
-// header's timeout comes from the caller's context deadline, while the server
-// clamps a handler to WithServerTimeout. It does reach Ping, which caps it at
-// Keepalive(). Zero falls back to defaultTimeout.
+// WithTimeout sets Options.timeout, the value Options.Timeout reports. Only
+// Ping reads it, capping its budget at Keepalive(); a client stream ends at
+// WithReadTimeout or the caller's deadline, and the server clamps a handler at
+// WithServerTimeout. The header timeout comes from the caller's context
+// deadline. Zero falls back to defaultTimeout.
 func WithTimeout(d time.Duration) Option {
 	return func(t *Options) {
 		t.timeout = cmp.Or(d, defaultTimeout)
@@ -57,43 +57,41 @@ func WithTimeout(d time.Duration) Option {
 }
 
 // WithReadTimeout sets how long a channel waits for the next frame before
-// giving up on the connection. Both sides use it: ServerOptions.Handle passes it
-// to every accepted connection's channel, and the client's own channel reads
-// replies under it. It defaults to 3*keepalive; zero leaves the default in
-// place, and any other value is stored as given.
+// giving up on the connection. Both sides use it: ServerOptions.Handle passes
+// it to every accepted connection's channel, and the client's own channel
+// reads replies under it. Zero falls back to defaultReadTimeout.
 func WithReadTimeout(d time.Duration) Option {
 	return func(so *Options) {
 		so.readTimeout = cmp.Or(d, defaultReadTimeout)
 	}
 }
 
-// WithWriteTimeout sets how long a write may take to flush before failing the
-// call. Both sides use it: ServerOptions.Handle passes it to every accepted
-// connection's channel, and the client's own channel writes requests under it.
-// It defaults to defaultWriteTimeout; zero leaves the default in place, and any
-// other value is stored as given.
+// WithWriteTimeout sets how long a write may take before failing the call.
+// Both sides use it: ServerOptions.Handle passes it to every accepted
+// connection's channel, and the client's own channel writes requests under
+// it. Zero falls back to defaultWriteTimeout.
 func WithWriteTimeout(d time.Duration) Option {
 	return func(so *Options) {
 		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)
 	}
 }
 
-// WithCodec sets the codec used to marshal requests and unmarshal responses.
-// It covers the message body only: the call header is always encoded with the
-// built-in codec in package encoding (protobuf for a proto.Message, JSON
-// otherwise), so both ends agree on the header whatever this option holds.
+// WithCodec sets the codec for request and reply bodies. The call header is
+// always encoded with the built-in codec in package encoding, so both peers
+// agree on the header whatever this option holds.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
 		t.codec = c
 	}
 }
 
-// WithBufSize sets the send buffer in blocks of defaultBufSize, clamped to
-// defaultMaxBufSize. A value of zero disables batching and makes every Send
-// synchronous; zero is also the package default, so batching is opt-in. With
-// batching on, Send queues the caller's slices by reference until the flush, so a
-// payload handed to RoundTrip must not be reused between Send returning nil and
-// that flush; with batching off the bytes are already written when Send returns. The flush interval is not configurable: the timer wakes at
+// WithBufSize sets the send buffer in blocks of defaultBufSize, capped at
+// defaultMaxBufSize. Zero disables batching, which is the package default.
+//
+// With batching on, Send queues the caller's slices by reference until the
+// flush, so a payload given to RoundTrip must not change between Send returning
+// nil and that flush. With batching off, the bytes are already written when
+// Send returns. The flush interval is not configurable; the timer runs at
 // defaultFlushInterval.
 func WithBufSize(n int) Option {
 	return func(c *Options) {
@@ -113,17 +111,15 @@ type Options struct {
 	bufsize      int
 }
 
-// Keepalive returns the period at which an idle connection is pinged to keep it
-// alive. It is the fixed defaultKeepalive, shared by every connection so they all
-// ping at the same cadence; it is not derived from a caller's timeout.
+// Keepalive returns the period at which an idle connection is pinged. It is
+// the fixed defaultKeepalive for every connection, not derived from a caller's
+// timeout.
 func (o Options) Keepalive() time.Duration {
 	return o.keepalive
 }
 
-// Timeout returns the per-request timeout stored on the options, as set by
-// WithTimeout. No request path reads it: client streams run under
-// WithReadTimeout, and the server clamps a handler to WithServerTimeout. Ping is
-// the exception, and it caps the value at Keepalive().
+// Timeout returns the per-request timeout set by WithTimeout. Only Ping reads
+// it, and it caps the value at Keepalive().
 func (o Options) Timeout() time.Duration {
 	return o.timeout
 }
@@ -158,11 +154,10 @@ func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 	return DialContext(context.Background(), endpoint, opts...)
 }
 
-// DialContext connects to endpoint over TCP, applies the options to both the
-// transport configuration and the connection, then starts the receive loop. The
-// dial itself runs under defaultTimeout, not under WithTimeout: that option only
-// reaches Ping, so a slow dial is bounded by the package default whatever the
-// caller configured.
+// DialContext connects to endpoint over TCP, applies opts to both the
+// transport configuration and the connection, then starts the receive loop.
+// The dial itself runs under defaultTimeout, not WithTimeout: that option
+// only reaches Ping, so a slow dial is bounded by the package default.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	d := net.Dialer{
 		Timeout: defaultTimeout,
@@ -188,15 +183,13 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 	return rt, nil
 }
 
-// Handle runs the receive loop: it keeps reading frames and dispatching them
-// until the connection breaks or ctx is canceled, then closes the transport.
-// DialContext starts it with a context that never ends, so the ctx that dialed a
-// connection has no say over how long that connection lives: the loop's lifetime
-// is the connection's. Close is how it ends — it closes the connection, which is
-// what the next read reports — and that is the only way down.
+// Handle runs the receive loop: it reads and dispatches frames until the
+// connection breaks or ctx is canceled, then closes the transport. DialContext
+// starts it with a context that never ends, so the dialing context has no say
+// over the connection's lifetime: Close is the only way down.
 func (c *client) Handle(ctx context.Context, recv Recver) error {
-	// The receive loop is the owner of the connection; a close error here has
-	// nobody left to report to, and the loop's own error is what it returns.
+	// The receive loop owns the connection; a close error here has nobody left
+	// to report to, and the loop's own error is what it returns.
 	defer func() { _ = c.Close() }()
 	for {
 		select {
@@ -212,7 +205,7 @@ func (c *client) Handle(ctx context.Context, recv Recver) error {
 
 // interceptor reads one response frame, resolves the stream by its id and hands
 // the header and payload to it. A frame whose stream is already gone is
-// discarded so the next frame stays aligned to a boundary.
+// discarded so the next frame stays on a boundary.
 func (c *client) interceptor(ctx context.Context, recv Recver) error {
 	options, err := decodeCallOptions(recv)
 	if err != nil {
@@ -233,24 +226,24 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 }
 
 // createStream allocates the next stream id, registers it in the stream table
-// and derives a cancellable context for it. It fails with
-// codes.ResourceExhausted once maxStreams is reached, and with codes.Unavailable
-// after Close has zeroed the limit: zero is the closed marker, so a dead
-// transport never hands out a stream. An id is only claimed when the slot is
-// free, so a wrap past MaxUint32 that lands on a live stream is refused rather
-// than overwriting it. Call options are ignored here: Invoke and RoundTrip build
-// and marshal the request header themselves, so opts never reach the wire through
-// this path. The stream context is cut at readTimeout, or at the caller's own
-// deadline when that is nearer: the two are combined with a min, so a caller
-// deadline further out never widens the stream past readTimeout. It is still not
-// the per-request timeout in Options, so a call outlives what WithTimeout
-// configured and ends when the reader or the caller gives up.
+// and derives a cancellable context for it.
+//
+// It fails with codes.ResourceExhausted once maxStreams is reached, and with
+// codes.Unavailable after Close has zeroed the limit: zero is the closed
+// marker. An id is only claimed when the slot is free, so a wrap past MaxUint32
+// that lands on a live stream is refused instead of overwriting it.
+//
+// Call options are ignored: Invoke and RoundTrip build and marshal the header
+// themselves. The stream context is cut at readTimeout, or at the caller's
+// deadline when that is nearer, so a caller deadline further out never widens
+// the stream. Options.timeout does not apply here.
 func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStream, error) {
 	c.Lock()
 	defer c.Unlock()
 	// maxStreams is never zero while the transport is open — WithMaxStreams
-	// replaces zero with the default — so a zero limit can only come from Close,
-	// and a call on a closed transport fails instead of allocating a stream.
+	// replaces zero with the default — so a zero limit can only come from
+	// Close, and a call on a closed transport fails instead of allocating a
+	// stream.
 	if c.maxStreams == 0 {
 		return nil, status.Unavailable.Err()
 	}
@@ -280,9 +273,9 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 	return &s, nil
 }
 
-// NewStream is not implemented: grpcx carries unary calls only, so every
-// stream request is rejected with codes.Unimplemented. The method exists solely
-// to satisfy grpc.ClientConnInterface; desc, method and opts are all ignored.
+// NewStream is not implemented: grpcx carries unary calls only, so every stream
+// request is rejected with codes.Unimplemented. The method exists to satisfy
+// grpc.ClientConnInterface; desc, method and opts are ignored.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, status.Unimplemented.Err()
 }
@@ -303,11 +296,10 @@ func (c *client) getStream(sid uint32) *clientStream {
 }
 
 // Invoke performs one unary call: it encodes req, hands the bytes to RoundTrip,
-// then decodes the reply into reply. Encoding and decoding are the only work done
-// here — the request header, the stream id, the caller deadline and the status
-// check all belong to RoundTrip. The grpc.CallOption values are accepted for
-// interface compatibility and ignored: metadata and the deadline travel through
-// ctx.
+// then decodes the reply into reply. The header, the stream id, the caller
+// deadline and the status check all belong to RoundTrip. grpc.CallOption values
+// are accepted for interface compatibility and ignored; metadata and the
+// deadline travel through ctx.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
 	b, err := c.codec.Marshal(req)
 	if err != nil {
@@ -326,15 +318,15 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return nil
 }
 
-// RoundTrip sends a bare payload frame on a fresh stream and returns the reply
-// payload as a Buffer the caller owns and frees. It never encodes the payload:
-// what the caller has is what goes on the wire, which is what lets a relay
-// forward bytes it cannot interpret. The header is built from opts here, so
-// this transport's stream id always wins; the caller's deadline is folded into
-// the header timeout when the context has one, and metadata in the context is
-// appended to the header pairs after whatever opts already carry. A reply whose
-// status code is not OK comes back as a status error carrying that code and its
-// description instead of a Buffer.
+// RoundTrip sends p as one payload frame on a fresh stream and returns the
+// reply payload as a Buffer the caller owns and frees. p goes on the wire as
+// given, which lets a relay forward bytes it cannot interpret.
+//
+// The header is built here: opts first, then the caller's context deadline
+// folded into Timeout, then context metadata appended to Metadatas, and the
+// stream id last, so this transport's id always wins. A reply whose code is
+// not OK is freed here and comes back as a status error with that code and
+// description.
 func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (Buffer, error) {
 	s, err := c.createStream(ctx)
 	if err != nil {
@@ -383,18 +375,17 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (B
 	}
 	// The reply buffer is the caller's from here on. Free hands it to the pool
 	// unless it is too small to keep: the pool drops a buffer below its 1KB
-	// pooling threshold, so a small reply costs nothing extra on top of the
-	// allocation that already happened.
+	// pooling threshold.
 	return reply.Buffer, nil
 }
 
 // Ping keeps the connection active by opening a stream, sending an empty
-// request and waiting for the reply. It is the health check the balancer relies
-// on, so an idle connection never reaches the read deadline and gets torn down.
-// Its budget is min(Timeout(), Keepalive()) rather than the stream's read timeout:
-// a health check has to fail before the next one is due, or two pings pile up on
-// one connection. Under the defaults that is defaultTimeout, a third of the
-// keepalive period; the cap only bites once WithTimeout climbs past Keepalive().
+// request and waiting for the reply. The balancer relies on it, so an idle
+// connection never reaches the read deadline.
+//
+// Its budget is min(Timeout(), Keepalive()), not the stream's read timeout: a
+// health check has to fail before the next one is due. Under the defaults that
+// is defaultTimeout, a third of the keepalive period.
 func (c *client) Ping(ctx context.Context) error {
 	childCtx, cancel := context.WithTimeout(ctx, min(c.Timeout(), c.Keepalive()))
 	defer cancel()
@@ -417,18 +408,17 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close tears the transport down once: from a defer in the same sync.Once it
-// cancels every live stream, empties the stream table, then closes the
-// connection, so a second call is a no-op and nothing is closed twice. A call in
-// flight is woken by the stream's context cancel and reports codes.Canceled —
-// codes.Unavailable when its own deadline fired first — since no reply arrived and
-// nothing here can tell whether the peer ran the handler. The limit is then
-// zeroed as the
-// closed marker: WithMaxStreams never stores zero, so zero can only mean
-// "closed", and createStream refuses every later call with
-// codes.Unavailable instead of filling a table nothing will send from. Closing a
-// connection that is already being thrown away has nothing left to report to, so
-// its error is dropped.
+// Close tears the transport down once: it cancels every live stream, empties
+// the stream table, then closes the connection, so a second call is a no-op.
+//
+// A call in flight is woken by the stream's cancel and reports codes.Canceled —
+// codes.Unavailable when its own deadline fired first. It cannot tell whether
+// the peer ran the handler, so it does not report a result.
+//
+// The limit is then zeroed as the closed marker: WithMaxStreams never stores
+// zero, so zero can only mean closed, and createStream refuses every later
+// call with codes.Unavailable. The close error is dropped: the connection is
+// already being thrown away.
 func (c *client) Close() error {
 	c.Once.Do(func() {
 		defer c.SendCloser.Close()

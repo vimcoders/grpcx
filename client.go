@@ -14,20 +14,15 @@ import (
 )
 
 // CallOption is transport.CallOption, re-exported so a caller that only relays
-// bytes can configure a call without importing the transport package. The
-// interface has a single concrete implementation, CallOptions, re-exported just
-// below.
+// bytes can configure a call without importing the transport package.
 type CallOption = transport.CallOption
 
 // CallOptions is transport.CallOptions, the value a caller builds to carry the
-// method name, the metadata pairs and the timeout of a framed call. Re-exported
-// for the same reason: naming the type should not cost an import.
+// method name, the metadata pairs and the timeout of a framed call.
 type CallOptions = transport.CallOptions
 
 // Buffer is transport.Buffer, the frame payload RoundTrip hands back and the
-// right to free it. Re-exported for the same reason as the two types above: a
-// caller that relays bytes should not have to name the transport package to give
-// the buffer back.
+// right to free it.
 type Buffer = transport.Buffer
 
 // ClientConnInterface is the client-side connection: unary and framed calls
@@ -41,9 +36,9 @@ type ClientConnInterface interface {
 // Option configures a client before it dials.
 type Option func(c *client)
 
-// WithCodec sets the codec used to marshal requests and unmarshal responses.
-// The call header is not covered: it always travels in the built-in codec of
-// package encoding, so the two ends agree on it whatever this option holds.
+// WithCodec sets the codec for request and reply bodies. The call header is
+// not covered: it always travels in the built-in codec of package encoding, so
+// the two ends agree on it whatever this option holds.
 func WithCodec(codec encoding.Codec) Option {
 	return func(c *client) {
 		c.Codec = codec
@@ -58,11 +53,10 @@ func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	}
 }
 
-// WithTimeout stores the per-call timeout on the transport options. No request
-// path reads it: a call is bounded by the caller's context deadline, and every
-// stream additionally by the transport's read timeout. Ping is the one reader,
-// capping it at the keepalive period so a health check fails before the next one
-// is due. Zero leaves the default in place.
+// WithTimeout stores the per-call timeout on the transport options. Only Ping
+// reads it, capping it at the keepalive period; a call is bounded by the
+// caller's context deadline and, additionally, by the transport's read
+// timeout. Zero leaves the default in place.
 func WithTimeout(d time.Duration) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, transport.WithTimeout(d))
@@ -78,7 +72,8 @@ func WithMaxStreams(n uint32) Option {
 }
 
 // WithBufSize sets the send buffer in blocks of the transport block size. Zero
-// disables batching and makes every send synchronous, which is also the default.
+// disables batching, which is also the default.
+//
 // With batching on, the bytes handed to RoundTrip are queued by reference until
 // the connection flushes them, so the caller must not reuse them before then.
 func WithBufSize(n int) Option {
@@ -89,8 +84,8 @@ func WithBufSize(n int) Option {
 
 // client is the ClientConnInterface implementation: it holds the codec, the
 // unary interceptor, the transport options and the balancer picker. The
-// picker's Close is what stops the keepalive loop, so the client keeps no cancel
-// function of its own.
+// picker's Close is what stops the keepalive loop, so the client keeps no
+// cancel function of its own.
 type client struct {
 	balancer.Picker
 	encoding.Codec
@@ -99,8 +94,8 @@ type client struct {
 }
 
 // DialContext builds a client for endpoint: it installs the default unary
-// interceptor, applies the options, dials through the balancer under the caller's
-// ctx and keeps the resulting picker.
+// interceptor, applies the options, dials through the balancer under the
+// caller's ctx and keeps the resulting picker.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
 	c := client{
 		Codec: encoding.GetCodec(encoding.Name),
@@ -137,11 +132,12 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return nil
 }
 
-// RoundTrip picks a backend and sends the framed payload through it. The pick
-// carries no method name: backends come from the K8s Service or DNS, so every
-// endpoint is equally eligible and the method only travels as frame content. The
-// reply comes back as the bytes the backend wrote: how to interpret them is the
-// caller's business, not this client's.
+// RoundTrip picks a backend and sends the framed payload through it.
+//
+// The pick carries no method name: backends come from the K8s Service or DNS,
+// so every endpoint is equally eligible, and the method only travels as frame
+// content. The reply comes back as the bytes the backend wrote; how to
+// interpret them is the caller's business.
 func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (Buffer, error) {
 	rt, err := c.Pick(ctx, balancer.PickInfo{})
 	if err != nil {
@@ -152,7 +148,7 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (B
 
 // NewStream rejects every streaming call with codes.Unimplemented: grpcx
 // carries unary calls only, and there is no stream client interceptor to hand
-// the call to. desc, method and opts are all ignored.
+// the call to. desc, method and opts are ignored.
 func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, status.Unimplemented.Err()
 }
@@ -160,8 +156,10 @@ func (c *client) NewStream(ctx context.Context, desc *grpc.StreamDesc, method st
 // Close closes the picker, which cancels the balancer's context. The keepalive
 // loop returns on that cancel and empties the pool, but it does not close the
 // backend transports: each one is closed by its own receive loop once the read
-// deadline (defaultReadTimeout, three keepalive periods) fires. Close therefore
-// returns without blocking, and the fds are released a read timeout later.
+// deadline fires.
+//
+// Close therefore returns without blocking, and the fds are released a read
+// time later — defaultReadTimeout, three keepalive periods.
 func (c *client) Close() error {
 	return c.Picker.Close()
 }

@@ -23,10 +23,10 @@ func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOptio
 	return transport.UnaryServerInterceptor(interceptor)
 }
 
-// WithServerCodec sets the codec used to unmarshal requests and marshal
-// replies on the server side. The call header is not covered: it always travels
-// in the built-in codec of package encoding, so a client and a server agree on
-// it whatever each side configured here.
+// WithServerCodec sets the codec for request and reply bodies on the server
+// side. The call header is not covered: it always travels in the built-in codec
+// of package encoding, so a client and a server agree on it whatever each side
+// configured here.
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return transport.WithServerCodec(codec)
 }
@@ -45,9 +45,8 @@ func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return transport.WithServerWriteTimeout(d)
 }
 
-// WithServerBufSize caps the send buffer in blocks of defaultBufSize,
-// clamped to defaultMaxBufSize/defaultBufSize. A value of zero disables
-// batching and makes every Send synchronous.
+// WithServerBufSize caps the send buffer in blocks of the transport block size.
+// Zero disables batching and makes every Send synchronous.
 func WithServerBufSize(n int) ServerOption {
 	return transport.WithServerBufSize(n)
 }
@@ -83,19 +82,18 @@ func NewServer(opts ...ServerOption) *Server {
 }
 
 // ListenAndServe accepts connections on addr and serves each one in its own
-// goroutine until the listener fails or ctx is canceled. An AfterFunc closes the
-// listener when ctx is done, which is what wakes the loop out of Accept; the
-// net.ErrClosed that Accept then reports is folded into nil, so a canceled
-// context is a clean stop rather than an error the caller has to explain. Any
-// other accept error is returned as itself. The ctx also reaches the handlers,
-// so they see the same cancellation.
+// goroutine until the listener fails or ctx is canceled.
 //
-// The handlers started here are waited for before the return: the deferred wait
-// runs after the accept loop has exited, so by the time ListenAndServe returns
-// every accepted connection has been served to its end. A handler parked on an
-// idle connection is woken by the same AfterFunc that closed the listener —
-// Handle closes its channel on that cancel — so the wait is as long as the
-// handler takes to notice, not as long as its read deadline.
+// An AfterFunc closes the listener when ctx is done, which wakes the loop out of
+// Accept; the net.ErrClosed that Accept then reports is folded into nil, so a
+// canceled context is a clean stop. Any other accept error is returned as
+// itself, and the same ctx reaches the handlers.
+//
+// The handlers are waited for before the return: the deferred wait runs after
+// the accept loop has exited, so every accepted connection has been served to
+// its end. A handler parked on an idle connection is woken by the same
+// AfterFunc — Handle closes its channel on that cancel — so the wait is as long
+// as the handler takes to notice, not as long as its read deadline.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

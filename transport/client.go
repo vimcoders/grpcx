@@ -311,21 +311,17 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 			info.Metadatas = append(info.Metadatas, k, v)
 		}
 	}
-	opts := []CallOption{&info}
 	if dl, ok := ctx.Deadline(); ok {
-		opt := CallOptions{
-			Timeout: time.Until(dl).Milliseconds(),
-		}
-		opts = append(opts, &opt)
+		info.Timeout = time.Until(dl).Milliseconds()
 	}
-	s, err := c.createStream(ctx, opts...)
+	s, err := c.createStream(ctx)
 	if err != nil {
 		return err
 	}
 	// The half-close is best effort: a failure to send it is already covered by
 	// whatever error the call returns.
 	defer func() { _ = s.CloseSend() }()
-	if err := s.Send(req, opts...); err != nil {
+	if err := s.Send(req, &info); err != nil {
 		return err
 	}
 	return s.RecvMsg(reply)
@@ -335,10 +331,11 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // payload as a Buffer the caller owns and frees. It never encodes the payload:
 // what the caller has is what goes on the wire, which is what lets a relay
 // forward bytes it cannot interpret. The header is built from opts here, so
-// this transport's stream id always wins, and the caller's deadline is folded
-// into the header timeout when the context has one. A reply whose status code is
-// not OK comes back as a status error carrying that code and its description
-// instead of a Buffer.
+// this transport's stream id always wins; the caller's deadline is folded into
+// the header timeout when the context has one, and metadata in the context is
+// appended to the header pairs after whatever opts already carry. A reply whose
+// status code is not OK comes back as a status error carrying that code and its
+// description instead of a Buffer.
 func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
 	var options api.CallOptions
 	for _, opt := range opts {
@@ -347,6 +344,11 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (m
 	if dl, ok := ctx.Deadline(); ok {
 		options.Timeout = time.Until(dl).Milliseconds()
 	}
+	if medatas, ok := metadata.GetMetadata(ctx); ok {
+		for k, v := range medatas {
+			options.Metadatas = append(options.Metadatas, k, v)
+		}
+	}
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
@@ -354,8 +356,7 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (m
 	// The half-close is best effort: a failure to send it is already covered by
 	// whatever error the call returns.
 	defer func() { _ = s.CloseSend() }()
-	opt := &CallOptions{StreamID: s.id}
-	opt.apply(&options)
+	options.StreamID = s.id
 	h, err := encoding.Marshal(&options)
 	if err != nil {
 		return nil, err

@@ -282,6 +282,29 @@ func TestRoundTripFoldsTheCallerDeadlineIntoTheHeader(t *testing.T) {
 	}
 }
 
+// TestRoundTripCarriesContextMetadataInTheHeader covers the metadata path: the
+// header carries what the context holds, the same way Invoke takes it from ctx,
+// and the options the caller passed accumulate on top rather than replacing it.
+func TestRoundTripCarriesContextMetadataInTheHeader(t *testing.T) {
+	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
+	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
+
+	ctx := metadata.AppendToContext(context.Background(), "trace-id", "abc")
+	buf, err := c.RoundTrip(ctx, payload, &CallOptions{Metadatas: []string{"k", "v"}})
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	buf.Free()
+
+	var header api.CallOptions
+	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if got := joinPairs(header.Metadatas); got != "k=v,trace-id=abc" {
+		t.Errorf("Metadatas = %q, want the option's pair then the context's", got)
+	}
+}
+
 // TestRoundTripRefusesOnAClosedTransport covers the closed check ahead of stream
 // allocation: no header or payload frame is written once the transport is gone.
 func TestRoundTripRefusesOnAClosedTransport(t *testing.T) {

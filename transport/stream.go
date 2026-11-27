@@ -178,14 +178,16 @@ type CallOption interface {
 }
 
 // CallOptions is the concrete CallOption: each non-zero field overrides its
-// counterpart in the header.
+// counterpart in the header. Metadatas is the one field that does not override
+// anything — the pairs accumulate across the options applied.
 type CallOptions api.CallOptions
 
 // apply merges c into opts field by field: a non-zero field in c replaces what
 // an earlier option put there, and a zero one leaves it alone. Timeout is no
 // exception — apply never fills in a default, so "this header named no timeout"
-// survives to the call site: Invoke folds the caller's context deadline into the
-// header, and defaultMethodHandler.Handle falls back to WithServerTimeout.
+// survives to the call site: Invoke and RoundTrip fold the caller's context
+// deadline into the header, and defaultMethodHandler.Handle falls back to
+// WithServerTimeout.
 func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
 	opts.FullMethodName = cmp.Or(c.FullMethodName, opts.FullMethodName)

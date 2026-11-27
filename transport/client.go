@@ -71,8 +71,8 @@ func WithReadTimeout(d time.Duration) Option {
 // WithWriteTimeout sets how long a write may take to flush before failing the
 // call. Both sides use it: ServerOptions.Handle passes it to every accepted
 // connection's channel, and the client's own channel writes requests under it.
-// It defaults to defaultTimeout; zero leaves the default in place, and any other
-// value is stored as given.
+// It defaults to defaultWriteTimeout; zero leaves the default in place, and any
+// other value is stored as given.
 func WithWriteTimeout(d time.Duration) Option {
 	return func(so *Options) {
 		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)
@@ -374,10 +374,10 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (m
 		return nil, status.Error(code, resp.Options.Desc)
 	}
 	// mem.NewBuffer hands the slice back to the pool on Free unless the buffer is
-	// too small to keep: the pool's smallest tier is 256B and every request above
-	// it gets a 4KB capacity, which clears the 1KB pooling threshold. Only a reply
-	// of 256 bytes or less comes back as a SliceBuffer whose Free is a no-op —
-	// small enough that the pool would have dropped it anyway.
+	// too small to keep: the pool's smallest tier is 256B and the next one is 4KB,
+	// so a reply just above 256B already clears the 1KB pooling threshold. Only a
+	// reply of 256 bytes or less comes back as a SliceBuffer whose Free is a no-op
+	// — small enough that the pool would have dropped it anyway.
 	return mem.NewBuffer(&resp.Payload, buffers), nil
 }
 

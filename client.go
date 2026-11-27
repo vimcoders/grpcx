@@ -14,11 +14,17 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
+// CallOption is transport.CallOption, re-exported so a caller that only relays
+// bytes can name the option type without importing the transport package. The
+// implementations stay there: the frame header a request rides on is built in
+// transport.
+type CallOption = transport.CallOption
+
 // ClientConnInterface is the client-side connection: unary and framed calls
 // plus Close.
 type ClientConnInterface interface {
 	grpc.ClientConnInterface
-	RoundTrip(context.Context, []byte, ...transport.CallOption) (mem.Buffer, error)
+	RoundTrip(context.Context, []byte, ...CallOption) (mem.Buffer, error)
 	io.Closer
 }
 
@@ -122,7 +128,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // endpoint is equally eligible and the method only travels as frame content. The
 // reply comes back as the bytes the backend wrote: how to interpret them is the
 // caller's business, not this client's.
-func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...transport.CallOption) (mem.Buffer, error) {
+func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
 	rt, err := c.Pick(ctx, balancer.PickInfo{})
 	if err != nil {
 		return nil, err

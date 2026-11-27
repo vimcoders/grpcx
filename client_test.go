@@ -43,7 +43,7 @@ func (r *recordingRT) Invoke(_ context.Context, method string, _, _ any, _ ...gr
 	return nil
 }
 
-func (r *recordingRT) RoundTrip(context.Context, []byte, ...transport.CallOption) (mem.Buffer, error) {
+func (r *recordingRT) RoundTrip(context.Context, []byte, ...CallOption) (mem.Buffer, error) {
 	r.roundTrips.Add(1)
 	if r.rtErr != nil {
 		return nil, r.rtErr

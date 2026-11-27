@@ -111,12 +111,12 @@ func (ch *channel) Recv() ([]byte, error) {
 	}
 
 	if h > 0 {
-		payload := getmbuf(int(h))
-		if _, err := io.ReadFull(ch.br, payload); err != nil {
-			putmbuf(payload)
+		p := getmbuf(int(h))
+		if _, err := io.ReadFull(ch.br, p); err != nil {
+			putmbuf(p)
 			return nil, err
 		}
-		return payload, nil
+		return p, nil
 	}
 
 	return nil, nil

@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/mem"
 )
 
 // echoServer implements the generated echo service on top of grpcx.
@@ -27,11 +28,13 @@ func (e *echoServer) Echo(_ context.Context, req *api.EchoRequest) (*api.EchoRes
 }
 
 // recordingRT stands in for a backend transport: it answers RoundTrip with a
-// fixed response and remembers the methods it was invoked with.
+// fixed response and remembers the methods it was invoked with. rtErr, when set,
+// makes RoundTrip fail instead.
 type recordingRT struct {
 	invokes    atomic.Int32
 	roundTrips atomic.Int32
 	lastMethod atomic.Value
+	rtErr      error
 }
 
 func (r *recordingRT) Invoke(_ context.Context, method string, _, _ any, _ ...grpc.CallOption) error {
@@ -40,9 +43,12 @@ func (r *recordingRT) Invoke(_ context.Context, method string, _, _ any, _ ...gr
 	return nil
 }
 
-func (r *recordingRT) RoundTrip(context.Context, *api.Request) (*api.Response, error) {
+func (r *recordingRT) RoundTrip(context.Context, []byte, ...transport.CallOption) (mem.Buffer, error) {
 	r.roundTrips.Add(1)
-	return &api.Response{Options: &api.CallOptions{Code: uint32(codes.OK)}, Payload: []byte("reply")}, nil
+	if r.rtErr != nil {
+		return nil, r.rtErr
+	}
+	return mem.SliceBuffer("reply"), nil
 }
 
 func (r *recordingRT) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
@@ -55,14 +61,19 @@ func (r *recordingRT) Close() error               { return nil }
 var _ transport.RoundTripper = (*recordingRT)(nil)
 
 // stubPicker hands out one recordingRT and remembers what it was asked for.
+// err, when set, is returned instead of a backend.
 type stubPicker struct {
 	rt     transport.RoundTripper
 	closed atomic.Int32
 	seen   atomic.Value
+	err    error
 }
 
 func (p *stubPicker) Pick(_ context.Context, info balancer.PickInfo) (transport.RoundTripper, error) {
 	p.seen.Store(info.FullMethodName)
+	if p.err != nil {
+		return nil, p.err
+	}
 	return p.rt, nil
 }
 
@@ -168,41 +179,63 @@ func TestDialSucceedsWithAnEmptyPoolWhenTheEndpointRefuses(t *testing.T) {
 	}
 }
 
-// TestRoundTripPicksByTheMethodName covers the framed path: the backend is
-// chosen by the method in the request header.
-func TestRoundTripPicksByTheMethodName(t *testing.T) {
+// TestRoundTripPicksWithoutNamingAMethod covers the framed path: the pick
+// carries no method name. Backend selection is left to the K8s Service or DNS,
+// so every endpoint in the pool is equally eligible and the method travels only
+// as frame content.
+func TestRoundTripPicksWithoutNamingAMethod(t *testing.T) {
 	rt := &recordingRT{}
 	p := &stubPicker{rt: rt}
 	c := &client{Picker: p}
 
-	req := &api.Request{Options: &api.CallOptions{FullMethodName: "/api.EchoService/Echo"}}
-	resp, err := c.RoundTrip(context.Background(), req)
+	buf, err := c.RoundTrip(context.Background(), []byte("body"), &transport.CallOptions{FullMethodName: "/api.EchoService/Echo"})
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
-	if got := p.seen.Load(); got != "/api.EchoService/Echo" {
-		t.Errorf("PickInfo.FullMethodName = %v, want the request's method", got)
+	if got := p.seen.Load(); got != "" {
+		t.Errorf("PickInfo.FullMethodName = %v, want empty: the method does not choose the backend", got)
 	}
 	if rt.roundTrips.Load() != 1 {
 		t.Errorf("RoundTrip on the backend ran %d times, want 1", rt.roundTrips.Load())
 	}
-	if string(resp.Payload) != "reply" {
-		t.Errorf("payload = %q, want reply", resp.Payload)
+	if got := string(buf.ReadOnlyData()); got != "reply" {
+		t.Errorf("payload = %q, want reply", got)
 	}
 }
 
-// TestRoundTripToleratesARequestWithoutOptions covers a request whose header is
-// missing: the pick still happens, with an empty method name.
-func TestRoundTripToleratesARequestWithoutOptions(t *testing.T) {
+// TestRoundTripReportsAPickError covers the pick failing: the error reaches the
+// caller unchanged and no backend is touched.
+func TestRoundTripReportsAPickError(t *testing.T) {
 	rt := &recordingRT{}
-	p := &stubPicker{rt: rt}
-	c := &client{Picker: p}
+	c := &client{Picker: &stubPicker{rt: rt, err: status.Unavailable.Err()}}
 
-	if _, err := c.RoundTrip(context.Background(), &api.Request{}); err != nil {
-		t.Fatalf("RoundTrip: %v", err)
+	buf, err := c.RoundTrip(context.Background(), []byte("body"))
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("RoundTrip = (%v, %v), want Unavailable from the pick", buf, code)
 	}
-	if got := p.seen.Load(); got != "" {
-		t.Errorf("PickInfo.FullMethodName = %q, want empty for a header-less request", got)
+	if buf != nil {
+		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
+	}
+	if rt.roundTrips.Load() != 0 {
+		t.Errorf("backend round trips = %d, want 0", rt.roundTrips.Load())
+	}
+}
+
+// TestRoundTripReportsTheBackendError covers a backend that fails the call: its
+// status reaches the caller unchanged and no buffer comes with it.
+func TestRoundTripReportsTheBackendError(t *testing.T) {
+	rt := &recordingRT{rtErr: status.Unavailable.Err()}
+	c := &client{Picker: &stubPicker{rt: rt}}
+
+	buf, err := c.RoundTrip(context.Background(), []byte("body"))
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("RoundTrip = (%v, %v), want Unavailable from the backend", buf, code)
+	}
+	if buf != nil {
+		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
+	}
+	if rt.roundTrips.Load() != 1 {
+		t.Errorf("backend round trips = %d, want 1", rt.roundTrips.Load())
 	}
 }
 

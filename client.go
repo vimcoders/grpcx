@@ -1,25 +1,24 @@
 package grpcx
 
 import (
-	"cmp"
 	"context"
 	"io"
 	"time"
 
 	"github.com/vimcoders/grpcx/balancer"
 	"github.com/vimcoders/grpcx/encoding"
-	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/mem"
 )
 
 // ClientConnInterface is the client-side connection: unary and framed calls
 // plus Close.
 type ClientConnInterface interface {
 	grpc.ClientConnInterface
-	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+	RoundTrip(context.Context, []byte, ...transport.CallOption) (mem.Buffer, error)
 	io.Closer
 }
 
@@ -41,9 +40,11 @@ func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	}
 }
 
-// WithTimeout sets the default call timeout. The value is forwarded to the
-// transport, which writes it into the request header. A caller deadline replaces
-// it, shorter or longer: the default only bounds a call that names no deadline.
+// WithTimeout stores the per-call timeout on the transport options. No request
+// path reads it: a call is bounded by the caller's context deadline, and every
+// stream additionally by the transport's read timeout. Ping is the one reader,
+// capping it at the keepalive period so a health check fails before the next one
+// is due. Zero leaves the default in place.
 func WithTimeout(d time.Duration) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, transport.WithTimeout(d))
@@ -116,18 +117,17 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return nil
 }
 
-// RoundTrip picks a backend by the full method name in req.Options and sends
-// the framed request through it.
-func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	options := cmp.Or(req.Options, &api.CallOptions{})
-	info := balancer.PickInfo{
-		FullMethodName: options.FullMethodName,
-	}
-	rt, err := c.Pick(ctx, info)
+// RoundTrip picks a backend and sends the framed payload through it. The pick
+// carries no method name: backends come from the K8s Service or DNS, so every
+// endpoint is equally eligible and the method only travels as frame content. The
+// reply comes back as the bytes the backend wrote: how to interpret them is the
+// caller's business, not this client's.
+func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...transport.CallOption) (mem.Buffer, error) {
+	rt, err := c.Pick(ctx, balancer.PickInfo{})
 	if err != nil {
 		return nil, err
 	}
-	return rt.RoundTrip(ctx, req)
+	return rt.RoundTrip(ctx, p, opts...)
 }
 
 // NewStream rejects every streaming call with codes.Unimplemented: grpcx

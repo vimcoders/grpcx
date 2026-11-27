@@ -409,9 +409,13 @@ func TestDefaultMethodHandlerReportsAHandlerError(t *testing.T) {
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 2}); err != nil {
 		t.Fatalf("Handle returned %v, want nil (the error belongs in the reply header)", err)
 	}
-	header := replyHeader(t, fs.sent())
+	frames := fs.sent()
+	header := replyHeader(t, frames)
 	if codes.Code(header.Code) != codes.InvalidArgument {
 		t.Errorf("reply Code = %v, want InvalidArgument", codes.Code(header.Code))
+	}
+	if got := len(frames[1]); got != 0 {
+		t.Errorf("reply payload = %d bytes, want the zero-length frame a failed call carries", got)
 	}
 }
 
@@ -467,12 +471,16 @@ func TestDefaultMethodHandlerReportsDeadlineExceeded(t *testing.T) {
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 4, Timeout: 40}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	header := replyHeader(t, fs.sent())
+	frames := fs.sent()
+	header := replyHeader(t, frames)
 	if codes.Code(header.Code) != codes.DeadlineExceeded {
 		t.Errorf("reply Code = %v, want DeadlineExceeded", codes.Code(header.Code))
 	}
 	if !strings.Contains(strings.ToLower(header.Desc), "deadline") {
 		t.Errorf("reply Desc = %q, want the context deadline error", header.Desc)
+	}
+	if got := len(frames[1]); got != 0 {
+		t.Errorf("reply payload = %d bytes, want the zero-length frame a failed call carries", got)
 	}
 }
 
@@ -493,12 +501,16 @@ func TestDefaultMethodHandlerRecoversFromAPanickingHandler(t *testing.T) {
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 6}); err != nil {
 		t.Fatalf("Handle after a panic = %v, want nil", err)
 	}
-	header := replyHeader(t, fs.sent())
+	frames := fs.sent()
+	header := replyHeader(t, frames)
 	if codes.Code(header.Code) != codes.Internal {
 		t.Errorf("reply Code = %v, want Internal", codes.Code(header.Code))
 	}
 	if !strings.Contains(header.Desc, "handler boom") {
 		t.Errorf("reply Desc = %q, want it to name the panic", header.Desc)
+	}
+	if got := len(frames[1]); got != 0 {
+		t.Errorf("reply payload = %d bytes, want the zero-length frame a failed call carries", got)
 	}
 }
 
@@ -515,7 +527,8 @@ func TestEmptyHandleRepliesUnimplemented(t *testing.T) {
 	if recv.remaining() != 0 {
 		t.Error("Handle left the request body on the connection")
 	}
-	header := replyHeader(t, fs.sent())
+	frames := fs.sent()
+	header := replyHeader(t, frames)
 	if codes.Code(header.Code) != codes.Unimplemented {
 		t.Errorf("reply Code = %v, want Unimplemented", codes.Code(header.Code))
 	}
@@ -524,6 +537,9 @@ func TestEmptyHandleRepliesUnimplemented(t *testing.T) {
 	}
 	if header.StreamID != 8 {
 		t.Errorf("reply StreamID = %d, want 8", header.StreamID)
+	}
+	if got := len(frames[1]); got != 0 {
+		t.Errorf("reply payload = %d bytes, want the zero-length frame an unimplemented call carries", got)
 	}
 }
 

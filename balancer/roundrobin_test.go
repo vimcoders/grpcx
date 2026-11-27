@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/resolver"
 	"github.com/vimcoders/grpcx/status"
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/mem"
 )
 
 // fakeRT is one backend connection: it records how often it was pinged and
@@ -29,7 +29,7 @@ type fakeRT struct {
 	dialCount int
 }
 
-func (f *fakeRT) RoundTrip(context.Context, *api.Request) (*api.Response, error) {
+func (f *fakeRT) RoundTrip(context.Context, []byte, ...transport.CallOption) (mem.Buffer, error) {
 	return nil, status.Unimplemented.Err()
 }
 

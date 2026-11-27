@@ -257,7 +257,10 @@ type defaultMethodHandler struct {
 // error is reported in the response header's status code instead of tearing the
 // connection down.
 func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
-	options := api.CallOptions{Code: uint32(codes.OK), Desc: codes.OK.String()}
+	// Nothing below reads Code or Desc back out of options, and the reply status
+	// is built separately in info, so both stay zero: zero is codes.OK, which is
+	// what a request that names no status of its own is.
+	var options api.CallOptions
 	for _, v := range opts {
 		v.apply(&options)
 	}
@@ -303,7 +306,9 @@ type empty struct {
 // stays frame-aligned, then sends codes.Unimplemented carrying the requested
 // method name.
 func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
-	options := api.CallOptions{Code: uint32(codes.Unimplemented)}
+	// The status is set on the reply below; this copy of the request header only
+	// supplies the stream id and the requested method name.
+	var options api.CallOptions
 	for _, v := range opts {
 		v.apply(&options)
 	}

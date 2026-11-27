@@ -32,6 +32,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/mem"
 )
 
 // Option configures the transport Options.
@@ -330,49 +331,54 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 	return s.RecvMsg(reply)
 }
 
-// RoundTrip sends an already framed request — header plus payload — and waits
-// for the matching response. The payload is sent as the caller handed it in;
-// the header is re-marshalled here, so it carries this transport's stream id, and
-// the caller's deadline folded into the header timeout when the context has one.
-// A reply whose status code is not OK comes back as a status error carrying that
-// code and its description.
-func (c *client) RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error) {
-	opts := []CallOption{WithCallOptions(cmp.Or(req.Options, &api.CallOptions{}))}
-	if dl, ok := ctx.Deadline(); ok {
-		opts = append(opts, &CallOptions{
-			Timeout: time.Until(dl).Milliseconds(),
-		})
+// RoundTrip sends a bare payload frame on a fresh stream and returns the reply
+// payload as a Buffer the caller owns and frees. It never encodes the payload:
+// what the caller has is what goes on the wire, which is what lets a relay
+// forward bytes it cannot interpret. The header is built from opts here, so
+// this transport's stream id always wins, and the caller's deadline is folded
+// into the header timeout when the context has one. A reply whose status code is
+// not OK comes back as a status error carrying that code and its description
+// instead of a Buffer.
+func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
+	var options api.CallOptions
+	for _, opt := range opts {
+		opt.apply(&options)
 	}
-	s, err := c.createStream(ctx, opts...)
+	if dl, ok := ctx.Deadline(); ok {
+		options.Timeout = time.Until(dl).Milliseconds()
+	}
+	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
 	}
 	// The half-close is best effort: a failure to send it is already covered by
 	// whatever error the call returns.
 	defer func() { _ = s.CloseSend() }()
-	opts = append(opts, &CallOptions{
-		StreamID: s.id,
-	})
-	var options api.CallOptions
-	for _, opt := range opts {
-		opt.apply(&options)
-	}
+	opt := &CallOptions{StreamID: s.id}
+	opt.apply(&options)
 	h, err := encoding.Marshal(&options)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := s.Sender.Send(h, req.Payload); err != nil {
+	if err := s.Sender.Send(h, p); err != nil {
 		return nil, err
 	}
 	resp, err := s.recv()
 	if err != nil {
 		return nil, err
 	}
+	// A failed call arrives as a zero-length payload frame — the peer answers
+	// with api.Empty — so resp.Payload is nil here and there is no pooled buffer
+	// to hand back.
 	if code := codes.Code(resp.Options.Code); code != codes.OK {
 		return nil, status.Error(code, resp.Options.Desc)
 	}
-	return resp, nil
+	// mem.NewBuffer hands the slice back to the pool on Free unless the buffer is
+	// too small to keep: the pool's smallest tier is 256B and every request above
+	// it gets a 4KB capacity, which clears the 1KB pooling threshold. Only a reply
+	// of 256 bytes or less comes back as a SliceBuffer whose Free is a no-op —
+	// small enough that the pool would have dropped it anyway.
+	return mem.NewBuffer(&resp.Payload, buffers), nil
 }
 
 // Ping keeps the connection active by opening a stream, sending an empty

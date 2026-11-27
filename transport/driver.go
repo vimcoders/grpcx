@@ -7,9 +7,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/vimcoders/grpcx/generated/api"
-
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/mem"
 )
 
 const (
@@ -70,11 +69,15 @@ const (
 // unary calls over it and keeps it alive. A RoundTripper is safe for concurrent
 // use by multiple goroutines.
 type RoundTripper interface {
-	// RoundTrip sends an already framed request and waits for the response.
-	RoundTrip(ctx context.Context, req *api.Request) (*api.Response, error)
+	// RoundTrip sends payload as one frame on a fresh stream and returns the
+	// reply payload. It works on the wire representation: payload is the message
+	// body the caller already has, not an object to encode, and the reply comes
+	// back as the bytes the peer sent. The caller owns the returned Buffer and
+	// frees it; the payload passed in is free to reuse once RoundTrip returns.
+	RoundTrip(context.Context, []byte, ...CallOption) (mem.Buffer, error)
 	// Ping sends an empty request to keep the connection from hitting the read
 	// deadline.
-	Ping(ctx context.Context) error
+	Ping(context.Context) error
 	grpc.ClientConnInterface
 	io.Closer
 }

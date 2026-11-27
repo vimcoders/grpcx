@@ -140,12 +140,11 @@ func TestServerFallsBackToItsTimeoutOption(t *testing.T) {
 	recorder := &deadlineRecorder{}
 	cli, _, _ := startPipeServer(t, echoService(recorder), WithServerTimeout(40*time.Millisecond))
 
-	if _, err := cli.RoundTrip(context.Background(), &api.Request{
-		Options: &api.CallOptions{FullMethodName: "/api.EchoService/Echo"},
-		Payload: mustMarshal(t, &api.EchoRequest{Message: "hi"}),
-	}); err != nil {
+	buf, err := cli.RoundTrip(context.Background(), mustMarshal(t, &api.EchoRequest{Message: "hi"}), &CallOptions{FullMethodName: "/api.EchoService/Echo"})
+	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
+	buf.Free()
 	seen := time.Duration(recorder.seenNs.Load())
 	if seen <= 0 || seen > 40*time.Millisecond {
 		t.Errorf("handler deadline is %v away, want at most the 40ms the server option sets", seen)

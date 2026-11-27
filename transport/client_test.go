@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,17 +16,15 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/mem"
 	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
-// requestOn builds the api.Request an Invoke-less caller hands to RoundTrip:
-// the method header and the already-marshalled payload.
-func requestOn(t *testing.T, method string, msg any) *api.Request {
+// requestOn builds what an Invoke-less caller hands to RoundTrip: the
+// already-marshalled payload and the call option naming the method.
+func requestOn(t *testing.T, method string, msg any) ([]byte, CallOption) {
 	t.Helper()
-	return &api.Request{
-		Options: &api.CallOptions{FullMethodName: method},
-		Payload: mustMarshal(t, msg),
-	}
+	return mustMarshal(t, msg), &CallOptions{FullMethodName: method}
 }
 
 // TestDialContextReportsAnUnreachableEndpoint covers the dial failure path: the
@@ -126,24 +125,26 @@ func TestInvokeIgnoresGrpcCallOptions(t *testing.T) {
 	}
 }
 
-// TestRoundTripLeavesTheCallerRequestAlone covers a reused request: RoundTrip
-// writes its own header, so neither the timeout nor the stream id leaks back
-// into the caller's api.CallOptions.
-func TestRoundTripLeavesTheCallerRequestAlone(t *testing.T) {
+// TestRoundTripLeavesTheCallerOptionsAlone covers a reused option set:
+// RoundTrip builds its own header, so neither the timeout nor the stream id
+// leaks back into the caller's CallOptions.
+func TestRoundTripLeavesTheCallerOptionsAlone(t *testing.T) {
 	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	req := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
-	req.Options.Metadatas = []string{"k", "v"}
+	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
+	opt := &CallOptions{FullMethodName: "/api.EchoService/Echo", Metadatas: []string{"k", "v"}}
 
 	for attempt := range 2 {
-		if _, err := c.RoundTrip(context.Background(), req); err != nil {
+		buf, err := c.RoundTrip(context.Background(), payload, opt)
+		if err != nil {
 			t.Fatalf("RoundTrip #%d: %v", attempt+1, err)
 		}
+		buf.Free()
 	}
 
-	if req.Options.Timeout != 0 || req.Options.StreamID != 0 {
-		t.Errorf("caller options = (timeout %d, stream %d), want both untouched at 0", req.Options.Timeout, req.Options.StreamID)
+	if opt.Timeout != 0 || opt.StreamID != 0 {
+		t.Errorf("caller options = (timeout %d, stream %d), want both untouched at 0", opt.Timeout, opt.StreamID)
 	}
-	if got := joinPairs(req.Options.Metadatas); got != "k=v" {
+	if got := joinPairs(opt.Metadatas); got != "k=v" {
 		t.Errorf("caller metadata = %q, want it unchanged at k=v", got)
 	}
 
@@ -162,21 +163,80 @@ func TestRoundTripLeavesTheCallerRequestAlone(t *testing.T) {
 	if second.Timeout != 0 {
 		t.Errorf("second Timeout = %d, want 0: the caller named no timeout", second.Timeout)
 	}
+	if got := joinPairs(second.Metadatas); got != "k=v" {
+		t.Errorf("second header metadata = %q, want the option's k=v carried through", got)
+	}
 }
 
 // TestRoundTripCarriesTheRequestOverTheWire covers the pair of frames RoundTrip
 // writes: one call reaches the echo service and its payload comes back.
 func TestRoundTripCarriesTheRequestOverTheWire(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
-	req := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
+	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
 
-	resp, err := cli.RoundTrip(context.Background(), req)
+	buf, err := cli.RoundTrip(context.Background(), payload, opt)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer buf.Free()
+	var reply api.EchoResponse
+	if err := encoding.Unmarshal(buf.ReadOnlyData(), &reply); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+	if reply.Message != "hi!" {
+		t.Errorf("reply.Message = %q, want hi!", reply.Message)
+	}
+}
+
+// TestRoundTripHandsBackAPooledBuffer covers the ownership transfer: a reply
+// above the pooling threshold comes back as a reference-counted Buffer, so
+// reading it after Free panics instead of showing bytes the pool already took
+// back.
+func TestRoundTripHandsBackAPooledBuffer(t *testing.T) {
+	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
+	body := strings.Repeat("x", 2048)
+	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: body})
+
+	buf, err := cli.RoundTrip(context.Background(), payload, opt)
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
 	var reply api.EchoResponse
-	if err := encoding.Unmarshal(resp.Payload, &reply); err != nil {
+	if err := encoding.Unmarshal(buf.ReadOnlyData(), &reply); err != nil {
 		t.Fatalf("unmarshal reply: %v", err)
+	}
+	if reply.Message != body+"!" {
+		t.Fatalf("reply.Message = %q, want the %d-byte echo", reply.Message, len(body)+1)
+	}
+	buf.Free()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("ReadOnlyData after Free returned instead of panicking: the reply is not reference counted")
+		}
+	}()
+	_ = buf.ReadOnlyData()
+}
+
+// TestRoundTripSmallReplyFreesAsANoop covers the other side of the pool's
+// threshold: a reply of 256 bytes or less never entered a pool tier worth
+// keeping, so it comes back as a SliceBuffer whose Free is a no-op and whose
+// bytes stay readable.
+func TestRoundTripSmallReplyFreesAsANoop(t *testing.T) {
+	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
+	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
+
+	buf, err := cli.RoundTrip(context.Background(), payload, opt)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if _, ok := buf.(mem.SliceBuffer); !ok {
+		t.Fatalf("buffer type = %T, want a SliceBuffer below the pool's smallest tier", buf)
+	}
+	buf.Free()
+
+	var reply api.EchoResponse
+	if err := encoding.Unmarshal(buf.ReadOnlyData(), &reply); err != nil {
+		t.Fatalf("read after Free: %v", err)
 	}
 	if reply.Message != "hi!" {
 		t.Errorf("reply.Message = %q, want hi!", reply.Message)
@@ -187,14 +247,97 @@ func TestRoundTripCarriesTheRequestOverTheWire(t *testing.T) {
 // must not hand a nil error to a caller whose reply carries a status.
 func TestRoundTripReportsTheStatusInTheReplyHeader(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{failOn: "boom"}))
-	req := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "boom"})
+	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "boom"})
 
-	resp, err := cli.RoundTrip(context.Background(), req)
+	buf, err := cli.RoundTrip(context.Background(), payload, opt)
 	if code := status.Code(err); code != codes.InvalidArgument {
-		t.Errorf("RoundTrip = (%v, %v), want InvalidArgument", resp, code)
+		t.Errorf("RoundTrip = (%v, %v), want InvalidArgument", buf, code)
 	}
-	if resp != nil {
-		t.Errorf("RoundTrip returned a response together with the error: %+v", resp)
+	if buf != nil {
+		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
+	}
+}
+
+// TestRoundTripFoldsTheCallerDeadlineIntoTheHeader covers the timeout the header
+// carries: a caller deadline wins over whatever the options name, because the
+// header timeout is what bounds the server's handler.
+func TestRoundTripFoldsTheCallerDeadlineIntoTheHeader(t *testing.T) {
+	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
+	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	buf, err := c.RoundTrip(ctx, payload, &CallOptions{Timeout: 9000})
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	buf.Free()
+
+	var header api.CallOptions
+	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if header.Timeout <= 0 || header.Timeout > 750 {
+		t.Errorf("Timeout = %d, want the deadline's remaining ms (0 < t <= 750), replacing the option's 9000", header.Timeout)
+	}
+}
+
+// TestRoundTripRefusesOnAClosedTransport covers the closed check ahead of stream
+// allocation: no header or payload frame is written once the transport is gone.
+func TestRoundTripRefusesOnAClosedTransport(t *testing.T) {
+	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	buf, err := c.RoundTrip(context.Background(), []byte("body"), &CallOptions{FullMethodName: "/api.EchoService/Echo"})
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("RoundTrip = (%v, %v), want Unavailable on a closed transport", buf, code)
+	}
+	if buf != nil {
+		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
+	}
+	if frames := sender.sent(); len(frames) != 0 {
+		t.Errorf("sender was given %d frames after Close, want none", len(frames))
+	}
+}
+
+// TestRoundTripEndsWhenThePeerHangsUp covers a backend that dies mid-call: both
+// frames are accepted off the socket and then the connection goes away, so the
+// receive loop reports a failure instead of holding the caller until the read
+// timeout.
+func TestRoundTripEndsWhenThePeerHangsUp(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		// Take what the caller wrote off the socket, then hang up without
+		// answering: the receive loop hits the end of the connection.
+		_, _ = conn.Read(make([]byte, 1<<16))
+		_ = conn.Close()
+	}()
+
+	rt, err := Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = rt.Close() }()
+
+	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
+	buf, err := rt.RoundTrip(context.Background(), payload, opt)
+	if err == nil {
+		buf.Free()
+		t.Fatal("RoundTrip = nil error, want a failure once the peer hung up")
+	}
+	if buf != nil {
+		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
 	}
 }
 

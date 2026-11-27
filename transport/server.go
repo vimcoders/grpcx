@@ -63,7 +63,9 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 }
 
 // WithServerCodec sets the codec used to unmarshal requests and marshal
-// replies on the server side.
+// replies on the server side. It covers the message body only: the call header
+// is always decoded with the built-in codec in package encoding, so a client and
+// a server agree on it whatever each side configured here.
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return func(so *ServerOptions) {
 		so.codec = codec
@@ -103,8 +105,9 @@ func WithServerBufSize(n int) ServerOption {
 }
 
 // WithServerTimeout sets the fallback deadline for a call whose header names no
-// timeout. Values above defaultTimeout are clamped: the server never lets a
-// handler run longer than 3s.
+// timeout. The option stores the value as given; Handle is what applies it under
+// the 3s ceiling, so a value above defaultTimeout never lets a handler run
+// longer than defaultTimeout, and zero falls through to the ceiling at use time.
 func WithServerTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
 		so.timeout = d

@@ -72,7 +72,10 @@ type RoundTripper interface {
 	// reply payload. It works on the wire representation: payload is the message
 	// body the caller already has, not an object to encode, and the reply comes
 	// back as the bytes the peer sent. The caller owns the returned Buffer and
-	// frees it; the payload passed in is free to reuse once RoundTrip returns.
+	// frees it. The payload it passes in is written before RoundTrip returns only
+	// while batching is off, which is the default; once WithBufSize is set, the
+	// frame can sit in the connection's pending batch for up to one flush
+	// interval, and the caller must leave the bytes untouched until then.
 	RoundTrip(context.Context, []byte, ...CallOption) (Buffer, error)
 	// Ping sends an empty request to keep the connection from hitting the read
 	// deadline.

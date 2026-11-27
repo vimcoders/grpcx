@@ -79,6 +79,9 @@ func WithWriteTimeout(d time.Duration) Option {
 }
 
 // WithCodec sets the codec used to marshal requests and unmarshal responses.
+// It covers the message body only: the call header is always encoded with the
+// built-in codec in package encoding (protobuf for a proto.Message, JSON
+// otherwise), so both ends agree on the header whatever this option holds.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
 		t.codec = c
@@ -87,8 +90,11 @@ func WithCodec(c encoding.Codec) Option {
 
 // WithBufSize sets the send buffer in blocks of defaultBufSize, clamped to
 // defaultMaxBufSize. A value of zero disables batching and makes every Send
-// synchronous; zero is also the package default, so batching is opt-in. The flush
-// interval is not configurable: the timer wakes at defaultFlushInterval.
+// synchronous; zero is also the package default, so batching is opt-in. With
+// batching on, Send queues the caller's slices by reference until the flush, so a
+// payload handed to RoundTrip must not be reused between Send returning nil and
+// that flush; with batching off the bytes are already written when Send returns. The flush interval is not configurable: the timer wakes at
+// defaultFlushInterval.
 func WithBufSize(n int) Option {
 	return func(c *Options) {
 		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
@@ -153,7 +159,10 @@ func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 }
 
 // DialContext connects to endpoint over TCP, applies the options to both the
-// transport configuration and the connection, then starts the receive loop.
+// transport configuration and the connection, then starts the receive loop. The
+// dial itself runs under defaultTimeout, not under WithTimeout: that option only
+// reaches Ping, so a slow dial is bounded by the package default whatever the
+// caller configured.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	d := net.Dialer{
 		Timeout: defaultTimeout,

@@ -30,16 +30,10 @@ type MD map[string]string
 // Pairs returns an MD formed by the mapping of key, value ...
 // Pairs panics if len(kv) is odd.
 //
-// Only the following ASCII characters are allowed in keys:
-//   - digits: 0-9
-//   - uppercase letters: A-Z (normalized to lower)
-//   - lowercase letters: a-z
-//   - special characters: -_.
-//
-// Uppercase letters are automatically converted to lowercase.
-//
-// Keys beginning with "grpc-" are reserved for grpc-internal use only and may
-// result in errors if set in metadata.
+// Keys are lowercased as they are stored; the value is kept verbatim. No
+// character set is enforced here, and a key beginning with "grpc-" is stored like
+// any other: the header is grpcx's own, so the gRPC reserved-prefix rule does not
+// apply. A repeated key keeps the last value.
 func Pairs(kv ...string) MD {
 	if len(kv)%2 == 1 {
 		panic(fmt.Sprintf("metadata: Pairs got the odd number of input pairs for metadata: %d", len(kv)))
@@ -51,8 +45,9 @@ func Pairs(kv ...string) MD {
 	return md
 }
 
-// Get returns the metadata for a given key when they exist.
-// If there is no metadata, a nil slice and false are returned.
+// Get returns the value stored for key and whether the key was present. The
+// lookup lowercases key first, matching how Pairs stores them. A missing key
+// comes back as an empty string and false — never as a typed nil.
 func (m MD) Get(key string) (string, bool) {
 	key = strings.ToLower(key)
 	if v, ok := m[key]; ok {

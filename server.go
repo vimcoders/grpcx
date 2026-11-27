@@ -24,7 +24,9 @@ func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOptio
 }
 
 // WithServerCodec sets the codec used to unmarshal requests and marshal
-// replies on the server side.
+// replies on the server side. The call header is not covered: it always travels
+// in the built-in codec of package encoding, so a client and a server agree on
+// it whatever each side configured here.
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return transport.WithServerCodec(codec)
 }

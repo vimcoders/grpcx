@@ -60,18 +60,22 @@ func (c codec) Unmarshal(p []byte, msg any) error {
 
 var defaultCodec = &codec{}
 
-// GetCodec returns a new instance of the proto codec.
+// GetCodec returns the built-in codec. The subtype is ignored: grpcx has exactly
+// one, so every name resolves to the same instance.
 func GetCodec(contentSubtype string) encoding.Codec {
 	return defaultCodec
 }
 
-// Marshal implements [encoding.Codec].
+// Marshal encodes msg with the built-in codec. It is what the call header uses:
+// the header must go through the same codec on both ends, whatever codec the
+// caller installed for the message body.
 func Marshal(msg any) ([]byte, error) {
 	codec := GetCodec(Name)
 	return codec.Marshal(msg)
 }
 
-// Unmarshal implements [encoding.Codec].
+// Unmarshal decodes p into msg with the built-in codec, the same one Marshal
+// used for the call header.
 func Unmarshal(p []byte, msg any) error {
 	codec := GetCodec(Name)
 	return codec.Unmarshal(p, msg)

@@ -164,11 +164,12 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 
 // recv blocks until the response slot is filled or the call ends. The code
 // depends on why the context ended, not on the outcome: a context the caller
-// canceled reports Canceled, and one whose own deadline fired reports
-// Unavailable. The stream context ends when the caller cancels it, when its
-// deadline expires, or when Close cancels every live stream while it walks the
-// table. The closed-slot branch is a guard only: nothing closes the slot today,
-// so a recv parked here is woken by the context, never by the slot.
+// canceled reports Canceled, and a deadline that expired reports Unavailable.
+// Two deadlines share that branch — the caller's own and the transport's read
+// timeout — and they are not told apart here, because the stream context cannot
+// say which one fired. Close cancels every live stream while it walks the table,
+// which lands here as Canceled too. The closed-slot branch is a guard only: nothing closes the slot today, so a recv
+// parked here is woken by the context, never by the slot.
 func (s *clientStream) recv() (*reply, error) {
 	select {
 	case <-s.ctx.Done():

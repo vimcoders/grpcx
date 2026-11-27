@@ -42,6 +42,8 @@ type ClientConnInterface interface {
 type Option func(c *client)
 
 // WithCodec sets the codec used to marshal requests and unmarshal responses.
+// The call header is not covered: it always travels in the built-in codec of
+// package encoding, so the two ends agree on it whatever this option holds.
 func WithCodec(codec encoding.Codec) Option {
 	return func(c *client) {
 		c.Codec = codec
@@ -76,7 +78,9 @@ func WithMaxStreams(n uint32) Option {
 }
 
 // WithBufSize sets the send buffer in blocks of the transport block size. Zero
-// disables batching and makes every send synchronous.
+// disables batching and makes every send synchronous, which is also the default.
+// With batching on, the bytes handed to RoundTrip are queued by reference until
+// the connection flushes them, so the caller must not reuse them before then.
 func WithBufSize(n int) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, transport.WithBufSize(n))

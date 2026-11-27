@@ -140,6 +140,13 @@ func (ch *channel) Recv() (Buffer, error) {
 // as separate frames; the stream id lives in the header slice, not the frame
 // header.
 //
+// With batching on — bufsize > 0 — the slices are queued by reference, not
+// copied, and the batch is flushed by the next Send that fills bufsize or by the
+// timer at defaultFlushInterval. The caller therefore owns the bytes again only
+// after that flush; until then it must leave them as they were. With batching off
+// the write completes inside this call and the slices are free to reuse the
+// moment it returns.
+//
 // The write deadline is armed once at the top of the call, before any frame is
 // queued, so both paths below write under a deadline that was just set.
 //

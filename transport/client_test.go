@@ -16,7 +16,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/mem"
 	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
@@ -189,9 +188,8 @@ func TestRoundTripCarriesTheRequestOverTheWire(t *testing.T) {
 }
 
 // TestRoundTripHandsBackAPooledBuffer covers the ownership transfer: a reply
-// above the pooling threshold comes back as a reference-counted Buffer, so
-// reading it after Free panics instead of showing bytes the pool already took
-// back.
+// above the pooling threshold comes back in one of the pool's size classes, and
+// Free gives it straight back — the caller needs no pool handle to release it.
 func TestRoundTripHandsBackAPooledBuffer(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
 	body := strings.Repeat("x", 2048)
@@ -208,19 +206,18 @@ func TestRoundTripHandsBackAPooledBuffer(t *testing.T) {
 	if reply.Message != body+"!" {
 		t.Fatalf("reply.Message = %q, want the %d-byte echo", reply.Message, len(body)+1)
 	}
+	// The pool rounds up to its size classes, so a reply of just over 2KB lands in
+	// the 4KB tier instead of in a slice sized to fit exactly.
+	if got := cap(buf.ReadOnlyData()); got != 4096 {
+		t.Errorf("cap = %d, want the pool's 4KB tier", got)
+	}
 	buf.Free()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("ReadOnlyData after Free returned instead of panicking: the reply is not reference counted")
-		}
-	}()
-	_ = buf.ReadOnlyData()
 }
 
 // TestRoundTripSmallReplyFreesAsANoop covers the lower side of the pool
-// threshold: a reply of 256 bytes or less arrives in a buffer whose capacity
-// stays under the 1KB pooling threshold, so it comes back as a SliceBuffer whose
-// Free is a no-op and whose bytes stay readable.
+// threshold: a reply of 256 bytes or less comes back in the pool's smallest
+// tier, which stays under the 1KB pooling threshold, so Free has nothing to give
+// back and the bytes remain readable.
 func TestRoundTripSmallReplyFreesAsANoop(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
 	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
@@ -229,8 +226,8 @@ func TestRoundTripSmallReplyFreesAsANoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoundTrip: %v", err)
 	}
-	if _, ok := buf.(mem.SliceBuffer); !ok {
-		t.Fatalf("buffer type = %T, want a SliceBuffer: its capacity stays under the 1KB pooling threshold", buf)
+	if got := cap(buf.ReadOnlyData()); got > 256 {
+		t.Fatalf("cap = %d, want the pool's smallest tier: below the 1KB threshold Free returns nothing", got)
 	}
 	buf.Free()
 
@@ -302,6 +299,57 @@ func TestRoundTripCarriesContextMetadataInTheHeader(t *testing.T) {
 	}
 	if got := joinPairs(header.Metadatas); got != "k=v,trace-id=abc" {
 		t.Errorf("Metadatas = %q, want the option's pair then the context's", got)
+	}
+}
+
+// TestRoundTripOwnsTheStreamID covers routing: the id this transport allocated is
+// written last, after every option was applied, so an option that names another
+// stream cannot route the frames off it.
+func TestRoundTripOwnsTheStreamID(t *testing.T) {
+	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
+	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
+
+	buf, err := c.RoundTrip(context.Background(), payload, &CallOptions{
+		FullMethodName: "/api.EchoService/Echo",
+		StreamID:       99,
+	})
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	buf.Free()
+
+	var header api.CallOptions
+	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if header.StreamID == 0 || header.StreamID == 99 {
+		t.Errorf("StreamID = %d, want the id this transport allocated, not the caller's 99", header.StreamID)
+	}
+}
+
+// TestRoundTripFreesTheBufferOfAFailedCall covers ownership on the error path: a
+// reply whose status is not OK is freed by RoundTrip itself, because the caller
+// gets the status error and never sees the buffer.
+func TestRoundTripFreesTheBufferOfAFailedCall(t *testing.T) {
+	dead := countingPayload([]byte("must not leak"))
+	c, _ := newClientOnSender(t, func(s *clientStream, _ *api.CallOptions, _ []byte) error {
+		s.c <- &reply{
+			CallOption: WithCallOptions(&api.CallOptions{Code: uint32(codes.InvalidArgument), Desc: "nope"}),
+			Buffer:     dead,
+		}
+		return nil
+	})
+	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
+
+	buf, err := c.RoundTrip(context.Background(), payload, &CallOptions{FullMethodName: "/api.EchoService/Echo"})
+	if code := status.Code(err); code != codes.InvalidArgument {
+		t.Fatalf("RoundTrip = (%v, %v), want InvalidArgument", buf, code)
+	}
+	if buf != nil {
+		t.Error("RoundTrip returned a buffer together with the status error")
+	}
+	if dead.freeCount() != 1 {
+		t.Errorf("the reply buffer was freed %d times, want 1", dead.freeCount())
 	}
 }
 
@@ -625,12 +673,14 @@ func TestNewStreamIsUnimplemented(t *testing.T) {
 
 // TestInterceptorDiscardsTheFrameOfAGoneStream covers a reply that arrives after
 // its stream was closed: both frames are consumed so the connection stays
-// aligned, and nothing is reported.
+// aligned, the payload goes back to the pool even though no stream wanted it, and
+// nothing is reported.
 func TestInterceptorDiscardsTheFrameOfAGoneStream(t *testing.T) {
 	c := &client{streams: make(map[uint32]*clientStream)}
-	recv := &fakeRecver{frames: [][]byte{
+	late := countingPayload(mustMarshal(t, &api.EchoResponse{Message: "late"}))
+	recv := &fakeRecver{frames: []Buffer{
 		headerFrame(t, &api.CallOptions{StreamID: 99}),
-		payloadFrame(t, &api.EchoResponse{Message: "late"}),
+		late,
 	}}
 
 	if err := c.interceptor(context.Background(), recv); err != nil {
@@ -638,6 +688,9 @@ func TestInterceptorDiscardsTheFrameOfAGoneStream(t *testing.T) {
 	}
 	if recv.remaining() != 0 {
 		t.Errorf("%d frames left on the connection, want none", recv.remaining())
+	}
+	if late.freeCount() != 1 {
+		t.Errorf("the discarded payload was freed %d times, want 1", late.freeCount())
 	}
 }
 
@@ -647,7 +700,7 @@ func TestInterceptorRoutesFramesToLiveStreams(t *testing.T) {
 	c := &client{streams: make(map[uint32]*clientStream)}
 	s, _ := newStreamUnderTest(&fakeSender{})
 	c.streams[s.id] = s
-	recv := &fakeRecver{frames: [][]byte{
+	recv := &fakeRecver{frames: []Buffer{
 		headerFrame(t, &api.CallOptions{StreamID: s.id, Code: uint32(codes.OK)}),
 		payloadFrame(t, &api.EchoResponse{Message: "hi!"}),
 	}}
@@ -656,9 +709,11 @@ func TestInterceptorRoutesFramesToLiveStreams(t *testing.T) {
 		t.Fatalf("interceptor: %v", err)
 	}
 	select {
-	case reply := <-s.c:
-		if reply.Options.StreamID != s.id {
-			t.Errorf("reply StreamID = %d, want %d", reply.Options.StreamID, s.id)
+	case r := <-s.c:
+		var header api.CallOptions
+		r.apply(&header)
+		if header.StreamID != s.id {
+			t.Errorf("reply StreamID = %d, want %d", header.StreamID, s.id)
 		}
 	default:
 		t.Fatal("the frame never reached its stream")

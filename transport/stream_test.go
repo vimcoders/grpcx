@@ -99,9 +99,10 @@ func TestWithCallOptionsCopiesTheWireHeader(t *testing.T) {
 	header := &api.CallOptions{
 		FullMethodName: "/api.EchoService/Echo",
 		Service:        "api.EchoService",
-		Authority:      "localhost",
 		Timeout:        1500,
 		Metadatas:      []string{"k", "v"},
+		Code:           uint32(codes.InvalidArgument),
+		Desc:           "bad argument",
 		StreamID:       11,
 	}
 	var opts api.CallOptions
@@ -109,12 +110,13 @@ func TestWithCallOptionsCopiesTheWireHeader(t *testing.T) {
 
 	if opts.FullMethodName != header.FullMethodName ||
 		opts.Service != header.Service ||
-		opts.Authority != header.Authority ||
 		opts.Timeout != header.Timeout ||
+		opts.Code != header.Code ||
+		opts.Desc != header.Desc ||
 		opts.StreamID != header.StreamID {
-		t.Errorf("applied header = (method %q, service %q, authority %q, timeout %d, stream %d), want (method %q, service %q, authority %q, timeout %d, stream %d)",
-			opts.FullMethodName, opts.Service, opts.Authority, opts.Timeout, opts.StreamID,
-			header.FullMethodName, header.Service, header.Authority, header.Timeout, header.StreamID)
+		t.Errorf("applied header = (method %q, service %q, code %d, desc %q, timeout %d, stream %d), want (method %q, service %q, code %d, desc %q, timeout %d, stream %d)",
+			opts.FullMethodName, opts.Service, opts.Code, opts.Desc, opts.Timeout, opts.StreamID,
+			header.FullMethodName, header.Service, header.Code, header.Desc, header.Timeout, header.StreamID)
 	}
 	if strings.Join(opts.Metadatas, ",") != "k,v" {
 		t.Errorf("Metadatas = %q, want k,v", opts.Metadatas)
@@ -181,9 +183,9 @@ func TestClientStreamSendMsgCarriesNoExtraOptions(t *testing.T) {
 // touching the caller's message.
 func TestClientStreamRecvMsgReportsTheStatusCode(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
-	s.c <- &api.Response{
-		Options: &api.CallOptions{Code: uint32(codes.InvalidArgument), Desc: "bad argument"},
-		Payload: pooledPayload([]byte("not used")),
+	s.c <- &reply{
+		CallOption: WithCallOptions(&api.CallOptions{Code: uint32(codes.InvalidArgument), Desc: "bad argument"}),
+		Buffer:     pooledPayload([]byte("not used")),
 	}
 
 	var reply api.EchoResponse
@@ -202,9 +204,9 @@ func TestClientStreamRecvMsgReportsTheStatusCode(t *testing.T) {
 // TestClientStreamRecvMsgUnmarshalsTheReply covers the success path.
 func TestClientStreamRecvMsgUnmarshalsTheReply(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
-	s.c <- &api.Response{
-		Options: &api.CallOptions{Code: uint32(codes.OK)},
-		Payload: payloadFrame(t, &api.EchoResponse{Message: "hi!"}),
+	s.c <- &reply{
+		CallOption: WithCallOptions(&api.CallOptions{Code: uint32(codes.OK)}),
+		Buffer:     payloadFrame(t, &api.EchoResponse{Message: "hi!"}),
 	}
 
 	var reply api.EchoResponse
@@ -213,6 +215,29 @@ func TestClientStreamRecvMsgUnmarshalsTheReply(t *testing.T) {
 	}
 	if reply.Message != "hi!" {
 		t.Errorf("reply.Message = %q, want hi!", reply.Message)
+	}
+}
+
+// TestClientStreamRecvMsgFreesTheReply covers the ownership on the client
+// stream: RecvMsg takes the frame out of the slot and gives the payload back
+// before it returns, whatever the caller does with the message afterwards.
+func TestClientStreamRecvMsgFreesTheReply(t *testing.T) {
+	s, _ := newStreamUnderTest(&fakeSender{})
+	buf := countingPayload(mustMarshal(t, &api.EchoResponse{Message: "hi!"}))
+	s.c <- &reply{
+		CallOption: WithCallOptions(&api.CallOptions{Code: uint32(codes.OK)}),
+		Buffer:     buf,
+	}
+
+	var got api.EchoResponse
+	if err := s.RecvMsg(&got); err != nil {
+		t.Fatalf("RecvMsg: %v", err)
+	}
+	if got.Message != "hi!" {
+		t.Errorf("reply.Message = %q, want hi!", got.Message)
+	}
+	if buf.freeCount() != 1 {
+		t.Errorf("the reply buffer was freed %d times, want 1", buf.freeCount())
 	}
 }
 
@@ -290,7 +315,7 @@ func TestClientStreamCloseDropsLateReplies(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := s.Handle(context.Background(), &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoResponse{Message: "late"})}}); err != nil {
+	if err := s.Handle(context.Background(), &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoResponse{Message: "late"})}}); err != nil {
 		t.Fatalf("Handle after Close: %v", err)
 	}
 	if len(s.c) != 0 {
@@ -304,18 +329,21 @@ func TestClientStreamCloseDropsLateReplies(t *testing.T) {
 func TestClientStreamHandleDeliversTheResponse(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
 	body := payloadFrame(t, &api.EchoResponse{Message: "hi!"})
-	recv := &fakeRecver{frames: [][]byte{body}}
+	recv := &fakeRecver{frames: []Buffer{body}}
 
 	if err := s.Handle(context.Background(), recv, &CallOptions{Code: uint32(codes.OK)}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	select {
-	case reply := <-s.c:
-		if reply.Options.Code != uint32(codes.OK) {
-			t.Errorf("reply Code = %d, want OK", reply.Options.Code)
+	case r := <-s.c:
+		defer r.Free()
+		var header api.CallOptions
+		r.apply(&header)
+		if header.Code != uint32(codes.OK) {
+			t.Errorf("reply Code = %d, want OK", header.Code)
 		}
-		if len(reply.Payload) == 0 {
-			t.Error("reply Payload is empty")
+		if len(r.ReadOnlyData()) == 0 {
+			t.Error("reply payload is empty")
 		}
 	default:
 		t.Fatal("Handle returned without filling the receive slot")
@@ -324,11 +352,13 @@ func TestClientStreamHandleDeliversTheResponse(t *testing.T) {
 
 // TestClientStreamHandleClosesTheStreamWhenTheCallIsOver covers a late reply:
 // when the slot is full or the call already ended, the payload is still consumed
-// and the stream is closed so the frame stays on a boundary.
+// and given back to the pool, and the stream is closed so the frame stays on a
+// boundary.
 func TestClientStreamHandleClosesTheStreamWhenTheCallIsOver(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
-	s.c <- &api.Response{Options: &api.CallOptions{}} // slot is full
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoResponse{Message: "late"})}}
+	s.c <- &reply{Buffer: pooledPayload(nil)} // slot is full
+	dropped := countingPayload(mustMarshal(t, &api.EchoResponse{Message: "late"}))
+	recv := &fakeRecver{frames: []Buffer{dropped}}
 
 	if err := s.Handle(context.Background(), recv); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -336,13 +366,16 @@ func TestClientStreamHandleClosesTheStreamWhenTheCallIsOver(t *testing.T) {
 	if s.Context().Err() == nil {
 		t.Error("Handle did not close the stream after dropping a late reply")
 	}
+	if dropped.freeCount() != 1 {
+		t.Errorf("the dropped payload was freed %d times, want 1", dropped.freeCount())
+	}
 }
 
 // TestDecodeCallOptionsReturnsTheWireHeader covers the dispatcher's read: the
 // header frame is consumed and parsed.
 func TestDecodeCallOptionsReturnsTheWireHeader(t *testing.T) {
 	want := &api.CallOptions{FullMethodName: "/api.EchoService/Echo", StreamID: 3, Timeout: 250}
-	header, err := decodeCallOptions(&fakeRecver{frames: [][]byte{headerFrame(t, want)}})
+	header, err := decodeCallOptions(&fakeRecver{frames: []Buffer{headerFrame(t, want)}})
 	if err != nil {
 		t.Fatalf("decodeCallOptions: %v", err)
 	}
@@ -379,7 +412,7 @@ func TestSenderSendUsesTheArgumentStreamID(t *testing.T) {
 func TestDefaultMethodHandlerRepliesOK(t *testing.T) {
 	fs := &fakeSender{}
 	d := &defaultMethodHandler{Sender: fs, Options: DefaultOptions(), imp: &echoImpl{}, Handler: unaryEcho}
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
+	recv := &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
 
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 5}); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -404,7 +437,7 @@ func TestDefaultMethodHandlerRepliesOK(t *testing.T) {
 func TestDefaultMethodHandlerReportsAHandlerError(t *testing.T) {
 	fs := &fakeSender{}
 	d := &defaultMethodHandler{Sender: fs, Options: DefaultOptions(), imp: &echoImpl{failOn: "boom"}, Handler: unaryEcho}
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoRequest{Message: "boom"})}}
+	recv := &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoRequest{Message: "boom"})}}
 
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 2}); err != nil {
 		t.Fatalf("Handle returned %v, want nil (the error belongs in the reply header)", err)
@@ -440,7 +473,7 @@ func TestDefaultMethodHandlerCapsTheHandlerDeadline(t *testing.T) {
 			return &api.EchoResponse{Message: "ok"}, nil
 		},
 	}
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
+	recv := &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
 
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 1, Timeout: 3_600_000}); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -465,7 +498,7 @@ func TestDefaultMethodHandlerReportsDeadlineExceeded(t *testing.T) {
 			return &api.EchoResponse{Message: "too late"}, nil
 		},
 	}
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
+	recv := &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
 
 	// The handler's deadline comes off the wire, so 40ms is the one that expires.
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 4, Timeout: 40}); err != nil {
@@ -496,7 +529,7 @@ func TestDefaultMethodHandlerRecoversFromAPanickingHandler(t *testing.T) {
 			panic("handler boom")
 		},
 	}
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
+	recv := &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
 
 	if err := d.Handle(context.Background(), recv, &CallOptions{StreamID: 6}); err != nil {
 		t.Fatalf("Handle after a panic = %v, want nil", err)
@@ -519,7 +552,7 @@ func TestDefaultMethodHandlerRecoversFromAPanickingHandler(t *testing.T) {
 func TestEmptyHandleRepliesUnimplemented(t *testing.T) {
 	fs := &fakeSender{}
 	e := &empty{Sender: fs, Codec: encoding.GetCodec(encoding.Name)}
-	recv := &fakeRecver{frames: [][]byte{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
+	recv := &fakeRecver{frames: []Buffer{payloadFrame(t, &api.EchoRequest{Message: "hi"})}}
 
 	if err := e.Handle(context.Background(), recv, &CallOptions{StreamID: 8, FullMethodName: "/api.EchoService/Stream"}); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -551,9 +584,9 @@ func TestEmptyHandleRepliesUnimplemented(t *testing.T) {
 func TestClientStreamHandleDropsASecondReply(t *testing.T) {
 	s, _ := newStreamUnderTest(&fakeSender{})
 	// Occupy the one-slot buffer so the next delivery has nowhere to go.
-	s.c <- &api.Response{Options: &api.CallOptions{}}
+	s.c <- &reply{Buffer: pooledPayload(nil)}
 
-	recv := &fakeRecver{frames: [][]byte{{}}}
+	recv := &fakeRecver{frames: []Buffer{pooledPayload(nil)}}
 	if err := s.Handle(context.Background(), recv); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}

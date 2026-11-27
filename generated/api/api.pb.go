@@ -65,10 +65,7 @@ type CallOptions struct {
 	Metadatas      []string               `protobuf:"bytes,4,rep,name=Metadatas,proto3" json:"Metadatas,omitempty"`
 	Code           uint32                 `protobuf:"varint,5,opt,name=Code,proto3" json:"Code,omitempty"`
 	Desc           string                 `protobuf:"bytes,6,opt,name=Desc,proto3" json:"Desc,omitempty"`
-	Length         uint32                 `protobuf:"varint,7,opt,name=Length,proto3" json:"Length,omitempty"`
-	Authority      string                 `protobuf:"bytes,8,opt,name=Authority,proto3" json:"Authority,omitempty"`
-	Closed         bool                   `protobuf:"varint,9,opt,name=Closed,proto3" json:"Closed,omitempty"`
-	StreamID       uint32                 `protobuf:"varint,10,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
+	StreamID       uint32                 `protobuf:"varint,7,opt,name=StreamID,proto3" json:"StreamID,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -145,27 +142,6 @@ func (x *CallOptions) GetDesc() string {
 	return ""
 }
 
-func (x *CallOptions) GetLength() uint32 {
-	if x != nil {
-		return x.Length
-	}
-	return 0
-}
-
-func (x *CallOptions) GetAuthority() string {
-	if x != nil {
-		return x.Authority
-	}
-	return ""
-}
-
-func (x *CallOptions) GetClosed() bool {
-	if x != nil {
-		return x.Closed
-	}
-	return false
-}
-
 func (x *CallOptions) GetStreamID() uint32 {
 	if x != nil {
 		return x.StreamID
@@ -173,134 +149,20 @@ func (x *CallOptions) GetStreamID() uint32 {
 	return 0
 }
 
-type Request struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Options       *CallOptions           `protobuf:"bytes,1,opt,name=Options,proto3" json:"Options,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Request) Reset() {
-	*x = Request{}
-	mi := &file_api_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Request) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Request) ProtoMessage() {}
-
-func (x *Request) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Request.ProtoReflect.Descriptor instead.
-func (*Request) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *Request) GetOptions() *CallOptions {
-	if x != nil {
-		return x.Options
-	}
-	return nil
-}
-
-func (x *Request) GetPayload() []byte {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
-type Response struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Options       *CallOptions           `protobuf:"bytes,1,opt,name=Options,proto3" json:"Options,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=Payload,proto3" json:"Payload,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Response) Reset() {
-	*x = Response{}
-	mi := &file_api_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Response) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Response) ProtoMessage() {}
-
-func (x *Response) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Response.ProtoReflect.Descriptor instead.
-func (*Response) Descriptor() ([]byte, []int) {
-	return file_api_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *Response) GetOptions() *CallOptions {
-	if x != nil {
-		return x.Options
-	}
-	return nil
-}
-
-func (x *Response) GetPayload() []byte {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
 var File_api_proto protoreflect.FileDescriptor
 
 const file_api_proto_rawDesc = "" +
 	"\n" +
 	"\tapi.proto\x12\x03api\"\a\n" +
-	"\x05Empty\"\x99\x02\n" +
+	"\x05Empty\"\xcb\x01\n" +
 	"\vCallOptions\x12\x18\n" +
 	"\aService\x18\x01 \x01(\tR\aService\x12&\n" +
 	"\x0eFullMethodName\x18\x02 \x01(\tR\x0eFullMethodName\x12\x18\n" +
 	"\aTimeout\x18\x03 \x01(\x03R\aTimeout\x12\x1c\n" +
 	"\tMetadatas\x18\x04 \x03(\tR\tMetadatas\x12\x12\n" +
 	"\x04Code\x18\x05 \x01(\rR\x04Code\x12\x12\n" +
-	"\x04Desc\x18\x06 \x01(\tR\x04Desc\x12\x16\n" +
-	"\x06Length\x18\a \x01(\rR\x06Length\x12\x1c\n" +
-	"\tAuthority\x18\b \x01(\tR\tAuthority\x12\x16\n" +
-	"\x06Closed\x18\t \x01(\bR\x06Closed\x12\x1a\n" +
-	"\bStreamID\x18\n" +
-	" \x01(\rR\bStreamID\"O\n" +
-	"\aRequest\x12*\n" +
-	"\aOptions\x18\x01 \x01(\v2\x10.api.CallOptionsR\aOptions\x12\x18\n" +
-	"\aPayload\x18\x02 \x01(\fR\aPayload\"P\n" +
-	"\bResponse\x12*\n" +
-	"\aOptions\x18\x01 \x01(\v2\x10.api.CallOptionsR\aOptions\x12\x18\n" +
-	"\aPayload\x18\x02 \x01(\fR\aPayloadB\bZ\x06./;apib\x06proto3"
+	"\x04Desc\x18\x06 \x01(\tR\x04Desc\x12\x1a\n" +
+	"\bStreamID\x18\a \x01(\rR\bStreamIDB\bZ\x06./;apib\x06proto3"
 
 var (
 	file_api_proto_rawDescOnce sync.Once
@@ -314,21 +176,17 @@ func file_api_proto_rawDescGZIP() []byte {
 	return file_api_proto_rawDescData
 }
 
-var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_api_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_api_proto_goTypes = []any{
 	(*Empty)(nil),       // 0: api.Empty
 	(*CallOptions)(nil), // 1: api.CallOptions
-	(*Request)(nil),     // 2: api.Request
-	(*Response)(nil),    // 3: api.Response
 }
 var file_api_proto_depIdxs = []int32{
-	1, // 0: api.Request.Options:type_name -> api.CallOptions
-	1, // 1: api.Response.Options:type_name -> api.CallOptions
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0, // [0:0] is the sub-list for method output_type
+	0, // [0:0] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_init() }
@@ -342,7 +200,7 @@ func file_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_rawDesc), len(file_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

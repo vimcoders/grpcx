@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/mem"
 )
 
 const (
@@ -74,7 +73,7 @@ type RoundTripper interface {
 	// body the caller already has, not an object to encode, and the reply comes
 	// back as the bytes the peer sent. The caller owns the returned Buffer and
 	// frees it; the payload passed in is free to reuse once RoundTrip returns.
-	RoundTrip(context.Context, []byte, ...CallOption) (mem.Buffer, error)
+	RoundTrip(context.Context, []byte, ...CallOption) (Buffer, error)
 	// Ping sends an empty request to keep the connection from hitting the read
 	// deadline.
 	Ping(context.Context) error
@@ -90,10 +89,10 @@ type Sender interface {
 }
 
 // Recver reads one frame at a time with the length header already stripped.
-// The buffer is owned by the caller; package callers return it to the pool with
-// putmbuf.
+// The buffer is owned by the caller, and its Free returns it to the pool; a
+// zero-length frame comes back as an empty Buffer rather than nil.
 type Recver interface {
-	Recv() ([]byte, error)
+	Recv() (Buffer, error)
 }
 
 // SendCloser is a Sender that also closes the connection. Frames still held in
@@ -130,3 +129,14 @@ type Channel interface {
 // ServerOptions implements it, so a Server can embed it and keep
 // RegisterService a promoted method without owning a field for it.
 type ServiceRegistrar = grpc.ServiceRegistrar
+
+// Buffer is one frame payload and the right to free it: ReadOnlyData is the
+// bytes as they arrived, Free returns the storage to the pool. Free is not
+// idempotent — the value carries no reference count — so a Buffer has exactly one
+// owner at a time and is freed exactly once. RoundTrip hands the reply over to
+// the caller under that rule; the server side frees a buffer it took off a
+// connection as soon as the handler is done with it.
+type Buffer interface {
+	Free()
+	ReadOnlyData() []byte
+}

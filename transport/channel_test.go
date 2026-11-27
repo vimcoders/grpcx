@@ -117,10 +117,11 @@ func TestChannelSendMapsAWriteFailureToUnavailable(t *testing.T) {
 	_ = cli.Close()
 }
 
-// TestChannelRecvReturnsNilForZeroLengthFrame pins the meaning of a zero-length
-// frame: it is delivered as a nil body, which is how the server answers a call
-// with no payload.
-func TestChannelRecvReturnsNilForZeroLengthFrame(t *testing.T) {
+// TestChannelRecvReturnsAnEmptyBuffer pins the meaning of a zero-length frame:
+// it is delivered as a Buffer with no bytes, which is how the server answers a
+// call with no payload. The empty buffer is still freed by the reader — the call
+// is a no-op on the pool — so no reader has to guard against nil.
+func TestChannelRecvReturnsAnEmptyBuffer(t *testing.T) {
 	cliConn, srvConn := net.Pipe()
 	cli := newChannel(cliConn)
 	defer func() { _ = cli.Close() }()
@@ -132,9 +133,37 @@ func TestChannelRecvReturnsNilForZeroLengthFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if body != nil {
-		t.Errorf("Recv returned %v, want nil", body)
+	if body == nil {
+		t.Fatal("Recv returned nil, want an empty Buffer")
 	}
+	if got := len(body.ReadOnlyData()); got != 0 {
+		t.Errorf("Recv returned %d bytes, want an empty frame", got)
+	}
+	body.Free()
+}
+
+// TestChannelRecvHandsBackAPooledBuffer covers the ownership of a real frame: the
+// payload is at least the announced size and its Free returns it to the pool, so
+// the reader does not have to know anything about the pool to release a frame.
+func TestChannelRecvHandsBackAPooledBuffer(t *testing.T) {
+	cliConn, srvConn := net.Pipe()
+	cli := newChannel(cliConn)
+	defer func() { _ = cli.Close() }()
+	srv := newChannel(srvConn)
+	defer func() { _ = srv.Close() }()
+
+	go func() { _ = srv.Send([]byte("payload")) }()
+	body, err := cli.Recv()
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if got := string(body.ReadOnlyData()); got != "payload" {
+		t.Errorf("Recv carried %q, want payload", got)
+	}
+	if cap(body.ReadOnlyData()) < len("payload") {
+		t.Errorf("cap = %d, want at least the frame length", cap(body.ReadOnlyData()))
+	}
+	body.Free()
 }
 
 // TestChannelRecvRejectsOversizedFrame covers a peer that announces more than

@@ -16,7 +16,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/mem"
 )
 
 // echoServer implements the generated echo service on top of grpcx.
@@ -27,6 +26,13 @@ type echoServer struct {
 func (e *echoServer) Echo(_ context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
 	return &api.EchoResponse{Message: req.Message + "!"}, nil
 }
+
+// staticBuffer is the fixed answer recordingRT hands back: a Buffer over a
+// literal reply. Free is a no-op because the bytes never came out of a pool.
+type staticBuffer []byte
+
+func (b staticBuffer) Free()                {}
+func (b staticBuffer) ReadOnlyData() []byte { return b }
 
 // recordingRT stands in for a backend transport: it answers RoundTrip with a
 // fixed response and remembers what it was handed — the method of an Invoke, and
@@ -47,7 +53,7 @@ func (r *recordingRT) Invoke(_ context.Context, method string, _, _ any, _ ...gr
 	return nil
 }
 
-func (r *recordingRT) RoundTrip(_ context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
+func (r *recordingRT) RoundTrip(_ context.Context, p []byte, opts ...CallOption) (Buffer, error) {
 	r.roundTrips.Add(1)
 	if p != nil {
 		r.lastPayload.Store(&p)
@@ -56,7 +62,7 @@ func (r *recordingRT) RoundTrip(_ context.Context, p []byte, opts ...CallOption)
 	if r.rtErr != nil {
 		return nil, r.rtErr
 	}
-	return mem.SliceBuffer("reply"), nil
+	return staticBuffer("reply"), nil
 }
 
 func (r *recordingRT) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
@@ -216,6 +222,7 @@ func TestRoundTripPicksWithoutNamingAMethod(t *testing.T) {
 	if got := string(buf.ReadOnlyData()); got != "reply" {
 		t.Errorf("payload = %q, want reply", got)
 	}
+	buf.Free()
 }
 
 // TestRoundTripReportsAPickError covers the pick failing: the error reaches the

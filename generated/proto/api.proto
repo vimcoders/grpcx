@@ -12,18 +12,5 @@ message CallOptions {
   repeated string Metadatas = 4;
   uint32 Code = 5;
   string Desc = 6;
-  uint32 Length = 7;
-  string Authority = 8;
-  bool Closed = 9;
-  uint32 StreamID = 10;
-}
-
-message Request {
-  CallOptions Options = 1;
-  bytes Payload = 2;
-}
-
-message Response {
-  CallOptions Options = 1;
-  bytes Payload = 2;
+  uint32 StreamID = 7;
 }

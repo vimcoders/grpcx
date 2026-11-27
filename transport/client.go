@@ -32,7 +32,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/mem"
 )
 
 // Option configures the transport Options.
@@ -218,7 +217,7 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 		if err != nil {
 			return err
 		}
-		putmbuf(p)
+		defer p.Free()
 		return nil
 	}
 	return s.Handle(ctx, recv, WithCallOptions(options))
@@ -264,7 +263,7 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 		Sender:       c.SendCloser,
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
-		c:            make(chan *api.Response, 1),
+		c:            make(chan *reply, 1),
 		codec:        c.codec,
 	}
 	c.streams[s.id] = &s
@@ -294,37 +293,28 @@ func (c *client) getStream(sid uint32) *clientStream {
 	return c.streams[sid]
 }
 
-// Invoke performs one unary call: it opens a stream, sends the request with
-// the collected metadata and deadline, then waits for the reply. The
-// grpc.CallOption values are accepted for interface compatibility and ignored:
-// metadata and the deadline travel through ctx. The header carries a timeout
-// only when ctx has a deadline; without one the server falls back to its own
-// WithServerTimeout value, while the stream itself still runs under
-// WithReadTimeout. A reply whose status code is not OK comes back as a
-// status error carrying that code and its description.
+// Invoke performs one unary call: it encodes req, hands the bytes to RoundTrip,
+// then decodes the reply into reply. Encoding and decoding are the only work done
+// here — the request header, the stream id, the caller deadline and the status
+// check all belong to RoundTrip. The grpc.CallOption values are accepted for
+// interface compatibility and ignored: metadata and the deadline travel through
+// ctx.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
-	info := CallOptions{
-		FullMethodName: method,
-	}
-	if medatas, ok := metadata.GetMetadata(ctx); ok {
-		for k, v := range medatas {
-			info.Metadatas = append(info.Metadatas, k, v)
-		}
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		info.Timeout = time.Until(dl).Milliseconds()
-	}
-	s, err := c.createStream(ctx)
+	b, err := c.codec.Marshal(req)
 	if err != nil {
 		return err
 	}
-	// The half-close is best effort: a failure to send it is already covered by
-	// whatever error the call returns.
-	defer func() { _ = s.CloseSend() }()
-	if err := s.Send(req, &info); err != nil {
+	response, err := c.RoundTrip(ctx, b, &CallOptions{
+		FullMethodName: method,
+	})
+	if err != nil {
 		return err
 	}
-	return s.RecvMsg(reply)
+	defer response.Free()
+	if err := c.codec.Unmarshal(response.ReadOnlyData(), reply); err != nil {
+		return err
+	}
+	return nil
 }
 
 // RoundTrip sends a bare payload frame on a fresh stream and returns the reply
@@ -336,19 +326,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // appended to the header pairs after whatever opts already carry. A reply whose
 // status code is not OK comes back as a status error carrying that code and its
 // description instead of a Buffer.
-func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
-	var options api.CallOptions
-	for _, opt := range opts {
-		opt.apply(&options)
-	}
-	if dl, ok := ctx.Deadline(); ok {
-		options.Timeout = time.Until(dl).Milliseconds()
-	}
-	if medatas, ok := metadata.GetMetadata(ctx); ok {
-		for k, v := range medatas {
-			options.Metadatas = append(options.Metadatas, k, v)
-		}
-	}
+func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (Buffer, error) {
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
@@ -356,30 +334,49 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (m
 	// The half-close is best effort: a failure to send it is already covered by
 	// whatever error the call returns.
 	defer func() { _ = s.CloseSend() }()
-	options.StreamID = s.id
-	h, err := encoding.Marshal(&options)
+	in := api.CallOptions{}
+	for _, o := range opts {
+		o.apply(&in)
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		in.Timeout = time.Until(dl).Milliseconds()
+	}
+	if medatas, ok := metadata.GetMetadata(ctx); ok {
+		for k, v := range medatas {
+			in.Metadatas = append(in.Metadatas, k, v)
+		}
+	}
+	// Written last, after every option was applied, so a caller cannot route
+	// frames to another stream: the id this transport allocated is the only one
+	// the peer will see.
+	in.StreamID = s.id
+	h, err := encoding.Marshal(&in)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.Sender.Send(h, p); err != nil {
 		return nil, err
 	}
-	resp, err := s.recv()
+	reply, err := s.recv()
 	if err != nil {
 		return nil, err
 	}
-	// A failed call arrives as a zero-length payload frame — the peer answers
-	// with api.Empty — so resp.Payload is nil here and there is no pooled buffer
-	// to hand back.
-	if code := codes.Code(resp.Options.Code); code != codes.OK {
-		return nil, status.Error(code, resp.Options.Desc)
+	var out api.CallOptions
+	if reply.CallOption != nil {
+		reply.apply(&out)
 	}
-	// mem.NewBuffer hands the slice back to the pool on Free unless the buffer is
-	// too small to keep: the pool's smallest tier is 256B and the next one is 4KB,
-	// so a reply just above 256B already clears the 1KB pooling threshold. Only a
-	// reply of 256 bytes or less comes back as a SliceBuffer whose Free is a no-op
-	// — small enough that the pool would have dropped it anyway.
-	return mem.NewBuffer(&resp.Payload, buffers), nil
+	// A failed call carries no payload the caller wants — the peer answers with
+	// api.Empty — so the buffer goes back to the pool here and the caller only
+	// gets the status error.
+	if code := codes.Code(out.Code); code != codes.OK {
+		reply.Free()
+		return nil, status.Error(code, out.Desc)
+	}
+	// The reply buffer is the caller's from here on. Free hands it to the pool
+	// unless it is too small to keep: the pool drops a buffer below its 1KB
+	// pooling threshold, so a small reply costs nothing extra on top of the
+	// allocation that already happened.
+	return reply.Buffer, nil
 }
 
 // Ping keeps the connection active by opening a stream, sending an empty

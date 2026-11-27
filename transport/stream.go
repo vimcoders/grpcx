@@ -32,11 +32,20 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+// reply is one response frame as it comes off the wire: the header options and
+// the payload travel together, because the caller needs the status and the bytes
+// at the same point in time. Buffer is embedded so Free and ReadOnlyData reach
+// whoever takes the frame out of the receive slot.
+type reply struct {
+	CallOption
+	Buffer
+}
+
 // clientStream is the client-side state of one call: the stream id, the
 // connection that carries it, the receive slot and the cleanup hooks. It embeds
 // grpc.ClientStream so the generated stubs and the interceptor chain see the
 // surface they are typed against. SendMsg, RecvMsg, Context and CloseSend are
-// implemented here, plus grpcx's own synchronous Send used by Invoke. Header and
+// implemented here, plus grpcx's own synchronous Send used by Ping. Header and
 // Trailer are not: they fall through to the embedded interface, which is never
 // assigned, and would panic if called.
 type clientStream struct {
@@ -44,7 +53,7 @@ type clientStream struct {
 	Sender
 	ctx          context.Context
 	id           uint32
-	c            chan *api.Response
+	c            chan *reply
 	cancel       context.CancelFunc
 	deleteStream func(id uint32)
 	codec        encoding.Codec
@@ -62,9 +71,8 @@ func (s *clientStream) CloseSend() error {
 		if s.deleteStream != nil {
 			s.deleteStream(s.id)
 		}
-		// TODO: send the Closed frame once streaming lands.
-		// opt := CallOptions{Closed: true}
-		// _ = s.Send(&api.Empty{}, &opt)
+		// TODO: send an end-of-stream frame once streaming lands and the header
+		// grows a flag for it.
 	})
 	return nil
 }
@@ -95,12 +103,16 @@ func (s *clientStream) RecvMsg(m any) error {
 	if err != nil {
 		return err
 	}
-	defer putmbuf(reply.Payload)
-	code := codes.Code(reply.Options.Code)
-	if code != codes.OK {
-		return status.Error(code, reply.Options.Desc)
+	defer reply.Free()
+	var options api.CallOptions
+	if reply.CallOption != nil {
+		reply.apply(&options)
 	}
-	if err := s.codec.Unmarshal(reply.Payload, m); err != nil {
+	code := codes.Code(options.Code)
+	if code != codes.OK {
+		return status.Error(code, options.Desc)
+	}
+	if err := s.codec.Unmarshal(reply.ReadOnlyData(), m); err != nil {
 		return err
 	}
 	return nil
@@ -125,27 +137,27 @@ func (s *clientStream) Context() context.Context {
 // parking it in a slot nobody will read, and an occupied slot drops it the same
 // way.
 func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
-	var options api.CallOptions
-	for _, v := range opts {
-		v.apply(&options)
+	var opt api.CallOptions
+	for _, o := range opts {
+		o.apply(&opt)
 	}
 	p, err := recv.Recv()
 	if err != nil {
 		return err
 	}
-	response := &api.Response{
-		Options: &options,
-		Payload: p,
+	response := &reply{
+		CallOption: WithCallOptions(&opt),
+		Buffer:     p,
 	}
 	if s.ctx.Err() != nil {
-		putmbuf(p)
+		defer p.Free()
 		return s.Close()
 	}
 	select {
 	case s.c <- response:
 		return nil
 	default:
-		putmbuf(p)
+		defer p.Free()
 		return s.Close()
 	}
 }
@@ -157,7 +169,7 @@ func (s *clientStream) Handle(ctx context.Context, recv Recver, opts ...CallOpti
 // deadline expires, or when Close cancels every live stream while it walks the
 // table. The closed-slot branch is a guard only: nothing closes the slot today,
 // so a recv parked here is woken by the context, never by the slot.
-func (s *clientStream) recv() (*api.Response, error) {
+func (s *clientStream) recv() (*reply, error) {
 	select {
 	case <-s.ctx.Done():
 		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
@@ -192,9 +204,6 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
 	opts.FullMethodName = cmp.Or(c.FullMethodName, opts.FullMethodName)
 	opts.Service = cmp.Or(c.Service, opts.Service)
-	opts.Length = cmp.Or(c.Length, opts.Length)
-	opts.Authority = cmp.Or(c.Authority, opts.Authority)
-	opts.Closed = cmp.Or(c.Closed, opts.Closed)
 	opts.Code = cmp.Or(c.Code, opts.Code)
 	opts.Desc = cmp.Or(c.Desc, opts.Desc)
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
@@ -209,9 +218,9 @@ func decodeCallOptions(recv Recver) (*api.CallOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer putmbuf(p)
+	defer p.Free()
 	var header api.CallOptions
-	if err := encoding.Unmarshal(p, &header); err != nil {
+	if err := encoding.Unmarshal(p.ReadOnlyData(), &header); err != nil {
 		return nil, err
 	}
 	return &header, nil
@@ -224,8 +233,6 @@ func WithCallOptions(readonly *api.CallOptions) CallOption {
 	return &CallOptions{
 		FullMethodName: readonly.FullMethodName,
 		Service:        readonly.Service,
-		Length:         readonly.Length,
-		Authority:      readonly.Authority,
 		Timeout:        readonly.Timeout,
 		Metadatas:      readonly.Metadatas,
 		Code:           readonly.Code,
@@ -270,7 +277,7 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	if err != nil {
 		return err
 	}
-	defer putmbuf(p)
+	defer p.Free()
 	codec := d.codec
 	metadatas := metadata.Pairs(options.Metadatas...)
 	timeout := min(cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout), defaultTimeout)
@@ -278,7 +285,7 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 	defer cancel()
 	info := &CallOptions{Code: uint32(codes.OK)}
 	s := sender{Codec: d.codec, Sender: d.Sender}
-	dec := func(in any) error { return codec.Unmarshal(p, in) }
+	dec := func(in any) error { return codec.Unmarshal(p.ReadOnlyData(), in) }
 	defer func() {
 		if r := recover(); r != nil {
 			info.Code, info.Desc = uint32(codes.Internal), fmt.Sprintf("handler panic: %v", r)
@@ -318,7 +325,7 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 	if err != nil {
 		return err
 	}
-	defer putmbuf(p)
+	defer p.Free()
 	s := sender{Codec: e.Codec, Sender: e.Sender}
 	code, desc := uint32(codes.Unimplemented), options.FullMethodName
 	return s.send(options.StreamID, &api.Empty{}, &CallOptions{Code: code, Desc: desc})

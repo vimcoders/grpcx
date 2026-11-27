@@ -11,7 +11,6 @@ import (
 	"github.com/vimcoders/grpcx/transport"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/mem"
 )
 
 // CallOption is transport.CallOption, re-exported so a caller that only relays
@@ -25,11 +24,17 @@ type CallOption = transport.CallOption
 // for the same reason: naming the type should not cost an import.
 type CallOptions = transport.CallOptions
 
+// Buffer is transport.Buffer, the frame payload RoundTrip hands back and the
+// right to free it. Re-exported for the same reason as the two types above: a
+// caller that relays bytes should not have to name the transport package to give
+// the buffer back.
+type Buffer = transport.Buffer
+
 // ClientConnInterface is the client-side connection: unary and framed calls
 // plus Close.
 type ClientConnInterface interface {
 	grpc.ClientConnInterface
-	RoundTrip(context.Context, []byte, ...CallOption) (mem.Buffer, error)
+	RoundTrip(context.Context, []byte, ...CallOption) (Buffer, error)
 	io.Closer
 }
 
@@ -133,7 +138,7 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // endpoint is equally eligible and the method only travels as frame content. The
 // reply comes back as the bytes the backend wrote: how to interpret them is the
 // caller's business, not this client's.
-func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (mem.Buffer, error) {
+func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (Buffer, error) {
 	rt, err := c.Pick(ctx, balancer.PickInfo{})
 	if err != nil {
 		return nil, err

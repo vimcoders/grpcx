@@ -69,15 +69,15 @@ func (f *fakeSender) sent() [][]byte {
 }
 
 // fakeRecver hands out its frames in order, then err (io.EOF when unset). Its
-// frames are pooled buffers because every reader returns what it reads with
-// putmbuf.
+// frames are Buffer values because every reader gives back what it read with
+// Free; a test that cares about that can pass a countingBuffer instead.
 type fakeRecver struct {
 	mu     sync.Mutex
-	frames [][]byte
+	frames []Buffer
 	err    error
 }
 
-func (f *fakeRecver) Recv() ([]byte, error) {
+func (f *fakeRecver) Recv() (Buffer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.frames) == 0 {
@@ -118,10 +118,38 @@ func (c *countingCodec) Unmarshal(p []byte, msg any) error {
 
 // pooledPayload copies b into a pooled buffer, the way the channel hands a frame
 // to its reader.
-func pooledPayload(b []byte) []byte {
+func pooledPayload(b []byte) defaultBuffer {
 	p := getmbuf(len(b))
 	copy(p[:len(b)], b)
 	return p[:len(b)]
+}
+
+// countingBuffer is a Buffer that counts its Free calls, so a test can prove the
+// side that took a frame off a connection gave it back exactly once.
+type countingBuffer struct {
+	data  []byte
+	mu    sync.Mutex
+	freed int
+}
+
+func (b *countingBuffer) Free() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.freed++
+}
+
+func (b *countingBuffer) ReadOnlyData() []byte { return b.data }
+
+func (b *countingBuffer) freeCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.freed
+}
+
+// countingPayload wraps b in a countingBuffer, for a test that needs to know
+// whether a frame was freed.
+func countingPayload(b []byte) *countingBuffer {
+	return &countingBuffer{data: append([]byte(nil), b...)}
 }
 
 // mustMarshal marshals m with the package codec.
@@ -135,13 +163,13 @@ func mustMarshal(t *testing.T, m any) []byte {
 }
 
 // headerFrame is a header ready to be read by fakeRecver.
-func headerFrame(t *testing.T, opts *api.CallOptions) []byte {
+func headerFrame(t *testing.T, opts *api.CallOptions) defaultBuffer {
 	t.Helper()
 	return pooledPayload(mustMarshal(t, opts))
 }
 
 // payloadFrame is a payload ready to be read by fakeRecver.
-func payloadFrame(t *testing.T, m any) []byte {
+func payloadFrame(t *testing.T, m any) defaultBuffer {
 	t.Helper()
 	return pooledPayload(mustMarshal(t, m))
 }
@@ -201,7 +229,7 @@ func newStreamUnderTest(sender SendCloser) (*clientStream, *atomic.Int32) {
 	s := &clientStream{
 		ctx:    ctx,
 		id:     7,
-		c:      make(chan *api.Response, 1),
+		c:      make(chan *reply, 1),
 		cancel: cancel,
 		deleteStream: func(uint32) {
 			deleted.Add(1)
@@ -283,11 +311,9 @@ func newClientOnSender(t *testing.T, respond func(*clientStream, *api.CallOption
 // slot exactly the way clientStream.Handle does once the frame is off the wire.
 func replyOnSlot(code codes.Code, desc string) func(*clientStream, *api.CallOptions, []byte) error {
 	return func(s *clientStream, _ *api.CallOptions, payload []byte) error {
-		reply := make([]byte, len(payload))
-		copy(reply, payload)
-		s.c <- &api.Response{
-			Options: &api.CallOptions{Code: uint32(code), Desc: desc},
-			Payload: reply,
+		s.c <- &reply{
+			CallOption: WithCallOptions(&api.CallOptions{Code: uint32(code), Desc: desc}),
+			Buffer:     pooledPayload(payload),
 		}
 		return nil
 	}
@@ -303,9 +329,9 @@ func replyEcho(t *testing.T, code codes.Code, desc string) func(*clientStream, *
 			return err
 		}
 		body := mustMarshal(t, &api.EchoResponse{Message: req.Message + "!"})
-		s.c <- &api.Response{
-			Options: &api.CallOptions{Code: uint32(code), Desc: desc},
-			Payload: body,
+		s.c <- &reply{
+			CallOption: WithCallOptions(&api.CallOptions{Code: uint32(code), Desc: desc}),
+			Buffer:     pooledPayload(body),
 		}
 		return nil
 	}

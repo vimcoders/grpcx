@@ -29,6 +29,16 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
+type defaultBuffer []byte
+
+func (e defaultBuffer) Free() {
+	putmbuf(e)
+}
+
+func (e defaultBuffer) ReadOnlyData() []byte {
+	return e
+}
+
 // buffers is the process-wide buffer pool every frame payload is allocated
 // from, so a payload is recycled instead of allocated per call. The pool tops
 // out at its largest size class (1MB); a frame above that is allocated fresh.
@@ -36,7 +46,7 @@ var buffers = mem.DefaultBufferPool()
 
 // getmbuf returns a buffer from the pool, guaranteed to be at least size bytes
 // long. The pool rounds up to its own size classes.
-func getmbuf(size int) []byte {
+func getmbuf(size int) defaultBuffer {
 	// we can't use the standard New method on pool because we want to allocate
 	// based on size.
 	return *buffers.Get(size)
@@ -93,9 +103,10 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 // inside the protobuf header frame that Recv returns first. Only the header read
 // is armed with readTimeout: the payload read shares that deadline, so a large
 // payload arriving slowly spends the rest of the same budget. The payload comes
-// from the pool and the caller must putmbuf it. A zero-length frame returns a nil
-// payload.
-func (ch *channel) Recv() ([]byte, error) {
+// from the pool and the caller owns it: Free returns it. A zero-length frame still
+// returns a Buffer — an empty one — so every call gets something to free and none
+// has to nil-check.
+func (ch *channel) Recv() (Buffer, error) {
 	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
 
 	if err := ch.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
@@ -115,13 +126,13 @@ func (ch *channel) Recv() ([]byte, error) {
 	if h > 0 {
 		p := getmbuf(int(h))
 		if _, err := io.ReadFull(ch.br, p); err != nil {
-			putmbuf(p)
+			p.Free()
 			return nil, err
 		}
 		return p, nil
 	}
 
-	return nil, nil
+	return &defaultBuffer{}, nil
 }
 
 // Send writes the given byte slices as one or more frames, each prefixed with

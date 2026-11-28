@@ -160,17 +160,15 @@ func TestWithServerBufSizeChoosesTheCodec(t *testing.T) {
 		}
 	})
 	t.Run("negative", func(t *testing.T) {
+		// A negative n is dropped before WithBufSize runs, so the default
+		// threshold and the pooled codec both survive: batching stays off and
+		// proto replies keep coming out of the pool.
 		so := serverOptions(WithServerBufSize(-1))
-		if so.bufsize != -1 {
-			t.Fatalf("bufsize = %d, want -1 stored as given", so.bufsize)
+		if so.bufsize != 0 {
+			t.Fatalf("bufsize = %d, want the default 0 kept", so.bufsize)
 		}
-		// WithBufSize stores the value as given and Send compares the pending
-		// byte count against it, so a negative threshold never queues a frame:
-		// batching is off. The Codec branch here checks only == 0, so a negative
-		// value still installs the unpooled codec, which contradicts the
-		// function's own comment and wastes the pool on every proto reply.
-		if _, ok := so.Codec.(*codec); !ok {
-			t.Errorf("Codec is %T, want *codec as the current branch builds it", so.Codec)
+		if _, ok := so.Codec.(*defaultCodec); !ok {
+			t.Errorf("Codec is %T, want *defaultCodec", so.Codec)
 		}
 	})
 }

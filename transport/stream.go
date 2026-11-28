@@ -46,10 +46,10 @@ type reply struct {
 // grpc.ClientStream so the generated stubs and the interceptor chain see the
 // surface they are typed against.
 //
-// SendMsg, RecvMsg, Context and CloseSend are implemented here, plus grpcx's
-// own synchronous Send used by Ping. Header and Trailer are not: they fall
-// through to the embedded interface, which is never assigned, and would panic
-// if called.
+// Only Context and CloseSend are implemented here, plus the internal recv.
+// SendMsg, RecvMsg, Header and Trailer fall through to the embedded interface,
+// which is never assigned, and would panic if called. Requests are written by
+// client.RoundTrip through the embedded Sender, not by a method on this type.
 type clientStream struct {
 	grpc.ClientStream
 	Sender
@@ -58,7 +58,6 @@ type clientStream struct {
 	c            chan *reply
 	cancel       context.CancelFunc
 	deleteStream func(id uint32)
-	codec        encoding.Codec
 	sync.Once
 }
 
@@ -91,50 +90,13 @@ func (s *clientStream) Close() error {
 	return nil
 }
 
-// SendMsg marshals m and writes it as one request frame, without extra call
-// options. It is the grpc.ClientStream shape of Send.
-func (s *clientStream) SendMsg(m any) error {
-	send := sender{Codec: s.codec, Sender: s.Sender}
-	return send.send(s.id, m)
-}
-
-// RecvMsg waits for the reply frame, checks its code and unmarshals its payload
-// into m. The payload buffer is freed here, whatever the outcome.
-func (s *clientStream) RecvMsg(m any) error {
-	reply, err := s.recv()
-	if err != nil {
-		return err
-	}
-	defer reply.Free()
-	var options api.CallOptions
-	if reply.CallOption != nil {
-		reply.apply(&options)
-	}
-	code := codes.Code(options.Code)
-	if code != codes.OK {
-		return status.Error(code, options.Desc)
-	}
-	if err := s.codec.Unmarshal(reply.ReadOnlyData(), m); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Send marshals m and writes it as one request frame on the stream. The stream
-// id is applied last, so a caller cannot route the frame onto another stream by
-// passing an id of its own.
-func (s *clientStream) Send(m any, opts ...CallOption) error {
-	send := sender{Codec: s.codec, Sender: s.Sender}
-	return send.send(s.id, m, opts...)
-}
-
 // Context returns the stream context, canceled when the stream is closed.
 func (s *clientStream) Context() context.Context {
 	return s.ctx
 }
 
 // Handle reads the response payload frame off the connection and hands it to
-// the waiting RecvMsg through the receive slot.
+// the caller waiting in recv through the receive slot.
 //
 // A call that has already ended — the stream context is done — drops the
 // payload back to the pool, and so does an occupied slot: neither would ever
@@ -217,9 +179,10 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 }
 
 // decodeCallOptions reads the request header frame off recv and returns the
-// header the wire actually carried. Callers use it for dispatch and hand it
-// to WithCallOptions when the handler should see the same metadata and
-// deadline.
+// header the wire actually carried. The header is decoded with the built-in
+// codec of package encoding, not with the codec message bodies use. Callers
+// use it for dispatch and hand it to WithCallOptions when the handler should
+// see the same metadata and deadline.
 func decodeCallOptions(recv Recver) (*api.CallOptions, error) {
 	p, err := recv.Recv()
 	if err != nil {
@@ -249,18 +212,21 @@ func WithCallOptions(readonly *api.CallOptions) CallOption {
 }
 
 // defaultMethodHandler is the server-side view of one unary request: the sender
-// it replies through, the service implementation and the method handler
-// resolved from the service descriptor, plus the interceptor to run. It embeds
-// Options, so the server-side settings apply, the timeout among them.
+// it replies through, the server Codec, the timeout ceiling, the service
+// implementation and the method handler resolved from the descriptor, plus the
+// interceptor to run. It carries Codec and timeout as separate fields rather
+// than embedding Options; the rest of the transport settings belong to the
+// channel, not to a single call.
 //
 // A unary request is a single payload already off the wire, so the handler is
 // called through grpc.MethodHandler with a decode function instead of a
 // grpc.ServerStream. The stream id is not a field: it arrives with the call
-// options the dispatcher hands in, so the reply lands on the stream the request
-// came from.
+// options the dispatcher hands in, and is copied into the reply header, so the
+// reply lands on the stream the request came from.
 type defaultMethodHandler struct {
 	Sender
-	Options
+	Codec
+	timeout  time.Duration
 	imp      any
 	unaryInt grpc.UnaryServerInterceptor
 	Handler  grpc.MethodHandler
@@ -268,13 +234,15 @@ type defaultMethodHandler struct {
 
 // Handle consumes the request payload, applies the call metadata and the
 // deadline, runs the unary interceptor chain over the generated method handler
-// and writes the reply back as one response frame.
+// and writes the reply back as a header frame and a payload frame.
 //
 // The deadline is the first non-zero of the header timeout, WithServerTimeout
 // and defaultTimeout, capped at defaultTimeout: a header that names a timeout
-// wins over the option, and the option can only tighten the ceiling. A handler
-// error is reported in the response header's status code instead of tearing
-// the connection down.
+// wins over the option, and the option can only tighten the ceiling. The
+// request payload is decoded through the server Codec and freed on return. A
+// handler error is reported in the response header's status code instead of
+// tearing the connection down; a panic is recovered the same way with
+// codes.Internal.
 func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	// Nothing below reads Code or Desc back out of options, and the reply status
 	// is built separately in info, so both stay zero: zero is codes.OK, which is
@@ -288,37 +256,36 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 		return err
 	}
 	defer p.Free()
-	codec := d.codec
 	metadatas := metadata.Pairs(options.Metadatas...)
 	timeout := min(cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout), defaultTimeout)
 	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
 	defer cancel()
-	info := &CallOptions{Code: uint32(codes.OK)}
-	s := sender{Codec: d.codec, Sender: d.Sender}
-	dec := func(in any) error { return codec.Unmarshal(p.ReadOnlyData(), in) }
+	info := &CallOptions{Code: uint32(codes.OK), StreamID: options.StreamID}
+	s := sender{Codec: d.Codec, Sender: d.Sender}
+	dec := func(in any) error { return d.Codec.Unmarshal(p, in) }
 	defer func() {
 		if r := recover(); r != nil {
 			info.Code, info.Desc = uint32(codes.Internal), fmt.Sprintf("handler panic: %v", r)
-			_ = s.send(options.StreamID, &api.Empty{}, info)
+			_ = s.send(&api.Empty{}, info)
 		}
 	}()
 	reply, err := d.Handler(d.imp, timeoutCtx, dec, d.unaryInt)
 	if err != nil {
 		info.Code, info.Desc = uint32(status.Code(err)), err.Error()
-		return s.send(options.StreamID, &api.Empty{}, info)
+		return s.send(&api.Empty{}, info)
 	}
 	if timeoutCtx.Err() != nil {
 		info.Code, info.Desc = uint32(codes.DeadlineExceeded), timeoutCtx.Err().Error()
-		return s.send(options.StreamID, &api.Empty{}, info)
+		return s.send(&api.Empty{}, info)
 	}
-	return s.send(options.StreamID, reply, info)
+	return s.send(reply, info)
 }
 
 // empty answers a method the registered service does not expose: an unknown
 // name, or a stream method, which grpcx does not serve.
 type empty struct {
 	Sender
-	encoding.Codec
+	Codec
 }
 
 // Handle still reads the request payload before replying, so the connection
@@ -338,7 +305,7 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 	defer p.Free()
 	s := sender{Codec: e.Codec, Sender: e.Sender}
 	code, desc := uint32(codes.Unimplemented), options.FullMethodName
-	return s.send(options.StreamID, &api.Empty{}, &CallOptions{Code: code, Desc: desc})
+	return s.send(&api.Empty{}, &CallOptions{Code: code, Desc: desc, StreamID: options.StreamID})
 }
 
 // sender writes one message onto the connection as a pair of frames: the
@@ -347,26 +314,32 @@ func (e *empty) Handle(ctx context.Context, recv Recver, opts ...CallOption) err
 // why it carries neither verb in its shape.
 type sender struct {
 	Sender
-	encoding.Codec
+	Codec
 }
 
-// send writes m on stream streamID: it marshals the call options and m
-// separately, then writes the header frame followed by the payload frame, in
-// that order, so the peer stays on a frame boundary. streamID always wins over
-// any id carried inside opts, so a caller cannot route the message elsewhere.
-func (s *sender) send(streamID uint32, m any, opts ...CallOption) error {
+// send writes m as two frames: the call options as the header, then m as the
+// payload, in that order, so the peer stays on a frame boundary. Both are
+// marshalled through the embedded Codec and both are freed when send returns.
+// The stream id travels inside opts; a zero id there leaves the frame
+// unroutable.
+//
+// Freeing on return is only safe when the Codec returns unpooled bytes, which
+// is what codec does. With a defaultCodec under batching, a proto header or
+// body would go back to the pool while its bytes were still in the batch.
+func (s *sender) send(m any, opts ...CallOption) error {
 	options := api.CallOptions{}
 	for _, v := range opts {
 		v.apply(&options)
 	}
-	options.StreamID = streamID
-	h, err := encoding.Marshal(&options)
+	h, err := s.Marshal(&options)
 	if err != nil {
 		return err
 	}
+	defer h.Free()
 	b, err := s.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return s.Sender.Send(h, b)
+	defer b.Free()
+	return s.Sender.Send(h.ReadOnlyData(), b.ReadOnlyData())
 }

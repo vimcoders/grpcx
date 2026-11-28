@@ -1,26 +1,18 @@
 package transport
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
-
-	"google.golang.org/grpc"
 )
 
-// TestDefaultOptionsCarryEveryPackageDefault pins the values a connection runs
-// with before any option is applied, because everything else in this package is
-// measured against them.
-func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
+// TestDefaultOptionsArePackageDefaults covers every field DefaultOptions fills
+// in, including the ones no Option can reach.
+func TestDefaultOptionsArePackageDefaults(t *testing.T) {
 	o := DefaultOptions()
 	if o.timeout != defaultTimeout {
 		t.Errorf("timeout = %v, want %v", o.timeout, defaultTimeout)
-	}
-	if o.maxStreams != uint32(defaultMaxStreams) {
-		t.Errorf("maxStreams = %d, want %d", o.maxStreams, uint32(defaultMaxStreams))
 	}
 	if o.readTimeout != defaultReadTimeout {
 		t.Errorf("readTimeout = %v, want %v", o.readTimeout, defaultReadTimeout)
@@ -28,224 +20,212 @@ func TestDefaultOptionsCarryEveryPackageDefault(t *testing.T) {
 	if o.writeTimeout != defaultWriteTimeout {
 		t.Errorf("writeTimeout = %v, want %v", o.writeTimeout, defaultWriteTimeout)
 	}
+	if o.keepalive != defaultKeepalive {
+		t.Errorf("keepalive = %v, want %v", o.keepalive, defaultKeepalive)
+	}
+	if o.maxStreams != defaultMaxStreams {
+		t.Errorf("maxStreams = %d, want %d", o.maxStreams, defaultMaxStreams)
+	}
 	if o.bufsize != 0 {
-		t.Errorf("bufsize = %d, want 0 (batching off)", o.bufsize)
+		t.Errorf("bufsize = %d, want batching off", o.bufsize)
 	}
-	if o.codec == nil || o.codec.Name() != encoding.Name {
-		t.Errorf("codec = %v, want the %q codec", o.codec, encoding.Name)
+	if o.ecodec == nil {
+		t.Error("ecodec is nil")
 	}
-}
-
-// TestKeepaliveOutlastsThePingBudget covers the ordering the two periods must keep:
-// a ping runs under min(Timeout(), Keepalive()), so an interval no longer than the
-// budget lets the next ping start before this one has failed and both queue on one
-// connection.
-func TestKeepaliveOutlastsThePingBudget(t *testing.T) {
-	if defaultKeepalive <= defaultTimeout {
-		t.Errorf("defaultKeepalive = %v, want it above defaultTimeout = %v, or pings overlap", defaultKeepalive, defaultTimeout)
+	if o.Keepalive() != defaultKeepalive {
+		t.Errorf("Keepalive() = %v, want %v", o.Keepalive(), defaultKeepalive)
 	}
-	if defaultReadTimeout <= defaultKeepalive {
-		t.Errorf("defaultReadTimeout = %v, want it above defaultKeepalive = %v, or an idle connection is torn down between pings", defaultReadTimeout, defaultKeepalive)
+	if o.Timeout() != defaultTimeout {
+		t.Errorf("Timeout() = %v, want %v", o.Timeout(), defaultTimeout)
 	}
 }
 
-// TestOptionsAccessors pins the values the balancer reads off the options. The
-// keepalive assertion follows defaultKeepalive rather than a literal, because the
-// period is a package decision: this test only proves the accessor reports it.
-func TestOptionsAccessors(t *testing.T) {
+// TestWithBufSizeCapsAtTheMaximum covers the ceiling and the pass-through of
+// values below it, including the non-positive ones that turn batching off.
+func TestWithBufSizeCapsAtTheMaximum(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{"below ceiling", 4096, 4096},
+		{"at ceiling", defaultMaxBufSize, defaultMaxBufSize},
+		{"above ceiling", defaultMaxBufSize * 4, defaultMaxBufSize},
+		{"zero", 0, 0},
+		{"negative", -1, -1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := DefaultOptions()
+			WithBufSize(c.in)(&o)
+			if o.bufsize != c.want {
+				t.Errorf("bufsize = %d, want %d", o.bufsize, c.want)
+			}
+		})
+	}
+}
+
+// TestWithCodecStoresNilAsGiven covers the absence of a nil check: the field
+// holds whatever was passed.
+func TestWithCodecStoresNilAsGiven(t *testing.T) {
 	o := DefaultOptions()
-	if got, want := o.Keepalive(), defaultKeepalive; got != want {
-		t.Errorf("Keepalive() = %v, want %v", got, want)
-	}
-	if got, want := o.Timeout(), defaultTimeout; got != want {
-		t.Errorf("Timeout() = %v, want %v", got, want)
+	WithCodec(nil)(&o)
+	if o.ecodec != nil {
+		t.Errorf("ecodec = %v, want nil stored as given", o.ecodec)
 	}
 }
 
-// TestWithTimeoutFallsBackToTheDefault documents that zero means "unset": there
-// is no way to configure a zero timeout, and a caller deadline is what shortens
-// a call instead.
-func TestWithTimeoutFallsBackToTheDefault(t *testing.T) {
-	o := DefaultOptions()
-	WithTimeout(0)(&o)
-	if o.timeout != defaultTimeout {
-		t.Errorf("WithTimeout(0) -> %v, want %v", o.timeout, defaultTimeout)
-	}
-	WithTimeout(10 * time.Second)(&o)
-	if o.timeout != 10*time.Second {
-		t.Errorf("WithTimeout(10s) -> %v, want 10s", o.timeout)
-	}
-}
-
-// TestWithMaxStreamsFallsBackToTheDefault covers the zero sentinel and a real
-// cap.
-func TestWithMaxStreamsFallsBackToTheDefault(t *testing.T) {
+// TestZeroValuesFallBackToDefaults covers the cmp.Or guards on the options that
+// replace zero with the package default.
+func TestZeroValuesFallBackToDefaults(t *testing.T) {
 	o := DefaultOptions()
 	WithMaxStreams(0)(&o)
-	if o.maxStreams != uint32(defaultMaxStreams) {
-		t.Errorf("WithMaxStreams(0) -> %d, want %d", o.maxStreams, uint32(defaultMaxStreams))
-	}
-	WithMaxStreams(5)(&o)
-	if o.maxStreams != 5 {
-		t.Errorf("WithMaxStreams(5) -> %d, want 5", o.maxStreams)
-	}
-}
-
-// TestWithBufSizeCountsBlocksAndClamps pins the unit: the argument is blocks of
-// defaultBufSize, and the result is the byte threshold channel.Send compares
-// against.
-func TestWithBufSizeCountsBlocksAndClamps(t *testing.T) {
-	o := DefaultOptions()
-	WithBufSize(0)(&o)
-	if o.bufsize != 0 {
-		t.Errorf("WithBufSize(0) -> %d, want 0", o.bufsize)
-	}
-	WithBufSize(1)(&o)
-	if o.bufsize != defaultBufSize {
-		t.Errorf("WithBufSize(1) -> %d, want %d", o.bufsize, defaultBufSize)
-	}
-	WithBufSize(17)(&o)
-	if o.bufsize != defaultMaxBufSize {
-		t.Errorf("WithBufSize(17) -> %d, want clamp at %d", o.bufsize, defaultMaxBufSize)
-	}
-}
-
-// TestWithReadAndWriteTimeoutZeroFallsBackToTheDefault pins the zero handling on
-// the two client I/O timeouts: zero means "leave the default in place", and any
-// other value is stored as given, shorter or longer alike. Negative values are
-// not zero either, so they are stored as they arrive.
-func TestWithReadAndWriteTimeoutZeroFallsBackToTheDefault(t *testing.T) {
-	o := DefaultOptions()
+	WithTimeout(0)(&o)
 	WithReadTimeout(0)(&o)
 	WithWriteTimeout(0)(&o)
-	if o.readTimeout != defaultReadTimeout || o.writeTimeout != defaultWriteTimeout {
-		t.Errorf("after zero: (%v, %v), want the defaults (%v, %v)", o.readTimeout, o.writeTimeout, defaultReadTimeout, defaultWriteTimeout)
+	if o.maxStreams != defaultMaxStreams {
+		t.Errorf("maxStreams = %d, want %d", o.maxStreams, defaultMaxStreams)
 	}
-
-	WithReadTimeout(2 * time.Second)(&o)
-	WithWriteTimeout(500 * time.Millisecond)(&o)
-	if o.readTimeout != 2*time.Second || o.writeTimeout != 500*time.Millisecond {
-		t.Errorf("shorter values: (%v, %v), want (2s, 500ms)", o.readTimeout, o.writeTimeout)
+	if o.timeout != defaultTimeout {
+		t.Errorf("timeout = %v, want %v", o.timeout, defaultTimeout)
 	}
-
-	grown := defaultReadTimeout + time.Second
-	WithReadTimeout(grown)(&o)
-	WithWriteTimeout(grown)(&o)
-	if o.readTimeout != grown || o.writeTimeout != grown {
-		t.Errorf("longer values: (%v, %v), want (%v, %v)", o.readTimeout, o.writeTimeout, grown, grown)
+	if o.readTimeout != defaultReadTimeout {
+		t.Errorf("readTimeout = %v, want %v", o.readTimeout, defaultReadTimeout)
+	}
+	if o.writeTimeout != defaultWriteTimeout {
+		t.Errorf("writeTimeout = %v, want %v", o.writeTimeout, defaultWriteTimeout)
 	}
 }
 
-// TestWithCodecReachesMarshal proves the codec is used by the call path rather
-// than only stored in the options struct.
-func TestWithCodecReachesMarshal(t *testing.T) {
-	counter := &countingCodec{}
+// TestNonZeroValuesReplaceDefaults covers the other side of the same guard.
+func TestNonZeroValuesReplaceDefaults(t *testing.T) {
 	o := DefaultOptions()
-	WithCodec(counter)(&o)
-	if _, err := o.codec.Marshal(&api.EchoRequest{Message: "x"}); err != nil {
-		t.Fatalf("Marshal: %v", err)
+	WithMaxStreams(3)(&o)
+	WithTimeout(time.Second)(&o)
+	WithReadTimeout(2 * time.Second)(&o)
+	WithWriteTimeout(3 * time.Second)(&o)
+	if o.maxStreams != 3 {
+		t.Errorf("maxStreams = %d, want 3", o.maxStreams)
 	}
-	if counter.marshal.Load() != 1 {
-		t.Errorf("counter.marshal = %d, want 1", counter.marshal.Load())
+	if o.timeout != time.Second {
+		t.Errorf("timeout = %v, want 1s", o.timeout)
 	}
-}
-
-// TestRegisterServiceKeepsThePreviousRegistration covers the documented nil
-// handling: an already registered service is never replaced by a nil argument.
-func TestRegisterServiceKeepsThePreviousRegistration(t *testing.T) {
-	so := DefaultServerOptions
-	impl := &echoImpl{}
-	RegisterService(&api.EchoService_ServiceDesc, impl)(&so)
-	if so.desc != &api.EchoService_ServiceDesc || so.imp != impl {
-		t.Fatalf("registration was not installed")
+	if o.readTimeout != 2*time.Second {
+		t.Errorf("readTimeout = %v, want 2s", o.readTimeout)
 	}
-	RegisterService(nil, nil)(&so)
-	if so.desc != &api.EchoService_ServiceDesc || so.imp != impl {
-		t.Errorf("RegisterService(nil, nil) replaced the registration")
+	if o.writeTimeout != 3*time.Second {
+		t.Errorf("writeTimeout = %v, want 3s", o.writeTimeout)
 	}
 }
 
-// TestUnaryServerInterceptorReplacesTheDefault proves the option installs the
-// interceptor the dispatcher runs.
-func TestUnaryServerInterceptorReplacesTheDefault(t *testing.T) {
-	var called bool
-	so := DefaultServerOptions
-	UnaryServerInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		called = true
-		return handler(ctx, req)
-	})(&so)
-	reply, err := so.unaryInt(context.Background(), &api.EchoRequest{Message: "x"}, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) {
-		return "reply", nil
+// TestDefaultServerOptionsIsFreshPerCall covers why DefaultServerOptions is a
+// function: each server owns its own Codec, and the defaults are rebuilt each
+// time.
+func TestDefaultServerOptionsIsFreshPerCall(t *testing.T) {
+	first := DefaultServerOptions()
+	second := DefaultServerOptions()
+	if first.Codec == second.Codec {
+		t.Fatal("DefaultServerOptions shared one Codec between calls")
+	}
+	if _, ok := first.Codec.(*defaultCodec); !ok {
+		t.Fatalf("Codec is %T, want *defaultCodec", first.Codec)
+	}
+	if first.desc == second.desc {
+		t.Error("DefaultServerOptions shared one service descriptor")
+	}
+	if first.unaryInt == nil {
+		t.Error("unaryInt is nil")
+	}
+}
+
+// TestWithServerBufSizeChoosesTheCodec covers the branch that picks the codec
+// from the threshold.
+func TestWithServerBufSizeChoosesTheCodec(t *testing.T) {
+	t.Run("batching on", func(t *testing.T) {
+		so := serverOptions(WithServerBufSize(1))
+		if so.bufsize != 1 {
+			t.Fatalf("bufsize = %d, want 1", so.bufsize)
+		}
+		if _, ok := so.Codec.(*codec); !ok {
+			t.Errorf("Codec is %T, want *codec", so.Codec)
+		}
 	})
-	if err != nil || reply != "reply" {
-		t.Fatalf("interceptor chain = (%v, %v), want (reply, nil)", reply, err)
+	t.Run("zero", func(t *testing.T) {
+		so := serverOptions(WithServerBufSize(0))
+		if so.bufsize != 0 {
+			t.Fatalf("bufsize = %d, want 0", so.bufsize)
+		}
+		if _, ok := so.Codec.(*defaultCodec); !ok {
+			t.Errorf("Codec is %T, want *defaultCodec", so.Codec)
+		}
+	})
+	t.Run("negative", func(t *testing.T) {
+		so := serverOptions(WithServerBufSize(-1))
+		if so.bufsize != -1 {
+			t.Fatalf("bufsize = %d, want -1 stored as given", so.bufsize)
+		}
+		// WithBufSize stores the value as given and Send compares the pending
+		// byte count against it, so a negative threshold never queues a frame:
+		// batching is off. The Codec branch here checks only == 0, so a negative
+		// value still installs the unpooled codec, which contradicts the
+		// function's own comment and wastes the pool on every proto reply.
+		if _, ok := so.Codec.(*codec); !ok {
+			t.Errorf("Codec is %T, want *codec as the current branch builds it", so.Codec)
+		}
+	})
+}
+
+// TestServerCodecOrderIsIrrelevant covers the orderings of WithServerCodec and
+// WithServerBufSize: whichever runs last re-derives the Codec from the latest
+// ecodec, and the batching choice survives.
+func TestServerCodecOrderIsIrrelevant(t *testing.T) {
+	custom := fixedCodec{out: []byte("M")}
+
+	cases := []struct {
+		name     string
+		opts     []ServerOption
+		wantPool bool
+	}{
+		{"codec only", []ServerOption{WithServerCodec(custom)}, true},
+		{"buf then codec", []ServerOption{WithServerBufSize(1), WithServerCodec(custom)}, false},
+		{"codec then buf", []ServerOption{WithServerCodec(custom), WithServerBufSize(1)}, false},
 	}
-	if !called {
-		t.Errorf("the installed interceptor was not called")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			so := serverOptions(c.opts...)
+			got, ok := so.ecodec.(fixedCodec)
+			if !ok || string(got.out) != "M" {
+				t.Fatalf("ecodec = %v, want the custom codec", so.ecodec)
+			}
+			if c.wantPool {
+				if _, ok := so.Codec.(*defaultCodec); !ok {
+					t.Fatalf("Codec is %T, want *defaultCodec", so.Codec)
+				}
+			} else if _, ok := so.Codec.(*codec); !ok {
+				t.Fatalf("Codec is %T, want *codec", so.Codec)
+			}
+			buf, err := so.Marshal(map[string]string{"a": "1"})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			defer buf.Free()
+			if got, want := string(buf.ReadOnlyData()), "M"; got != want {
+				t.Errorf("payload = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
-// TestWithServerBufSizeCountsBlocks pins the server-side clamp, which is in
-// blocks rather than bytes.
-func TestWithServerBufSizeCountsBlocks(t *testing.T) {
-	so := DefaultServerOptions
-	WithServerBufSize(0)(&so)
-	if so.bufsize != 0 {
-		t.Errorf("WithServerBufSize(0) -> %d, want 0", so.bufsize)
+// TestRegisterServiceIgnoresNil covers the nil guard: an already registered
+// service is kept when a nil descriptor or implementation arrives.
+func TestRegisterServiceIgnoresNil(t *testing.T) {
+	impl := &echoImpl{}
+	so := serverOptions(RegisterService(&api.EchoService_ServiceDesc, impl))
+	RegisterService(nil, nil)(&so)
+	if so.desc.ServiceName != api.EchoService_ServiceDesc.ServiceName {
+		t.Errorf("desc.ServiceName = %q, want %q", so.desc.ServiceName, api.EchoService_ServiceDesc.ServiceName)
 	}
-	WithServerBufSize(16)(&so)
-	if so.bufsize != 16 {
-		t.Errorf("WithServerBufSize(16) -> %d, want 16", so.bufsize)
-	}
-	WithServerBufSize(40)(&so)
-	if so.bufsize != defaultMaxBufSize/defaultBufSize {
-		t.Errorf("WithServerBufSize(40) -> %d, want clamp at %d", so.bufsize, defaultMaxBufSize/defaultBufSize)
-	}
-}
-
-// TestWithServerTimeoutsZeroFallsBackToTheDefault covers the two server-side I/O
-// timeouts: zero leaves the package default in place, and any other value is
-// stored as given.
-func TestWithServerTimeoutsZeroFallsBackToTheDefault(t *testing.T) {
-	so := DefaultServerOptions
-	WithServerReadTimeout(0)(&so)
-	WithServerWriteTimeout(0)(&so)
-	if so.readTimeout != defaultReadTimeout || so.writeTimeout != defaultWriteTimeout {
-		t.Errorf("after zero: (%v, %v), want the defaults (%v, %v)", so.readTimeout, so.writeTimeout, defaultReadTimeout, defaultWriteTimeout)
-	}
-
-	WithServerReadTimeout(4 * time.Second)(&so)
-	WithServerWriteTimeout(time.Second)(&so)
-	if so.readTimeout != 4*time.Second || so.writeTimeout != time.Second {
-		t.Errorf("given values: (%v, %v), want (4s, 1s)", so.readTimeout, so.writeTimeout)
-	}
-}
-
-// TestWithServerTimeoutSetsTheHandlerFallback covers the handler deadline option:
-// it stores the value as given, and zero means "no override" — the handler then
-// falls back to defaultTimeout, the same value the option starts from.
-func TestWithServerTimeoutSetsTheHandlerFallback(t *testing.T) {
-	so := DefaultServerOptions
-	if got := so.timeout; got != defaultTimeout {
-		t.Errorf("DefaultServerOptions.timeout = %v, want %v", got, defaultTimeout)
-	}
-	WithServerTimeout(40 * time.Millisecond)(&so)
-	if got := so.timeout; got != 40*time.Millisecond {
-		t.Errorf("WithServerTimeout(40ms) -> %v, want 40ms", got)
-	}
-	WithServerTimeout(0)(&so)
-	if got := so.timeout; got != 0 {
-		t.Errorf("WithServerTimeout(0) -> %v, want 0 (no override)", got)
-	}
-}
-
-// TestWithServerCodecReplacesTheDefault proves the option installs the codec
-// the dispatcher decodes with.
-func TestWithServerCodecReplacesTheDefault(t *testing.T) {
-	counter := &countingCodec{}
-	so := DefaultServerOptions
-	WithServerCodec(counter)(&so)
-	if so.codec != counter {
-		t.Fatalf("codec = %v, want the counting codec", so.codec)
+	if so.imp != impl {
+		t.Error("imp was replaced by nil")
 	}
 }

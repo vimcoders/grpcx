@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"cmp"
 	"context"
 	"net"
 	"path"
@@ -18,28 +17,40 @@ import (
 type ServerOption func(c *ServerOptions)
 
 // ServerOptions holds the options for a grpcx server: the registered service
-// descriptor and implementation, the unary interceptor, plus the transport
-// Options shared with the client side.
+// descriptor and implementation, the unary interceptor, the transport Options
+// shared with the client side, and the Codec that encodes replies and decodes
+// requests.
 //
-// It also implements Handler, which is what serves each accepted connection.
-// The built-in handler answers unary methods only, so there is no stream
-// interceptor to configure.
+// Codec is derived state, not an independent setting: WithServerBufSize rebuilds
+// it from Options.ecodec on every call, picking codec when batching is on and
+// defaultCodec when it is off. WithServerCodec leans on that by writing ecodec
+// and then calling WithServerBufSize again.
+//
+// ServerOptions also implements Handler, which is what serves each accepted
+// connection. The built-in handler answers unary methods only, so there is no
+// stream interceptor to configure.
 type ServerOptions struct {
 	Options
 	desc     *grpc.ServiceDesc
 	imp      any
 	unaryInt grpc.UnaryServerInterceptor
+	Codec
 }
 
-// DefaultServerOptions is the default configuration for a grpcx server: the
-// standard transport options, a pass-through unary interceptor and an empty
-// service descriptor.
-var DefaultServerOptions = ServerOptions{
-	Options: DefaultOptions(),
-	unaryInt: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
-		return handler(ctx, req)
-	},
-	desc: &grpc.ServiceDesc{},
+// DefaultServerOptions returns a fresh ServerOptions for every call: the
+// standard transport options, a pass-through unary interceptor, an empty
+// service descriptor and a defaultCodec built from the default ecodec. It is a
+// function rather than a package variable so each server owns its own Codec.
+func DefaultServerOptions() ServerOptions {
+	opt := DefaultOptions()
+	return ServerOptions{
+		Options: opt,
+		unaryInt: func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (reply any, err error) {
+			return handler(ctx, req)
+		},
+		desc:  &grpc.ServiceDesc{},
+		Codec: &defaultCodec{opt.ecodec},
+	}
 }
 
 // UnaryServerInterceptor sets the interceptor that wraps every unary call,
@@ -64,13 +75,20 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	}
 }
 
-// WithServerCodec sets the codec for request and reply bodies on the server
-// side. The call header is always decoded with the built-in codec in package
-// encoding, so a client and a server agree on it whatever each side configured
-// here.
-func WithServerCodec(codec encoding.Codec) ServerOption {
+// WithServerCodec stores c in Options.ecodec and rebuilds the server Codec by
+// re-running WithServerBufSize with the current threshold, so the choice
+// between defaultCodec and codec is re-derived from the new ecodec. Option
+// order does not matter: whichever of the two options runs last leaves a Codec
+// built from the latest ecodec.
+//
+// The request header is decoded with the built-in codec of package encoding
+// whatever this option holds. The reply header is marshalled by the server
+// Codec, so under the default codec it goes out as protobuf while a custom
+// ecodec encodes it as that codec would.
+func WithServerCodec(c encoding.Codec) ServerOption {
 	return func(so *ServerOptions) {
-		so.codec = codec
+		WithCodec(c)(&so.Options)
+		WithServerBufSize(so.bufsize)(so)
 	}
 }
 
@@ -80,7 +98,7 @@ func WithServerCodec(codec encoding.Codec) ServerOption {
 // shares that deadline. Zero falls back to defaultReadTimeout.
 func WithServerReadTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
-		so.readTimeout = cmp.Or(d, defaultReadTimeout)
+		WithReadTimeout(d)(&so.Options)
 	}
 }
 
@@ -90,16 +108,34 @@ func WithServerReadTimeout(d time.Duration) ServerOption {
 // the deadline themselves. Zero falls back to defaultWriteTimeout.
 func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
-		so.writeTimeout = cmp.Or(d, defaultWriteTimeout)
+		WithWriteTimeout(d)(&so.Options)
 	}
 }
 
-// WithServerBufSize caps the send buffer in blocks of defaultBufSize, clamped
-// to defaultMaxBufSize/defaultBufSize. Zero disables batching and makes every
-// Send synchronous.
+// WithServerBufSize applies WithBufSize and then rebuilds the server Codec from
+// Options.ecodec: codec when the threshold is positive, defaultCodec otherwise.
+// Rebuilding on every call is what keeps the Codec in step with whichever of
+// WithServerBufSize and WithServerCodec ran last.
+//
+// With batching on, codec keeps every reply — including the reply header and a
+// proto.Message body — out of the frame pool, so sender.send can free its
+// buffers when it returns without recycling bytes that are still queued for the
+// flush. With batching off, defaultCodec puts proto messages in pool buffers.
+//
+// WithBufSize stores n as given, so a non-positive n writes a non-positive
+// threshold and turns batching off; the Codec rebuilt here is then
+// defaultCodec, which puts the pool back in use for proto messages.
 func WithServerBufSize(n int) ServerOption {
 	return func(so *ServerOptions) {
-		so.bufsize = min(n, defaultMaxBufSize/defaultBufSize)
+		if n < 0 {
+			return
+		}
+		WithBufSize(n)(&so.Options)
+		if so.bufsize == 0 {
+			so.Codec = &defaultCodec{so.ecodec}
+		} else {
+			so.Codec = &codec{so.ecodec}
+		}
 	}
 }
 
@@ -109,12 +145,14 @@ func WithServerBufSize(n int) ServerOption {
 // and zero falls through to the ceiling at use time.
 func WithServerTimeout(d time.Duration) ServerOption {
 	return func(so *ServerOptions) {
-		so.timeout = d
+		WithTimeout(d)(&so.Options)
 	}
 }
 
 // Handle serves the connection until it breaks: it wraps the connection in a
-// channel and dispatches one call at a time through interceptor.
+// channel and dispatches one call at a time through interceptor. The channel is
+// built from bufsize, readTimeout and writeTimeout only; the server Codec is
+// passed to the handlers by interceptor, not to the channel.
 //
 // One call at a time is by design: the wire is a single length-prefixed frame
 // stream per connection, so reads cannot run in parallel without risking a
@@ -137,9 +175,11 @@ func (so *ServerOptions) Handle(ctx context.Context, c net.Conn) error {
 	}
 }
 
-// interceptor reads one request frame, resolves the target method from the
-// header, and dispatches it to the matching unary method handler, handing it the
-// same channel for the request payload and the reply.
+// interceptor reads one request header, resolves the target method from it, and
+// dispatches to the matching unary handler, handing it the same channel for the
+// request payload and the reply. The handler gets the server Codec and only the
+// timeout out of Options: defaultMethodHandler no longer embeds Options, so the
+// other settings stay on the channel.
 //
 // Anything that does not resolve to a registered unary method — an unknown
 // name, or a stream method, which grpcx does not serve — is answered with
@@ -156,14 +196,15 @@ func (so *ServerOptions) interceptor(ctx context.Context, ch Channel) error {
 		}
 		s := &defaultMethodHandler{
 			Sender:   ch,
-			Options:  so.Options,
+			Codec:    so.Codec,
+			timeout:  so.timeout,
 			imp:      so.imp,
 			unaryInt: so.unaryInt,
 			Handler:  v.Handler,
 		}
 		return s.Handle(ctx, ch, WithCallOptions(options))
 	}
-	e := empty{Codec: so.codec, Sender: ch}
+	e := empty{Codec: so.Codec, Sender: ch}
 	return e.Handle(ctx, ch, WithCallOptions(options))
 }
 

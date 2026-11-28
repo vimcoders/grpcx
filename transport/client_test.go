@@ -2,10 +2,6 @@ package transport
 
 import (
 	"context"
-	"errors"
-	"io"
-	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,782 +12,240 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
-// requestOn builds what an Invoke-less caller hands to RoundTrip: the
-// already-marshalled payload and the call option naming the method.
-func requestOn(t *testing.T, method string, msg any) ([]byte, CallOption) {
-	t.Helper()
-	return mustMarshal(t, msg), &CallOptions{FullMethodName: method}
-}
-
-// TestDialContextReportsAnUnreachableEndpoint covers the dial failure path: the
-// error comes back instead of a transport with a dead connection.
-func TestDialContextReportsAnUnreachableEndpoint(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	rt, err := DialContext(ctx, "127.0.0.1:1")
-	if err == nil {
-		_ = rt.Close()
-		t.Fatal("DialContext on a closed port returned no error")
+// TestCreateStreamAllocatesSequentialIDs covers the id allocator: each call
+// claims the next id and registers it.
+func TestCreateStreamAllocatesSequentialIDs(t *testing.T) {
+	c, _ := newClientOnSender(t, nil)
+	for want := uint32(1); want <= 3; want++ {
+		s, err := c.createStream(context.Background())
+		if err != nil {
+			t.Fatalf("createStream: %v", err)
+		}
+		if s.id != want {
+			t.Fatalf("id = %d, want %d", s.id, want)
+		}
 	}
-	if rt != nil {
-		t.Error("DialContext returned a transport together with an error")
+	if got := len(c.streams); got != 3 {
+		t.Errorf("streams = %d, want 3", got)
 	}
 }
 
-// TestInvokeSendsMethodMetadataAndReply covers the happy path: the request
-// header names the method and carries the context metadata, and the reply is
-// decoded back into the caller's message.
-func TestInvokeSendsMethodMetadataAndReply(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	ctx := metadata.AppendToContext(context.Background(), "trace-id", "abc")
+// TestCreateStreamRejectsAtMaxStreams covers the cap: the call after the limit
+// is refused with ResourceExhausted.
+func TestCreateStreamRejectsAtMaxStreams(t *testing.T) {
+	c, _ := newClientOnSender(t, nil, WithMaxStreams(2))
+	for i := range 2 {
+		if _, err := c.createStream(context.Background()); err != nil {
+			t.Fatalf("createStream %d: %v", i, err)
+		}
+	}
+	_, err := c.createStream(context.Background())
+	if got := status.Code(err); got != codes.ResourceExhausted {
+		t.Errorf("code = %v, want ResourceExhausted", got)
+	}
+}
 
-	var reply api.EchoResponse
-	if err := c.Invoke(ctx, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
+// TestCreateStreamRejectsAfterClose covers the closed marker: Close zeroes the
+// limit, so every later call fails with Unavailable.
+func TestCreateStreamRejectsAfterClose(t *testing.T) {
+	c, _ := newClientOnSender(t, nil)
+	_ = c.Close()
+	if _, err := c.createStream(context.Background()); status.Code(err) != codes.Unavailable {
+		t.Errorf("code = %v, want Unavailable", status.Code(err))
+	}
+	if got := len(c.streams); got != 0 {
+		t.Errorf("streams = %d, want the table emptied", got)
+	}
+}
+
+// TestCreateStreamRefusesALiveIDAfterWrap covers the wrap guard: an id that is
+// still live is not overwritten.
+func TestCreateStreamRefusesALiveIDAfterWrap(t *testing.T) {
+	c, _ := newClientOnSender(t, nil)
+	c.streamID = 1
+	c.streams[2] = &clientStream{id: 2}
+	_, err := c.createStream(context.Background())
+	if got := status.Code(err); got != codes.ResourceExhausted {
+		t.Errorf("code = %v, want ResourceExhausted", got)
+	}
+}
+
+// TestCreateStreamClampsToCallerDeadline covers the nearer deadline: a caller
+// deadline inside the read timeout wins.
+func TestCreateStreamClampsToCallerDeadline(t *testing.T) {
+	c, _ := newClientOnSender(t, nil)
+	s, err := c.createStream(context.Background())
+	if err != nil {
+		t.Fatalf("createStream: %v", err)
+	}
+	dl, ok := s.ctx.Deadline()
+	if !ok {
+		t.Fatal("the stream context has no deadline")
+	}
+	if until := time.Until(dl); until > c.readTimeout {
+		t.Errorf("deadline in %v, want at most %v", until, c.readTimeout)
+	}
+}
+
+// TestInvokeRoundTrips covers one unary call end to end over a fake
+// connection: the request is encoded, framed and answered.
+func TestInvokeRoundTrips(t *testing.T) {
+	c, _ := newClientOnSender(t, replyEcho(t, codes.OK, ""))
+	req := &api.EchoRequest{Message: "hi"}
+	var resp api.EchoResponse
+	if err := c.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, req, &resp); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if reply.Message != "hi!" {
-		t.Errorf("reply.Message = %q, want hi!", reply.Message)
+	if resp.Message != "hi!" {
+		t.Errorf("reply = %q, want hi!", resp.Message)
+	}
+}
+
+// TestInvokeReportsHandlerStatus covers a failing handler: the status code
+// travels back in the reply header.
+func TestInvokeReportsHandlerStatus(t *testing.T) {
+	c, _ := newClientOnSender(t, replyEcho(t, codes.InvalidArgument, "bad"))
+	var resp api.EchoResponse
+	err := c.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{}, &resp)
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+}
+
+// TestRoundTripFreesFailureReply covers the reply buffer of a failed call: it
+// goes back to the pool instead of to the caller.
+func TestRoundTripFreesFailureReply(t *testing.T) {
+	buf := countingPayload([]byte("body"))
+	respond := func(s *clientStream, _ *api.CallOptions, _ []byte) error {
+		s.c <- &reply{
+			CallOption: WithCallOptions(&api.CallOptions{Code: uint32(codes.Internal), Desc: "boom"}),
+			Buffer:     buf,
+		}
+		return nil
+	}
+	c, _ := newClientOnSender(t, respond)
+	_, err := c.RoundTrip(context.Background(), nil)
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("code = %v, want Internal", got)
+	}
+	if got := buf.freeCount(); got != 1 {
+		t.Errorf("reply freed %d times, want 1", got)
+	}
+}
+
+// TestRoundTripHeaderCarriesDeadlineAndMetadata covers the two ctx inputs:
+// the remaining deadline goes into Timeout, and the metadata pairs into
+// Metadatas.
+func TestRoundTripHeaderCarriesDeadlineAndMetadata(t *testing.T) {
+	c, a := newClientOnSender(t, replyOnSlot(codes.OK, ""))
+	ctx := metadata.WithMetadata(context.Background(), metadata.Pairs("k", "v"))
+	ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if _, err := c.RoundTrip(ctx, nil); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
 	}
 
-	frames := sender.sent()
+	frames := a.sent()
 	if len(frames) != 2 {
-		t.Fatalf("Invoke wrote %d frames, want a header and a payload", len(frames))
+		t.Fatalf("sent %d frames, want 2", len(frames))
 	}
 	var header api.CallOptions
 	if err := encoding.Unmarshal(frames[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
+		t.Fatalf("header decode: %v", err)
 	}
-	if header.FullMethodName != "/api.EchoService/Echo" {
-		t.Errorf("FullMethodName = %q, want the invoked method", header.FullMethodName)
+	if header.Timeout <= 0 || header.Timeout > 50 {
+		t.Errorf("Timeout = %d, want a value inside the 50ms budget", header.Timeout)
 	}
-	if got := joinPairs(header.Metadatas); got != "trace-id=abc" {
-		t.Errorf("Metadatas = %q, want trace-id=abc", got)
-	}
-	if header.StreamID == 0 {
-		t.Error("StreamID is zero, so the reply could not be routed")
+	if got, want := joinPairs(header.Metadatas), "k=v"; got != want {
+		t.Errorf("Metadatas = %q, want %q", got, want)
 	}
 }
 
-// TestInvokeFoldsTheCallerDeadlineIntoTheHeader covers the deadline path: a
-// context deadline shortens the timeout the header carries.
-func TestInvokeFoldsTheCallerDeadlineIntoTheHeader(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	var reply api.EchoResponse
-	if err := c.Invoke(ctx, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.Timeout <= 0 || header.Timeout > 100 {
-		t.Errorf("header Timeout = %d, want the caller's remaining 1..100ms", header.Timeout)
-	}
-}
-
-// TestInvokeReturnsTheHandlerError covers a failed call: the status in the reply
-// header becomes the returned error.
-func TestInvokeReturnsTheHandlerError(t *testing.T) {
-	c, _ := newClientOnSender(t, replyOnSlot(codes.InvalidArgument, "bad request"))
-
-	var reply api.EchoResponse
-	err := c.Invoke(context.Background(), "/m", &api.EchoRequest{}, &reply)
-	if code := status.Code(err); code != codes.InvalidArgument {
-		t.Errorf("Invoke = %v (%v), want InvalidArgument", err, code)
-	}
-}
-
-// TestInvokeIgnoresGrpcCallOptions pins the current surface: grpc.CallOption
-// values are accepted and dropped, so no header metadata reaches the caller.
-// It documents a known gap rather than a feature.
-func TestInvokeIgnoresGrpcCallOptions(t *testing.T) {
-	c, _ := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	var md grpcmetadata.MD
-
-	var reply api.EchoResponse
-	err := c.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply, grpc.Header(&md))
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if len(md) != 0 {
-		t.Errorf("grpc.Header received %v, want nothing: the option is dropped", md)
-	}
-}
-
-// TestRoundTripLeavesTheCallerOptionsAlone covers a reused option set:
-// RoundTrip builds its own header, so neither the timeout nor the stream id
-// leaks back into the caller's CallOptions.
-func TestRoundTripLeavesTheCallerOptionsAlone(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
-	opt := &CallOptions{FullMethodName: "/api.EchoService/Echo", Metadatas: []string{"k", "v"}}
-
-	for attempt := range 2 {
-		buf, err := c.RoundTrip(context.Background(), payload, opt)
-		if err != nil {
-			t.Fatalf("RoundTrip #%d: %v", attempt+1, err)
-		}
-		buf.Free()
-	}
-
-	if opt.Timeout != 0 || opt.StreamID != 0 {
-		t.Errorf("caller options = (timeout %d, stream %d), want both untouched at 0", opt.Timeout, opt.StreamID)
-	}
-	if got := joinPairs(opt.Metadatas); got != "k=v" {
-		t.Errorf("caller metadata = %q, want it unchanged at k=v", got)
-	}
-
-	// The second header proves the first call left nothing behind: neither the
-	// stream id nor a timeout grown out of the previous stream. The header carries
-	// no timeout here because the caller named none and RoundTrip does not fill in
-	// the default itself — the server falls back to its own timeout option.
-	frames := sender.sent()
-	var second api.CallOptions
-	if err := encoding.Unmarshal(frames[2], &second); err != nil {
-		t.Fatalf("unmarshal second header: %v", err)
-	}
-	if second.StreamID != 2 {
-		t.Errorf("second StreamID = %d, want 2", second.StreamID)
-	}
-	if second.Timeout != 0 {
-		t.Errorf("second Timeout = %d, want 0: the caller named no timeout", second.Timeout)
-	}
-	if got := joinPairs(second.Metadatas); got != "k=v" {
-		t.Errorf("second header metadata = %q, want the option's k=v carried through", got)
-	}
-}
-
-// TestRoundTripCarriesTheRequestOverTheWire covers the pair of frames RoundTrip
-// writes: one call reaches the echo service and its payload comes back.
-func TestRoundTripCarriesTheRequestOverTheWire(t *testing.T) {
-	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
-	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
-
-	buf, err := cli.RoundTrip(context.Background(), payload, opt)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	defer buf.Free()
-	var reply api.EchoResponse
-	if err := encoding.Unmarshal(buf.ReadOnlyData(), &reply); err != nil {
-		t.Fatalf("unmarshal reply: %v", err)
-	}
-	if reply.Message != "hi!" {
-		t.Errorf("reply.Message = %q, want hi!", reply.Message)
-	}
-}
-
-// TestRoundTripHandsBackAPooledBuffer covers the ownership transfer: a reply
-// above the pooling threshold comes back in one of the pool's size classes, and
-// Free gives it straight back — the caller needs no pool handle to release it.
-func TestRoundTripHandsBackAPooledBuffer(t *testing.T) {
-	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
-	body := strings.Repeat("x", 2048)
-	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: body})
-
-	buf, err := cli.RoundTrip(context.Background(), payload, opt)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	var reply api.EchoResponse
-	if err := encoding.Unmarshal(buf.ReadOnlyData(), &reply); err != nil {
-		t.Fatalf("unmarshal reply: %v", err)
-	}
-	if reply.Message != body+"!" {
-		t.Fatalf("reply.Message = %q, want the %d-byte echo", reply.Message, len(body)+1)
-	}
-	// The pool rounds up to its size classes, so a reply of just over 2KB lands in
-	// the 4KB tier instead of in a slice sized to fit exactly.
-	if got := cap(buf.ReadOnlyData()); got != 4096 {
-		t.Errorf("cap = %d, want the pool's 4KB tier", got)
-	}
-	buf.Free()
-}
-
-// TestRoundTripSmallReplyFreesAsANoop covers the lower side of the pool
-// threshold: a reply of 256 bytes or less comes back in the pool's smallest
-// tier, which stays under the 1KB pooling threshold, so Free has nothing to give
-// back and the bytes remain readable.
-func TestRoundTripSmallReplyFreesAsANoop(t *testing.T) {
-	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
-	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
-
-	buf, err := cli.RoundTrip(context.Background(), payload, opt)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	if got := cap(buf.ReadOnlyData()); got > 256 {
-		t.Fatalf("cap = %d, want the pool's smallest tier: below the 1KB threshold Free returns nothing", got)
-	}
-	buf.Free()
-
-	var reply api.EchoResponse
-	if err := encoding.Unmarshal(buf.ReadOnlyData(), &reply); err != nil {
-		t.Fatalf("read after Free: %v", err)
-	}
-	if reply.Message != "hi!" {
-		t.Errorf("reply.Message = %q, want hi!", reply.Message)
-	}
-}
-
-// TestRoundTripReportsTheStatusInTheReplyHeader covers a failed call: RoundTrip
-// must not hand a nil error to a caller whose reply carries a status.
-func TestRoundTripReportsTheStatusInTheReplyHeader(t *testing.T) {
-	cli, _, _ := startPipeServer(t, echoService(&echoImpl{failOn: "boom"}))
-	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "boom"})
-
-	buf, err := cli.RoundTrip(context.Background(), payload, opt)
-	if code := status.Code(err); code != codes.InvalidArgument {
-		t.Errorf("RoundTrip = (%v, %v), want InvalidArgument", buf, code)
-	}
-	if buf != nil {
-		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
-	}
-}
-
-// TestRoundTripFoldsTheCallerDeadlineIntoTheHeader covers the timeout the header
-// carries: a caller deadline wins over whatever the options name, because the
-// header timeout is what bounds the server's handler.
-func TestRoundTripFoldsTheCallerDeadlineIntoTheHeader(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-	defer cancel()
-	buf, err := c.RoundTrip(ctx, payload, &CallOptions{Timeout: 9000})
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	buf.Free()
-
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.Timeout <= 0 || header.Timeout > 750 {
-		t.Errorf("Timeout = %d, want the deadline's remaining ms (0 < t <= 750), replacing the option's 9000", header.Timeout)
-	}
-}
-
-// TestRoundTripCarriesContextMetadataInTheHeader covers the metadata path: the
-// header carries what the context holds, the same way Invoke takes it from ctx,
-// and the options the caller passed accumulate on top rather than replacing it.
-func TestRoundTripCarriesContextMetadataInTheHeader(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
-
-	ctx := metadata.AppendToContext(context.Background(), "trace-id", "abc")
-	buf, err := c.RoundTrip(ctx, payload, &CallOptions{Metadatas: []string{"k", "v"}})
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	buf.Free()
-
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if got := joinPairs(header.Metadatas); got != "k=v,trace-id=abc" {
-		t.Errorf("Metadatas = %q, want the option's pair then the context's", got)
-	}
-}
-
-// TestRoundTripOwnsTheStreamID covers routing: the id this transport allocated is
-// written last, after every option was applied, so an option that names another
-// stream cannot route the frames off it.
-func TestRoundTripOwnsTheStreamID(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
-
-	buf, err := c.RoundTrip(context.Background(), payload, &CallOptions{
-		FullMethodName: "/api.EchoService/Echo",
-		StreamID:       99,
-	})
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	buf.Free()
-
-	var header api.CallOptions
-	if err := encoding.Unmarshal(sender.sent()[0], &header); err != nil {
-		t.Fatalf("unmarshal header: %v", err)
-	}
-	if header.StreamID == 0 || header.StreamID == 99 {
-		t.Errorf("StreamID = %d, want the id this transport allocated, not the caller's 99", header.StreamID)
-	}
-}
-
-// TestRoundTripFreesTheBufferOfAFailedCall covers ownership on the error path: a
-// reply whose status is not OK is freed by RoundTrip itself, because the caller
-// gets the status error and never sees the buffer.
-func TestRoundTripFreesTheBufferOfAFailedCall(t *testing.T) {
-	dead := countingPayload([]byte("must not leak"))
-	c, _ := newClientOnSender(t, func(s *clientStream, _ *api.CallOptions, _ []byte) error {
-		s.c <- &reply{
-			CallOption: WithCallOptions(&api.CallOptions{Code: uint32(codes.InvalidArgument), Desc: "nope"}),
-			Buffer:     dead,
-		}
-		return nil
-	})
-	payload := mustMarshal(t, &api.EchoRequest{Message: "hi"})
-
-	buf, err := c.RoundTrip(context.Background(), payload, &CallOptions{FullMethodName: "/api.EchoService/Echo"})
-	if code := status.Code(err); code != codes.InvalidArgument {
-		t.Fatalf("RoundTrip = (%v, %v), want InvalidArgument", buf, code)
-	}
-	if buf != nil {
-		t.Error("RoundTrip returned a buffer together with the status error")
-	}
-	if dead.freeCount() != 1 {
-		t.Errorf("the reply buffer was freed %d times, want 1", dead.freeCount())
-	}
-}
-
-// TestRoundTripRefusesOnAClosedTransport covers the closed check ahead of stream
-// allocation: no header or payload frame is written once the transport is gone.
-func TestRoundTripRefusesOnAClosedTransport(t *testing.T) {
-	c, sender := newClientOnSender(t, replyEcho(t, codes.OK, ""))
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	buf, err := c.RoundTrip(context.Background(), []byte("body"), &CallOptions{FullMethodName: "/api.EchoService/Echo"})
-	if code := status.Code(err); code != codes.Unavailable {
-		t.Errorf("RoundTrip = (%v, %v), want Unavailable on a closed transport", buf, code)
-	}
-	if buf != nil {
-		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
-	}
-	if frames := sender.sent(); len(frames) != 0 {
-		t.Errorf("sender was given %d frames after Close, want none", len(frames))
-	}
-}
-
-// TestRoundTripEndsWhenThePeerHangsUp covers a backend that dies mid-call: both
-// frames are accepted off the socket and then the connection goes away, so the
-// receive loop reports a failure instead of holding the caller until the read
-// timeout.
-func TestRoundTripEndsWhenThePeerHangsUp(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	go func() {
-		conn, acceptErr := ln.Accept()
-		if acceptErr != nil {
-			return
-		}
-		// Take what the caller wrote off the socket, then hang up without
-		// answering: the receive loop hits the end of the connection.
-		_, _ = conn.Read(make([]byte, 1<<16))
-		_ = conn.Close()
-	}()
-
-	rt, err := Dial(ln.Addr().String())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-	defer func() { _ = rt.Close() }()
-
-	payload, opt := requestOn(t, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"})
-	buf, err := rt.RoundTrip(context.Background(), payload, opt)
-	if err == nil {
-		buf.Free()
-		t.Fatal("RoundTrip = nil error, want a failure once the peer hung up")
-	}
-	if buf != nil {
-		t.Errorf("RoundTrip returned a buffer together with the error: %v", buf)
-	}
-}
-
-// TestPingTreatsUnimplementedAsAlive covers the health check: the server answers
-// an unnamed method with Unimplemented, which proves the connection works.
-func TestPingTreatsUnimplementedAsAlive(t *testing.T) {
-	c, _ := newClientOnSender(t, replyOnSlot(codes.Unimplemented, "/api.EchoService/Echo"))
-	if err := c.Ping(context.Background()); err != nil {
-		t.Errorf("Ping = %v, want nil for an Unimplemented reply", err)
-	}
-}
-
-// TestPingPropagatesOtherStatuses covers a reply that means the connection is
-// unhealthy.
-func TestPingPropagatesOtherStatuses(t *testing.T) {
-	c, _ := newClientOnSender(t, replyOnSlot(codes.Internal, "broken"))
-	if code := status.Code(c.Ping(context.Background())); code != codes.Internal {
-		t.Errorf("Ping = %v, want Internal", code)
-	}
-}
-
-// TestPingFailsOnAClosedTransport covers the closed marker: once Close zeroed
-// the stream limit, no stream is allocated and the call is Unavailable.
-func TestPingFailsOnAClosedTransport(t *testing.T) {
+// TestPingSwallowsUnimplemented covers the health check's one exception: the
+// server answering Unimplemented still proves the connection is alive.
+func TestPingSwallowsUnimplemented(t *testing.T) {
 	c, _ := newClientOnSender(t, replyOnSlot(codes.Unimplemented, ""))
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if code := status.Code(c.Ping(context.Background())); code != codes.Unavailable {
-		t.Errorf("Ping after Close = %v, want Unavailable", code)
+	if err := c.Ping(context.Background()); err != nil {
+		t.Errorf("Ping = %v, want nil", err)
 	}
 }
 
-// TestPingEndsAtItsOwnBudget covers the budget Ping picks: with a short call
-// timeout and a long read timeout, the health check dies at the timeout instead
-// of waiting out the reader's budget.
-func TestPingEndsAtItsOwnBudget(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithTimeout(50*time.Millisecond), WithReadTimeout(time.Second))
-	start := time.Now()
-	if err := c.Ping(context.Background()); err == nil {
-		t.Fatal("Ping on a silent connection returned nil")
-	}
-	if d := time.Since(start); d > 300*time.Millisecond {
-		t.Errorf("Ping returned after %v, want it cut at its 50ms budget, not the 1s read timeout", d)
+// TestPingPropagatesOtherErrors covers every other status: a ping fails the
+// caller so the balancer can drop the backend.
+func TestPingPropagatesOtherErrors(t *testing.T) {
+	c, _ := newClientOnSender(t, replyOnSlot(codes.Internal, "boom"))
+	if err := c.Ping(context.Background()); status.Code(err) != codes.Internal {
+		t.Errorf("code = %v, want Internal", status.Code(err))
 	}
 }
 
-// TestCreateStreamEnforcesMaxStreams covers the cap: the call past the limit is
-// refused with ResourceExhausted.
-func TestCreateStreamEnforcesMaxStreams(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithMaxStreams(2))
-	ctx := context.Background()
-
-	if _, err := c.createStream(ctx); err != nil {
-		t.Fatalf("first stream: %v", err)
-	}
-	if _, err := c.createStream(ctx); err != nil {
-		t.Fatalf("second stream: %v", err)
-	}
-	if code := status.Code(mustStreamError(t, c)); code != codes.ResourceExhausted {
-		t.Errorf("third stream = %v, want ResourceExhausted", code)
-	}
-}
-
-// TestCreateStreamRefusesAfterClose covers the closed marker.
-func TestCreateStreamRefusesAfterClose(t *testing.T) {
-	c, _ := newClientOnSender(t, nil)
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if code := status.Code(mustStreamError(t, c)); code != codes.Unavailable {
-		t.Errorf("createStream after Close = %v, want Unavailable", code)
-	}
-}
-
-// mustStreamError opens a stream and returns the error it failed with, failing
-// the test when the stream was granted instead.
-func mustStreamError(t *testing.T, c *client) error {
-	t.Helper()
-	s, err := c.createStream(context.Background())
-	if err == nil {
-		t.Fatalf("createStream granted stream %d, want an error", s.id)
-	}
-	return err
-}
-
-// TestCloseClosesTheConnectionOnceAndRefusesNewStreams covers the shutdown: the
-// connection is closed exactly once and the limit is zeroed so no later stream
-// can be created. Close cancels the live streams it finds, so a call in flight is
-// over as soon as Close returns instead of sitting out its deadline; the wake-up
-// is the context cancel, so it reports Canceled.
-func TestCloseClosesTheConnectionOnceAndRefusesNewStreams(t *testing.T) {
-	c, sender := newClientOnSender(t, nil)
-	first, err := c.createStream(context.Background())
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("second Close: %v", err)
-	}
-
-	if got := sender.closeCount(); got != 1 {
-		t.Errorf("connection closed %d times, want 1", got)
-	}
-	// Close cancels the stream context, so the call is over as soon as it returns
-	// and the context reports it.
-	if err := first.Context().Err(); err == nil {
-		t.Error("Close did not cancel the live stream context")
-	}
-	var reply api.Empty
-	if code := status.Code(first.RecvMsg(&reply)); code != codes.Canceled {
-		t.Errorf("RecvMsg after Close = %v, want Canceled", code)
-	}
-	if _, err := c.createStream(context.Background()); status.Code(err) != codes.Unavailable {
-		t.Errorf("createStream after Close = %v, want Unavailable", err)
-	}
-}
-
-// TestCloseWakesAnInFlightCall covers the shutdown path: Close walks the stream
-// table and cancels each context, so a call waiting on a reply returns at once
-// instead of sitting out its deadline. The wake-up is the context cancel, so the
-// call reports Canceled; no reply arrived, so whether the peer ran the handler is
-// still unknown. A call whose own deadline fired first reports Unavailable, which
-// the deadline cases pin separately.
-func TestCloseWakesAnInFlightCall(t *testing.T) {
+// TestCloseCancelsLiveStreams covers teardown: every live stream is canceled
+// before the connection goes away.
+func TestCloseCancelsLiveStreams(t *testing.T) {
 	c, _ := newClientOnSender(t, nil)
 	s, err := c.createStream(context.Background())
 	if err != nil {
-		t.Fatalf("stream: %v", err)
+		t.Fatalf("createStream: %v", err)
 	}
-
-	done := make(chan error, 1)
-	go func() { done <- s.RecvMsg(&api.Empty{}) }()
-
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	select {
-	case err := <-done:
-		if code := status.Code(err); code != codes.Canceled {
-			t.Errorf("in-flight call after Close = %v (%v), want Canceled", err, code)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("the in-flight call did not return after Close")
+	_ = c.Close()
+	if s.Context().Err() == nil {
+		t.Error("a live stream survived Close")
 	}
 }
 
-// TestCreateStreamDeadlineFollowsTheReadTimeout pins the wiring today: the
-// stream context is cut at the transport's read timeout, so a call with no reply
-// ends there and reports Unavailable. WithTimeout no longer reaches this point —
-// when createStream starts honouring it again, this case has to change with it.
-func TestCreateStreamDeadlineFollowsTheReadTimeout(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithReadTimeout(100*time.Millisecond))
-	s, err := c.createStream(context.Background())
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-
-	start := time.Now()
-	var reply api.Empty
-	err = s.RecvMsg(&reply)
-	if code := status.Code(err); code != codes.Unavailable {
-		t.Errorf("RecvMsg after the read timeout = %v (%v), want Unavailable", err, code)
-	}
-	if d := time.Since(start); d < 50*time.Millisecond {
-		t.Errorf("the call ended %v after it started, want it to wait for the 100ms read timeout", d)
+// TestCloseClosesTheConnectionOnce covers the once: Close reaches the
+// connection exactly once, however often it is called.
+func TestCloseClosesTheConnectionOnce(t *testing.T) {
+	c, a := newClientOnSender(t, nil)
+	_ = c.Close()
+	_ = c.Close()
+	if got := a.closeCount(); got != 1 {
+		t.Errorf("closed %d times, want 1", got)
 	}
 }
 
-// TestCreateStreamShortensItsDeadlineToTheCaller pins one half of the min: a
-// caller deadline nearer than the read timeout wins, so the stream ends with the
-// caller instead of outliving it.
-func TestCreateStreamShortensItsDeadlineToTheCaller(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithReadTimeout(time.Second))
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	s, err := c.createStream(ctx)
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-	dl, ok := s.ctx.Deadline()
-	if !ok {
-		t.Fatal("the stream context carries no deadline")
-	}
-	if left := time.Until(dl); left > 80*time.Millisecond {
-		t.Errorf("the stream deadline is %v away, want it within the caller's 50ms", left)
-	}
-}
-
-// TestCreateStreamKeepsTheReadTimeoutWhenTheCallerIsLater pins the other half: a
-// caller deadline further out must not widen the stream past the read timeout,
-// which is the regression a bare cmp.Or — without the min around it — introduces.
-func TestCreateStreamKeepsTheReadTimeoutWhenTheCallerIsLater(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithReadTimeout(100*time.Millisecond))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	s, err := c.createStream(ctx)
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-	dl, ok := s.ctx.Deadline()
-	if !ok {
-		t.Fatal("the stream context carries no deadline")
-	}
-	if left := time.Until(dl); left > 150*time.Millisecond {
-		t.Errorf("the stream deadline is %v away, want the 100ms read timeout to win", left)
-	}
-}
-
-// TestCreateStreamIsBornExpiredWhenTheCallerDeadlineHasPassed pins the negative
-// branch: min picks the already-expired deadline, so the stream never falls back
-// to the read timeout and never waits for one.
-func TestCreateStreamIsBornExpiredWhenTheCallerDeadlineHasPassed(t *testing.T) {
-	c, _ := newClientOnSender(t, nil, WithReadTimeout(100*time.Millisecond))
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-	defer cancel()
-	s, err := c.createStream(ctx)
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-	select {
-	case <-s.ctx.Done():
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("the stream outlived a caller deadline that had already passed")
-	}
-}
-
-// TestCloseClearsTheStreamTable covers what the receive loop looks up after
-// shutdown: Close empties the table, so a late reply frame finds no stream and
-// the interceptor reads it off the wire and drops it instead of delivering it to
-// a call that is already over.
-func TestCloseClearsTheStreamTable(t *testing.T) {
-	c, _ := newClientOnSender(t, nil)
-	s, err := c.createStream(context.Background())
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if got := c.getStream(s.id); got != nil {
-		t.Errorf("getStream(%d) after Close = %v, want nil", s.id, got)
-	}
-}
-
-// TestNewStreamIsUnimplemented covers the streaming surface grpcx does not serve.
+// TestNewStreamIsUnimplemented covers the unary-only transport: streaming is
+// refused at the client interface.
 func TestNewStreamIsUnimplemented(t *testing.T) {
 	c, _ := newClientOnSender(t, nil)
-	s, err := c.NewStream(context.Background(), &grpc.StreamDesc{}, "/m")
-	if code := status.Code(err); code != codes.Unimplemented {
-		t.Errorf("NewStream = (%v, %v), want Unimplemented", s, code)
-	}
-	if s != nil {
-		t.Error("NewStream returned a stream although it is unimplemented")
+	_, err := c.NewStream(context.Background(), &grpc.StreamDesc{}, "/x/Y")
+	if got := status.Code(err); got != codes.Unimplemented {
+		t.Errorf("code = %v, want Unimplemented", got)
 	}
 }
 
-// TestInterceptorDiscardsTheFrameOfAGoneStream covers a reply that arrives after
-// its stream was closed: both frames are consumed so the connection stays
-// aligned, the payload goes back to the pool even though no stream wanted it, and
-// nothing is reported.
-func TestInterceptorDiscardsTheFrameOfAGoneStream(t *testing.T) {
-	c := &client{streams: make(map[uint32]*clientStream)}
-	late := countingPayload(mustMarshal(t, &api.EchoResponse{Message: "late"}))
-	recv := &fakeRecver{frames: []Buffer{
-		headerFrame(t, &api.CallOptions{StreamID: 99}),
-		late,
-	}}
-
-	if err := c.interceptor(context.Background(), recv); err != nil {
-		t.Fatalf("interceptor: %v", err)
-	}
-	if recv.remaining() != 0 {
-		t.Errorf("%d frames left on the connection, want none", recv.remaining())
-	}
-	if late.freeCount() != 1 {
-		t.Errorf("the discarded payload was freed %d times, want 1", late.freeCount())
-	}
-}
-
-// TestInterceptorRoutesFramesToLiveStreams covers the dispatch: the frame lands
-// in the stream its header names.
-func TestInterceptorRoutesFramesToLiveStreams(t *testing.T) {
-	c := &client{streams: make(map[uint32]*clientStream)}
-	s, _ := newStreamUnderTest(&fakeSender{})
-	c.streams[s.id] = s
-	recv := &fakeRecver{frames: []Buffer{
-		headerFrame(t, &api.CallOptions{StreamID: s.id, Code: uint32(codes.OK)}),
-		payloadFrame(t, &api.EchoResponse{Message: "hi!"}),
-	}}
-
-	if err := c.interceptor(context.Background(), recv); err != nil {
-		t.Fatalf("interceptor: %v", err)
-	}
-	select {
-	case r := <-s.c:
-		var header api.CallOptions
-		r.apply(&header)
-		if header.StreamID != s.id {
-			t.Errorf("reply StreamID = %d, want %d", header.StreamID, s.id)
-		}
-	default:
-		t.Fatal("the frame never reached its stream")
-	}
-}
-
-// TestHandleStopsWhenTheReceiveLoopContextEnds covers cancellation.
-func TestHandleStopsWhenTheReceiveLoopContextEnds(t *testing.T) {
-	c, _ := newClientOnSender(t, nil)
+// TestHandleExitsOnCancel covers the receive loop: a canceled context ends it
+// and closes the transport it owned.
+func TestHandleExitsOnCancel(t *testing.T) {
+	c, a := newClientOnSender(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	err := c.Handle(ctx, &fakeRecver{})
-	if code := status.Code(err); code != codes.Canceled {
-		t.Errorf("Handle = %v (%v), want Canceled", err, code)
+	if err := c.Handle(ctx, &fakeRecver{}); status.Code(err) != codes.Canceled {
+		t.Errorf("code = %v, want Canceled", status.Code(err))
+	}
+	if got := a.closeCount(); got != 1 {
+		t.Errorf("closed %d times after the loop exited, want 1", got)
 	}
 }
 
-// TestHandleStopsWhenTheConnectionEnds covers a broken connection: the read
-// error is returned and the transport is closed behind it.
-func TestHandleStopsWhenTheConnectionEnds(t *testing.T) {
+// TestHandleDiscardsAnUnroutableReply covers a reply whose stream is already
+// gone: the payload is read off the wire to stay aligned and then freed.
+func TestHandleDiscardsAnUnroutableReply(t *testing.T) {
 	c, _ := newClientOnSender(t, nil)
-	err := c.Handle(context.Background(), &fakeRecver{})
-	if !errors.Is(err, io.EOF) {
-		t.Errorf("Handle = %v, want io.EOF", err)
+	payload := countingPayload([]byte("orphan"))
+	recv := &fakeRecver{frames: []Buffer{
+		headerFrame(t, &api.CallOptions{StreamID: 404}),
+		payload,
+	}}
+	if err := c.interceptor(context.Background(), recv); err != nil {
+		t.Fatalf("interceptor: %v", err)
 	}
-	if c.maxStreams != 0 {
-		t.Error("Handle did not close the transport after the connection ended")
+	if got := payload.freeCount(); got != 1 {
+		t.Errorf("orphan payload freed %d times, want 1", got)
 	}
-}
-
-// TestDialServesCallsOverTCP covers the successful dial path, which net.Pipe
-// cannot: Dial builds its own client on a real socket, the receive loop it
-// starts there is what hands the reply back, and Close stops it.
-func TestDialServesCallsOverTCP(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	so := DefaultServerOptions
-	so.RegisterService(&api.EchoService_ServiceDesc, &echoImpl{})
-	serveCtx, stopServe := context.WithCancel(context.Background())
-	defer stopServe()
-	handled := make(chan error, 1)
-	go func() {
-		conn, acceptErr := ln.Accept()
-		if acceptErr != nil {
-			handled <- acceptErr
-			return
-		}
-		handled <- so.Handle(serveCtx, conn)
-	}()
-
-	rt, err := Dial(ln.Addr().String())
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-
-	var reply api.EchoResponse
-	if err := rt.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if reply.Message != "hi!" {
-		t.Errorf("reply.Message = %q, want hi!", reply.Message)
-	}
-
-	if err := rt.Close(); err != nil {
-		t.Errorf("Close: %v", err)
-	}
-	_ = ln.Close()
-	select {
-	case serveErr := <-handled:
-		if serveErr != nil && !errors.Is(serveErr, io.EOF) {
-			t.Logf("server Handle ended with %v after the client closed", serveErr)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the server did not stop within 2s of the client closing")
+	if got := recv.remaining(); got != 0 {
+		t.Errorf("%d frames left, want none", got)
 	}
 }

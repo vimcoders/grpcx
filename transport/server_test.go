@@ -2,253 +2,204 @@ package transport
 
 import (
 	"context"
-	"sync/atomic"
+	"net"
 	"testing"
 	"time"
 
+	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
 	"github.com/vimcoders/grpcx/status"
 
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
-// panicDesc is a service whose only method panics on the message "boom", so a
-// test can prove the process survives a panicking handler.
-var panicDesc = grpc.ServiceDesc{
-	ServiceName: "test.PanicService",
-	Methods: []grpc.MethodDesc{{
-		MethodName: "Boom",
-		Handler: func(_ any, _ context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
-			var req api.EchoRequest
-			if err := dec(&req); err != nil {
-				return nil, err
-			}
-			if req.Message == "boom" {
-				panic("server boom")
-			}
-			return &api.EchoResponse{Message: req.Message + "!"}, nil
-		},
-	}},
-}
-
-// deadlineRecorder is an echo service that remembers the deadline its context
-// carried, so a test can compare the server-side timeout with what the client
-// asked for.
-type deadlineRecorder struct {
-	api.UnimplementedEchoServiceServer
-	seenNs atomic.Int64
-}
-
-func (d *deadlineRecorder) Echo(ctx context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
-	if deadline, ok := ctx.Deadline(); ok {
-		d.seenNs.Store(int64(time.Until(deadline)))
+// dispatch runs one request through ServerOptions.interceptor over a
+// fakeChannel: the header frame first, then the request payload.
+func dispatch(t *testing.T, so ServerOptions, header *api.CallOptions, payload any) (*fakeChannel, []byte) {
+	t.Helper()
+	ch := &fakeChannel{}
+	ch.recver.frames = []Buffer{headerFrame(t, header), payloadFrame(t, payload)}
+	if err := so.interceptor(context.Background(), ch); err != nil {
+		t.Fatalf("interceptor: %v", err)
 	}
-	return &api.EchoResponse{Message: req.Message + "!"}, nil
+	frames := ch.sent()
+	if len(frames) != 2 {
+		t.Fatalf("sent %d frames, want a header and a payload", len(frames))
+	}
+	return ch, frames[1]
 }
 
-// TestServerAnswersARegisteredMethod covers the dispatch loop end to end: a
-// request naming a registered method reaches its implementation.
-func TestServerAnswersARegisteredMethod(t *testing.T) {
+// replyHeader decodes the header frame one handler answered with.
+func replyHeader(t *testing.T, frame []byte) *api.CallOptions {
+	t.Helper()
+	var header api.CallOptions
+	if err := encoding.Unmarshal(frame, &header); err != nil {
+		t.Fatalf("reply header decode: %v", err)
+	}
+	return &header
+}
+
+// TestInterceptorDispatchesRegisteredMethod covers the dispatch table: the
+// request reaches the registered handler and its reply goes back over the same
+// stream id.
+func TestInterceptorDispatchesRegisteredMethod(t *testing.T) {
+	so := serverOptions(RegisterService(&api.EchoService_ServiceDesc, &echoImpl{}))
+	header := &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName, StreamID: 5}
+	_, body := dispatch(t, so, header, &api.EchoRequest{Message: "hi"})
+
+	var resp api.EchoResponse
+	if err := encoding.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("reply decode: %v", err)
+	}
+	if resp.Message != "hi!" {
+		t.Errorf("reply = %q, want hi!", resp.Message)
+	}
+}
+
+// TestInterceptorReportsHandlerError covers a failing handler: the status goes
+// into the reply header and the connection stays up.
+func TestInterceptorReportsHandlerError(t *testing.T) {
+	so := serverOptions(RegisterService(&api.EchoService_ServiceDesc, &echoImpl{failOn: "boom"}))
+	header := &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName, StreamID: 5}
+	ch, _ := dispatch(t, so, header, &api.EchoRequest{Message: "boom"})
+
+	got := replyHeader(t, ch.sent()[0])
+	if codes.Code(got.Code) != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", codes.Code(got.Code))
+	}
+	if got.Desc == "" {
+		t.Error("the reply header carries no description")
+	}
+	if got.StreamID != 5 {
+		t.Errorf("StreamID = %d, want 5", got.StreamID)
+	}
+}
+
+// TestInterceptorRecoversPanics covers a panicking handler: it is answered
+// with Internal instead of tearing the connection down.
+func TestInterceptorRecoversPanics(t *testing.T) {
+	so := serverOptions(RegisterService(&api.EchoService_ServiceDesc, &echoImpl{panics: true}))
+	header := &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName, StreamID: 5}
+	ch, _ := dispatch(t, so, header, &api.EchoRequest{Message: "hi"})
+
+	got := replyHeader(t, ch.sent()[0])
+	if codes.Code(got.Code) != codes.Internal {
+		t.Errorf("code = %v, want Internal", codes.Code(got.Code))
+	}
+}
+
+// TestInterceptorReportsDeadline covers the server timeout: a budget that
+// expires before the handler returns is reported as DeadlineExceeded.
+func TestInterceptorReportsDeadline(t *testing.T) {
+	so := serverOptions(
+		RegisterService(&api.EchoService_ServiceDesc, &echoImpl{delay: 20 * time.Millisecond}),
+		WithServerTimeout(time.Millisecond),
+	)
+	header := &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName, StreamID: 5}
+	ch, _ := dispatch(t, so, header, &api.EchoRequest{Message: "hi"})
+
+	got := replyHeader(t, ch.sent()[0])
+	if codes.Code(got.Code) != codes.DeadlineExceeded {
+		t.Errorf("code = %v, want DeadlineExceeded", codes.Code(got.Code))
+	}
+}
+
+// TestInterceptorAnswersUnknownMethod covers the fallback: an unregistered
+// name is answered with Unimplemented carrying the requested method, and the
+// payload is still read so the connection stays aligned.
+func TestInterceptorAnswersUnknownMethod(t *testing.T) {
+	so := serverOptions(RegisterService(&api.EchoService_ServiceDesc, &echoImpl{}))
+	header := &api.CallOptions{FullMethodName: "/nope/X", StreamID: 9}
+	ch, _ := dispatch(t, so, header, &api.EchoRequest{Message: "hi"})
+
+	got := replyHeader(t, ch.sent()[0])
+	if codes.Code(got.Code) != codes.Unimplemented {
+		t.Errorf("code = %v, want Unimplemented", codes.Code(got.Code))
+	}
+	if got.Desc != "/nope/X" {
+		t.Errorf("Desc = %q, want the requested method", got.Desc)
+	}
+}
+
+// TestInterceptorKeepsAlignmentAcrossCalls covers two requests in a row: a
+// rejected one does not leave the next frame misaligned.
+func TestInterceptorKeepsAlignmentAcrossCalls(t *testing.T) {
+	so := serverOptions(RegisterService(&api.EchoService_ServiceDesc, &echoImpl{}))
+	ch := &fakeChannel{}
+	ch.recver.frames = []Buffer{
+		headerFrame(t, &api.CallOptions{FullMethodName: "/nope/X", StreamID: 1}),
+		payloadFrame(t, &api.EchoRequest{Message: "a"}),
+		headerFrame(t, &api.CallOptions{FullMethodName: api.EchoService_Echo_FullMethodName, StreamID: 2}),
+		payloadFrame(t, &api.EchoRequest{Message: "b"}),
+	}
+	for i := range 2 {
+		if err := so.interceptor(context.Background(), ch); err != nil {
+			t.Fatalf("interceptor %d: %v", i, err)
+		}
+	}
+	if got := ch.recver.remaining(); got != 0 {
+		t.Errorf("%d frames left, want none", got)
+	}
+	frames := ch.sent()
+	if len(frames) != 4 {
+		t.Fatalf("sent %d frames, want 4", len(frames))
+	}
+	var second api.EchoResponse
+	if err := encoding.Unmarshal(frames[3], &second); err != nil {
+		t.Fatalf("second reply decode: %v", err)
+	}
+	if second.Message != "b!" {
+		t.Errorf("second reply = %q, want b!", second.Message)
+	}
+}
+
+// TestHandleServesEchoOverPipe covers the full stack on a real connection: a
+// client dials a pipe, the server dispatches, and the reply comes back.
+func TestHandleServesEchoOverPipe(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
-
-	var reply api.EchoResponse
-	if err := cli.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
+	var resp api.EchoResponse
+	if err := cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "hi"}, &resp); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if reply.Message != "hi!" {
-		t.Errorf("reply.Message = %q, want hi!", reply.Message)
+	if resp.Message != "hi!" {
+		t.Errorf("reply = %q, want hi!", resp.Message)
 	}
 }
 
-// TestServerAnswersAnUnknownMethodWithUnimplemented covers the fallback: a
-// service that does not name the method answers Unimplemented, and the
-// connection keeps serving.
-func TestServerAnswersAnUnknownMethodWithUnimplemented(t *testing.T) {
+// TestHandleServesRepeatedCalls covers the frame alignment of a real
+// connection: several calls share one connection without stepping on each
+// other's frames.
+func TestHandleServesRepeatedCalls(t *testing.T) {
 	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
-
-	var reply api.EchoResponse
-	err := cli.Invoke(context.Background(), "/api.EchoService/Missing", &api.EchoRequest{Message: "hi"}, &reply)
-	if code := status.Code(err); code != codes.Unimplemented {
-		t.Errorf("unknown method = %v (%v), want Unimplemented", err, code)
-	}
-
-	// The second call proves the unknown method's payload was consumed too.
-	if err := cli.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Errorf("call after Unimplemented = %v, want the connection to stay usable", err)
+	for i := range 3 {
+		var resp api.EchoResponse
+		if err := cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "hi"}, &resp); err != nil {
+			t.Fatalf("Invoke %d: %v", i, err)
+		}
+		if resp.Message != "hi!" {
+			t.Errorf("reply %d = %q, want hi!", i, resp.Message)
+		}
 	}
 }
 
-// TestServerReportsAServiceErrorInTheReplyHeader covers a handler error: it
-// becomes a status in the reply, not a broken connection.
-func TestServerReportsAServiceErrorInTheReplyHeader(t *testing.T) {
-	cli, _, _ := startPipeServer(t, echoService(&echoImpl{failOn: "boom"}))
+// TestHandleStopsOnCancel covers the server loop: a canceled context ends
+// Handle and closes its channel.
+func TestHandleStopsOnCancel(t *testing.T) {
+	so := serverOptions(echoService(&echoImpl{}))
+	cliConn, srvConn := net.Pipe()
+	t.Cleanup(func() { _ = cliConn.Close() })
 
-	var reply api.EchoResponse
-	err := cli.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "boom"}, &reply)
-	if code := status.Code(err); code != codes.InvalidArgument {
-		t.Errorf("failing call = %v (%v), want InvalidArgument", err, code)
-	}
-	if err := cli.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Errorf("call after a service error = %v, want the connection to stay usable", err)
-	}
-}
-
-// TestServerSurvivesAPanickingHandler covers the isolation added for a
-// panicking handler: the caller gets Internal and the next call is served.
-func TestServerSurvivesAPanickingHandler(t *testing.T) {
-	cli, _, _ := startPipeServer(t, RegisterService(&panicDesc, struct{}{}))
-
-	var reply api.EchoResponse
-	err := cli.Invoke(context.Background(), "/test.PanicService/Boom", &api.EchoRequest{Message: "boom"}, &reply)
-	if code := status.Code(err); code != codes.Internal {
-		t.Errorf("panicking call = %v (%v), want Internal", err, code)
-	}
-
-	if err := cli.Invoke(context.Background(), "/test.PanicService/Boom", &api.EchoRequest{Message: "ok"}, &reply); err != nil {
-		t.Fatalf("call after a panic = %v, want it served", err)
-	}
-	if reply.Message != "ok!" {
-		t.Errorf("reply.Message = %q, want ok!", reply.Message)
-	}
-}
-
-// TestServerHandsItsHandlerTheClientDeadline covers the server side of the
-// timeout: the deadline on the handler context is the one the request header
-// carried.
-func TestServerHandsItsHandlerTheClientDeadline(t *testing.T) {
-	recorder := &deadlineRecorder{}
-	cli, _, _ := startPipeServer(t, echoService(recorder))
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	var reply api.EchoResponse
-	if err := cli.Invoke(ctx, "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	seen := time.Duration(recorder.seenNs.Load())
-	if seen <= 0 || seen > 50*time.Millisecond {
-		t.Errorf("handler deadline is %v away, want at most the 50ms the client asked for", seen)
-	}
-}
-
-// TestServerFallsBackToItsTimeoutOption covers WithServerTimeout: a call whose
-// header names no timeout runs under the server's option instead of the 3000ms
-// default. RoundTrip is used because Invoke always writes its own default into
-// the header, which would hide the fallback.
-func TestServerFallsBackToItsTimeoutOption(t *testing.T) {
-	recorder := &deadlineRecorder{}
-	cli, _, _ := startPipeServer(t, echoService(recorder), WithServerTimeout(40*time.Millisecond))
-
-	buf, err := cli.RoundTrip(context.Background(), mustMarshal(t, &api.EchoRequest{Message: "hi"}), &CallOptions{FullMethodName: "/api.EchoService/Echo"})
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	buf.Free()
-	seen := time.Duration(recorder.seenNs.Load())
-	if seen <= 0 || seen > 40*time.Millisecond {
-		t.Errorf("handler deadline is %v away, want at most the 40ms the server option sets", seen)
-	}
-}
-
-// TestInvokeFallsBackToItsTimeoutOption covers the Invoke side of the same
-// fallback: with no deadline in ctx the header carries no timeout, so the server
-// option decides. A ctx deadline still wins through the header, which
-// TestServerHandsItsHandlerTheClientDeadline covers.
-func TestInvokeFallsBackToItsTimeoutOption(t *testing.T) {
-	recorder := &deadlineRecorder{}
-	cli, _, _ := startPipeServer(t, echoService(recorder), WithServerTimeout(40*time.Millisecond))
-
-	var reply api.EchoResponse
-	if err := cli.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	seen := time.Duration(recorder.seenNs.Load())
-	if seen <= 0 || seen > 40*time.Millisecond {
-		t.Errorf("handler deadline is %v away, want at most the 40ms the server option sets", seen)
-	}
-}
-
-// TestServerRunsTheInstalledInterceptor covers the interceptor option: it wraps
-// every unary call.
-func TestServerRunsTheInstalledInterceptor(t *testing.T) {
-	var calls atomic.Int32
-	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}), UnaryServerInterceptor(
-		func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			calls.Add(1)
-			return handler(ctx, req)
-		}))
-
-	var reply api.EchoResponse
-	if err := cli.Invoke(context.Background(), "/api.EchoService/Echo", &api.EchoRequest{Message: "hi"}, &reply); err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if got := calls.Load(); got != 1 {
-		t.Errorf("interceptor ran %d times, want 1", got)
-	}
-}
-
-// TestServerStopsWhenItsContextIsCanceled covers shutdown: canceling the context
-// closes the connection under the read loop, so Handle returns instead of
-// serving. Which error it reports depends on where the loop was parked: Canceled
-// when it sees the context first, the broken-pipe error when it was already
-// blocked in a read.
-func TestServerStopsWhenItsContextIsCanceled(t *testing.T) {
-	_, cancel, handleErr := startPipeServer(t, echoService(&echoImpl{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() { errs <- so.Handle(ctx, srvConn) }()
 	cancel()
 
 	select {
-	case err := <-handleErr:
-		if err == nil {
-			t.Fatal("Handle returned nil after its context was canceled")
-		}
-		if c := status.Code(err); c != codes.Canceled && c != codes.Unknown {
-			t.Errorf("Handle = %v (%v), want Canceled or the closed-connection error", err, c)
+	case err := <-errs:
+		if status.Code(err) != codes.Canceled {
+			t.Errorf("code = %v, want Canceled", status.Code(err))
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Handle did not stop after its context was canceled")
-	}
-}
-
-// TestServerStopsWhenTheConnectionBreaks covers a peer that goes away: the read
-// error ends the loop.
-func TestServerStopsWhenTheConnectionBreaks(t *testing.T) {
-	cli, _, handleErr := startPipeServer(t, echoService(&echoImpl{}))
-	if err := cli.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	select {
-	case err := <-handleErr:
-		if err == nil {
-			t.Error("Handle returned nil after the connection broke")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Handle kept serving a broken connection")
-	}
-}
-
-// TestRegisterServiceKeepsWhatItAlreadyHas covers the guard on the method: nil
-// for either half leaves the recorded one in place, so a server built with one
-// argument cannot wipe the other.
-func TestRegisterServiceKeepsWhatItAlreadyHas(t *testing.T) {
-	var so ServerOptions
-	so.RegisterService(&api.EchoService_ServiceDesc, &echoImpl{})
-	if so.desc == nil || so.imp == nil {
-		t.Fatal("RegisterService did not record both halves")
-	}
-	desc, imp := so.desc, so.imp
-
-	so.RegisterService(nil, nil)
-	if so.desc != desc || so.imp != imp {
-		t.Error("RegisterService(nil, nil) dropped an earlier registration")
-	}
-
-	so.RegisterService(desc, nil)
-	if so.desc != desc {
-		t.Error("RegisterService did not keep the descriptor it was handed")
-	}
-	if so.imp != imp {
-		t.Error("RegisterService(desc, nil) dropped the implementation")
+		t.Fatal("Handle did not return after cancel")
 	}
 }

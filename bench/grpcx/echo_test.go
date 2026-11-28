@@ -6,9 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vimcoders/grpcx/balancer"
-	"github.com/vimcoders/grpcx/status"
-
 	"github.com/vimcoders/grpcx/metadata"
 
 	"github.com/vimcoders/grpcx/generated/api"
@@ -21,7 +18,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 )
 
 var (
@@ -31,7 +27,7 @@ var (
 func Benchmark1K(b *testing.B) {
 	// WithBufSize 高并发下开启批量发送，默认不开启
 	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
+	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -53,7 +49,7 @@ func Benchmark1K(b *testing.B) {
 func Benchmark5K(b *testing.B) {
 	// WithBufSize 高并发下开启批量发送，默认不开启
 	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
+	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -75,7 +71,7 @@ func Benchmark5K(b *testing.B) {
 func Benchmark1024K(b *testing.B) {
 	// WithBufSize 高并发下开启批量发送，默认不开启
 	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs))
+	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -92,60 +88,6 @@ func Benchmark1024K(b *testing.B) {
 			}
 		}
 	})
-}
-
-func RetriesUnaryClientInterceptor(retries int32) grpcx.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req any, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
-		for i := retries; i >= 0; i-- {
-			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
-			if err != nil {
-				return err
-			}
-			if err := rt.Invoke(ctx, method, req, reply, opts...); err != nil {
-				if s, ok := status.FromError(err); ok {
-					switch s.Code() {
-					case codes.Unavailable:
-						continue
-					default:
-						return err
-					}
-				}
-				return err
-			}
-			return nil
-		}
-		return status.OutOfRange.Err()
-	}
-}
-
-func OtelUnaryClientInterceptor() grpcx.UnaryClientInterceptor {
-	var tracer = otel.Tracer("grpc-client-retries")
-	var propagator = otel.GetTextMapPropagator()
-	return func(ctx context.Context, method string, req any, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
-		rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
-		if err != nil {
-			return err
-		}
-		otelCtx, span := tracer.Start(ctx, "ttrpc.client.call",
-			trace.WithAttributes(
-				semconv.RPCSystemKey.String("ttrpc"),
-				semconv.RPCMethodKey.String(method),
-			),
-		)
-		defer span.End()
-		carrier := propagation.MapCarrier(make(map[string]string))
-		propagator.Inject(otelCtx, carrier)
-		var md []string
-		for k, v := range carrier {
-			md = append(md, k, v)
-		}
-		if err := rt.Invoke(metadata.AppendToContext(otelCtx, md...), method, req, reply, opts...); err != nil {
-			span.SetStatus(otelcodes.Error, err.Error())
-			span.RecordError(err)
-			return err
-		}
-		return nil
-	}
 }
 
 func OtelUnaryServerInterceptor() grpc.UnaryServerInterceptor {

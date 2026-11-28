@@ -39,22 +39,22 @@ func (c *codec) Name() string {
 }
 
 // Marshal implements [encoding.Codec].
-func (c codec) Marshal(msg any) ([]byte, error) {
-	switch v := msg.(type) {
+func (c codec) Marshal(v any) ([]byte, error) {
+	switch vv := v.(type) {
 	case proto.Message:
-		return proto.Marshal(v)
+		return proto.Marshal(vv)
 	default:
 		return json.Marshal(v)
 	}
 }
 
 // Unmarshal implements [encoding.Codec].
-func (c codec) Unmarshal(p []byte, msg any) error {
-	switch v := msg.(type) {
+func (c codec) Unmarshal(p []byte, v any) error {
+	switch vv := v.(type) {
 	case proto.Message:
-		return proto.Unmarshal(p, v)
+		return proto.Unmarshal(p, vv)
 	default:
-		return json.Unmarshal(p, v)
+		return json.Unmarshal(p, vv)
 	}
 }
 
@@ -66,16 +66,18 @@ func GetCodec(contentSubtype string) encoding.Codec {
 	return defaultCodec
 }
 
-// Marshal encodes msg with the built-in codec. It is what the call header uses:
-// the header must go through the same codec on both ends, whatever codec the
-// caller installed for the message body.
+// Marshal encodes msg with the built-in codec. The transport does not route the
+// call header through it: the header is marshalled by the client and server
+// Codecs instead. It remains as the built-in entry point for a caller that
+// wants that encoding explicitly.
 func Marshal(msg any) ([]byte, error) {
 	codec := GetCodec(Name)
 	return codec.Marshal(msg)
 }
 
-// Unmarshal decodes p into msg with the built-in codec, the same one Marshal
-// used for the call header.
+// Unmarshal decodes p into msg with the built-in codec. It is what the request
+// header uses: decodeCallOptions reads the header frame through it, whatever
+// codec the caller installed for message bodies.
 func Unmarshal(p []byte, msg any) error {
 	codec := GetCodec(Name)
 	return codec.Unmarshal(p, msg)

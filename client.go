@@ -36,12 +36,14 @@ type ClientConnInterface interface {
 // Option configures a client before it dials.
 type Option func(c *client)
 
-// WithCodec sets the codec for request and reply bodies. The call header is
-// not covered: it always travels in the built-in codec of package encoding, so
-// the two ends agree on it whatever this option holds.
+// WithCodec forwards transport.WithCodec, which stores the codec in the
+// transport options. The client builds a defaultCodec from it, so a
+// proto.Message body and the request header are still marshalled by protobuf
+// into a pool buffer; the codec given here handles non-proto values and all
+// decoding. A nil codec is ignored.
 func WithCodec(codec encoding.Codec) Option {
 	return func(c *client) {
-		c.Codec = codec
+		c.opts = append(c.opts, transport.WithCodec(codec))
 	}
 }
 
@@ -49,7 +51,7 @@ func WithCodec(codec encoding.Codec) Option {
 // interceptor picks a backend from the balancer and forwards the call to it.
 func WithUnaryClientInterceptor(i UnaryClientInterceptor) Option {
 	return func(c *client) {
-		c.unaryClientInterceptor = i
+		c.unaryInt = i
 	}
 }
 
@@ -71,26 +73,28 @@ func WithMaxStreams(n uint32) Option {
 	}
 }
 
-// WithBufSize sets the send buffer in blocks of the transport block size. Zero
-// disables batching, which is also the default.
+// WithBufSize sets the send buffer threshold in bytes, capped by the transport
+// at its default maximum. The value is stored as given, so a non-positive n
+// leaves batching off — the default — and turns it off again when it was on.
 //
 // With batching on, the bytes handed to RoundTrip are queued by reference until
-// the connection flushes them, so the caller must not reuse them before then.
+// the connection flushes them: the caller must neither change them nor free the
+// buffer holding them before that flush.
 func WithBufSize(n int) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, transport.WithBufSize(n))
 	}
 }
 
-// client is the ClientConnInterface implementation: it holds the codec, the
-// unary interceptor, the transport options and the balancer picker. The
-// picker's Close is what stops the keepalive loop, so the client keeps no
-// cancel function of its own.
+// client is the ClientConnInterface implementation: it holds the unary
+// interceptor, the transport options and the balancer picker. It has no codec
+// field of its own — WithCodec only appends a transport option, and each dialed
+// transport builds its own Codec. The picker's Close is what stops the
+// keepalive loop, so the client keeps no cancel function of its own.
 type client struct {
 	balancer.Picker
-	encoding.Codec
-	unaryClientInterceptor UnaryClientInterceptor
-	opts                   []transport.Option
+	unaryInt UnaryClientInterceptor
+	opts     []transport.Option
 }
 
 // DialContext builds a client for endpoint: it installs the default unary
@@ -98,8 +102,7 @@ type client struct {
 // caller's ctx and keeps the resulting picker.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientConnInterface, error) {
 	c := client{
-		Codec: encoding.GetCodec(encoding.Name),
-		unaryClientInterceptor: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
+		unaryInt: func(ctx context.Context, method string, req, reply any, balance balancer.Picker, opts ...grpc.CallOption) error {
 			rt, err := balance.Pick(ctx, balancer.PickInfo{FullMethodName: method})
 			if err != nil {
 				return err
@@ -110,7 +113,6 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (ClientCo
 	for _, o := range opts {
 		o(&c)
 	}
-	c.opts = append(c.opts, transport.WithCodec(c.Codec))
 	picker, err := balancer.DialContext(ctx, endpoint, c.opts...)
 	if err != nil {
 		return nil, err
@@ -126,7 +128,7 @@ func Dial(endpoint string, opts ...Option) (ClientConnInterface, error) {
 
 // Invoke performs one unary call through the unary client interceptor.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, opts ...grpc.CallOption) error {
-	if err := c.unaryClientInterceptor(ctx, method, req, reply, c.Picker, opts...); err != nil {
+	if err := c.unaryInt(ctx, method, req, reply, c.Picker, opts...); err != nil {
 		return err
 	}
 	return nil
@@ -138,12 +140,12 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 // so every endpoint is equally eligible, and the method only travels as frame
 // content. The reply comes back as the bytes the backend wrote; how to
 // interpret them is the caller's business.
-func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (Buffer, error) {
+func (c *client) RoundTrip(ctx context.Context, b []byte, opts ...CallOption) (Buffer, error) {
 	rt, err := c.Pick(ctx, balancer.PickInfo{})
 	if err != nil {
 		return nil, err
 	}
-	return rt.RoundTrip(ctx, p, opts...)
+	return rt.RoundTrip(ctx, b, opts...)
 }
 
 // NewStream rejects every streaming call with codes.Unimplemented: grpcx

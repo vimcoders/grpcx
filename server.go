@@ -23,10 +23,11 @@ func UnaryServerInterceptor(interceptor grpc.UnaryServerInterceptor) ServerOptio
 	return transport.UnaryServerInterceptor(interceptor)
 }
 
-// WithServerCodec sets the codec for request and reply bodies on the server
-// side. The call header is not covered: it always travels in the built-in codec
-// of package encoding, so a client and a server agree on it whatever each side
-// configured here.
+// WithServerCodec stores the codec in the transport options and rebuilds the
+// server Codec from it, keeping the batching choice intact. It can be passed
+// before or after WithServerBufSize: the later of the two re-derives the Codec.
+// The request header is still decoded with the built-in codec of package
+// encoding whatever is configured here.
 func WithServerCodec(codec encoding.Codec) ServerOption {
 	return transport.WithServerCodec(codec)
 }
@@ -45,8 +46,9 @@ func WithServerWriteTimeout(d time.Duration) ServerOption {
 	return transport.WithServerWriteTimeout(d)
 }
 
-// WithServerBufSize caps the send buffer in blocks of the transport block size.
-// Zero disables batching and makes every Send synchronous.
+// WithServerBufSize applies the byte threshold and rebuilds the server Codec:
+// an unpooled codec while the threshold is positive, the pool-backed
+// defaultCodec when it is non-positive, which also turns batching off.
 func WithServerBufSize(n int) ServerOption {
 	return transport.WithServerBufSize(n)
 }
@@ -71,7 +73,7 @@ type Server struct {
 // never applied later, so the interceptor has to be installed at construction
 // time; the service itself is registered through RegisterService.
 func NewServer(opts ...ServerOption) *Server {
-	defaultOptions := transport.DefaultServerOptions
+	defaultOptions := transport.DefaultServerOptions()
 	for _, v := range opts {
 		v(&defaultOptions)
 	}

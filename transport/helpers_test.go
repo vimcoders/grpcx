@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/vimcoders/grpcx/encoding"
 	"github.com/vimcoders/grpcx/generated/api"
@@ -24,10 +25,18 @@ type echoImpl struct {
 	api.UnimplementedEchoServiceServer
 
 	failOn string
+	panics bool
+	delay  time.Duration
 }
 
 // Echo implements api.EchoServiceServer.
 func (e *echoImpl) Echo(_ context.Context, req *api.EchoRequest) (*api.EchoResponse, error) {
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
+	if e.panics {
+		panic("test: handler panicked")
+	}
 	if e.failOn != "" && req.Message == e.failOn {
 		return nil, status.Error(codes.InvalidArgument, "test: handler failed")
 	}
@@ -43,6 +52,7 @@ type fakeSender struct {
 	closes int
 }
 
+// Send implements Sender.
 func (f *fakeSender) Send(p ...[]byte) error {
 	if f.err != nil {
 		return f.err
@@ -55,6 +65,7 @@ func (f *fakeSender) Send(p ...[]byte) error {
 	return nil
 }
 
+// Close implements io.Closer.
 func (f *fakeSender) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -69,8 +80,7 @@ func (f *fakeSender) sent() [][]byte {
 }
 
 // fakeRecver hands out its frames in order, then err (io.EOF when unset). Its
-// frames are Buffer values because every reader gives back what it read with
-// Free; a test that cares about that can pass a countingBuffer instead.
+// frames are Buffers because every reader gives back what it read with Free.
 type fakeRecver struct {
 	mu     sync.Mutex
 	frames []Buffer
@@ -97,30 +107,46 @@ func (f *fakeRecver) remaining() int {
 	return len(f.frames)
 }
 
-// countingCodec records how often it was used, so a test can prove the codec
-// option reached the call path and not only the options struct.
-type countingCodec struct {
-	marshal   atomic.Int32
-	unmarshal atomic.Int32
+// fakeChannel is a Channel over a fakeSender and a fakeRecver, so a server
+// interceptor can be driven without a socket.
+type fakeChannel struct {
+	fakeSender
+	recver fakeRecver
 }
 
-func (c *countingCodec) Name() string { return "counting" }
+func (c *fakeChannel) Recv() (Buffer, error) { return c.recver.Recv() }
 
-func (c *countingCodec) Marshal(msg any) ([]byte, error) {
-	c.marshal.Add(1)
-	return encoding.Marshal(msg)
+// closeOnCleanup closes every connection when the test ends.
+func closeOnCleanup(t *testing.T, conns ...net.Conn) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
 }
 
-func (c *countingCodec) Unmarshal(p []byte, msg any) error {
-	c.unmarshal.Add(1)
-	return encoding.Unmarshal(p, msg)
+// fixedCodec returns the same bytes for every value, which makes it
+// distinguishable from the built-in proto codec on the wire.
+type fixedCodec struct {
+	out []byte
+	err error
 }
+
+// Name implements encoding.Codec.
+func (f fixedCodec) Name() string { return "fixed" }
+
+// Marshal implements encoding.Codec.
+func (f fixedCodec) Marshal(any) ([]byte, error) { return f.out, f.err }
+
+// Unmarshal implements encoding.Codec.
+func (f fixedCodec) Unmarshal([]byte, any) error { return nil }
 
 // pooledPayload copies b into a pooled buffer, the way the channel hands a frame
 // to its reader.
 func pooledPayload(b []byte) defaultBuffer {
 	p := getmbuf(len(b))
-	copy(p[:len(b)], b)
+	copy(p, b)
 	return p[:len(b)]
 }
 
@@ -132,12 +158,14 @@ type countingBuffer struct {
 	freed int
 }
 
+// Free implements Buffer.
 func (b *countingBuffer) Free() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.freed++
 }
 
+// ReadOnlyData implements Buffer.
 func (b *countingBuffer) ReadOnlyData() []byte { return b.data }
 
 func (b *countingBuffer) freeCount() int {
@@ -146,8 +174,6 @@ func (b *countingBuffer) freeCount() int {
 	return b.freed
 }
 
-// countingPayload wraps b in a countingBuffer, for a test that needs to know
-// whether a frame was freed.
 func countingPayload(b []byte) *countingBuffer {
 	return &countingBuffer{data: append([]byte(nil), b...)}
 }
@@ -162,13 +188,13 @@ func mustMarshal(t *testing.T, m any) []byte {
 	return b
 }
 
-// headerFrame is a header ready to be read by fakeRecver.
+// headerFrame is a request header ready to be read by fakeRecver.
 func headerFrame(t *testing.T, opts *api.CallOptions) defaultBuffer {
 	t.Helper()
 	return pooledPayload(mustMarshal(t, opts))
 }
 
-// payloadFrame is a payload ready to be read by fakeRecver.
+// payloadFrame is a message body ready to be read by fakeRecver.
 func payloadFrame(t *testing.T, m any) defaultBuffer {
 	t.Helper()
 	return pooledPayload(mustMarshal(t, m))
@@ -187,6 +213,7 @@ func newTestClient(t *testing.T, conn net.Conn, opts ...Option) *client {
 		SendCloser: ch,
 		Options:    o,
 		streams:    make(map[uint32]*clientStream),
+		Codec:      &defaultCodec{ecodec: o.ecodec},
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	go func() { _ = c.Handle(ctx, ch) }()
@@ -203,7 +230,7 @@ func newTestClient(t *testing.T, conn net.Conn, opts ...Option) *client {
 func startPipeServer(t *testing.T, opts ...ServerOption) (cli *client, cancel context.CancelFunc, handleErr <-chan error) {
 	t.Helper()
 	cliConn, srvConn := net.Pipe()
-	so := DefaultServerOptions
+	so := DefaultServerOptions()
 	for _, v := range opts {
 		v(&so)
 	}
@@ -221,8 +248,18 @@ func echoService(impl api.EchoServiceServer) ServerOption {
 	return RegisterService(&api.EchoService_ServiceDesc, impl)
 }
 
-// newStreamUnderTest builds a clientStream over the frame pool, with a
-// cancellable context and a counter for its deregistrations.
+// serverOptions builds a ServerOptions with every option applied, and the
+// channel that stands in for the accepted connection.
+func serverOptions(opts ...ServerOption) ServerOptions {
+	so := DefaultServerOptions()
+	for _, v := range opts {
+		v(&so)
+	}
+	return so
+}
+
+// newStreamUnderTest builds a clientStream over a sender, with a cancellable
+// context and a counter for its deregistrations.
 func newStreamUnderTest(sender SendCloser) (*clientStream, *atomic.Int32) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var deleted atomic.Int32
@@ -234,7 +271,6 @@ func newStreamUnderTest(sender SendCloser) (*clientStream, *atomic.Int32) {
 		deleteStream: func(uint32) {
 			deleted.Add(1)
 		},
-		codec:  encoding.GetCodec(encoding.Name),
 		Sender: sender,
 	}
 	return s, &deleted
@@ -251,6 +287,7 @@ type answeringSender struct {
 	respond func(s *clientStream, header *api.CallOptions, payload []byte) error
 }
 
+// Send implements Sender.
 func (a *answeringSender) Send(p ...[]byte) error {
 	if len(p) != 2 {
 		return io.ErrShortWrite
@@ -272,6 +309,7 @@ func (a *answeringSender) Send(p ...[]byte) error {
 	return a.respond(s, &header, p[1])
 }
 
+// Close implements io.Closer.
 func (a *answeringSender) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -300,7 +338,11 @@ func newClientOnSender(t *testing.T, respond func(*clientStream, *api.CallOption
 		v(&o)
 	}
 	a := &answeringSender{respond: respond}
-	c := &client{Options: o, streams: make(map[uint32]*clientStream)}
+	c := &client{
+		Options: o,
+		streams: make(map[uint32]*clientStream),
+		Codec:   &defaultCodec{ecodec: o.ecodec},
+	}
 	c.SendCloser = a
 	a.c = c
 	t.Cleanup(func() { _ = c.Close() })

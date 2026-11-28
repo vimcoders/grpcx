@@ -76,38 +76,49 @@ func WithWriteTimeout(d time.Duration) Option {
 	}
 }
 
-// WithCodec sets the codec for request and reply bodies. The call header is
-// always encoded with the built-in codec in package encoding, so both peers
-// agree on the header whatever this option holds.
+// WithCodec stores c in Options.ecodec exactly as given, nil included: there is
+// no nil check. DialContext reads that field once and builds the client's Codec
+// as a defaultCodec, so this option never touches the Codec field itself.
+//
+// The effect depends on the value being encoded: a proto.Message always goes
+// through proto.Marshal into a pool buffer and never reaches c, while every
+// other value is handed to c on the encode and the decode path. A nil c
+// therefore fails only when such a value is encoded or decoded: the call
+// through the nil interface panics.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
-		t.codec = c
+		t.ecodec = c
 	}
 }
 
-// WithBufSize sets the send buffer in blocks of defaultBufSize, capped at
-// defaultMaxBufSize. Zero disables batching, which is the package default.
+// WithBufSize sets the batching threshold in bytes, capped at
+// defaultMaxBufSize. The value is stored as given: n <= 0 writes a non-positive
+// threshold, and Send only queues a batch while the pending byte count is below
+// it, which no byte count ever is. Zero is the package default and therefore
+// also turns batching off.
 //
 // With batching on, Send queues the caller's slices by reference until the
-// flush, so a payload given to RoundTrip must not change between Send returning
-// nil and that flush. With batching off, the bytes are already written when
-// Send returns. The flush interval is not configurable; the timer runs at
-// defaultFlushInterval.
+// flush, so a payload given to RoundTrip must neither change nor be freed
+// between Send returning nil and that flush. With batching off, the bytes are
+// already written when Send returns. The flush interval is not configurable;
+// the timer runs at defaultFlushInterval.
 func WithBufSize(n int) Option {
 	return func(c *Options) {
-		c.bufsize = min(n*defaultBufSize, defaultMaxBufSize)
+		c.bufsize = min(n, defaultMaxBufSize)
 	}
 }
 
 // Options holds the transport configuration shared by the client and the
-// server sides.
+// server sides. ecodec is the raw encoding.Codec the options carry; it is not
+// what marshals a frame, because the client and ServerOptions each build their
+// own Codec from it at construction time.
 type Options struct {
 	maxStreams   uint32
 	timeout      time.Duration
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 	keepalive    time.Duration
-	codec        encoding.Codec
+	ecodec       encoding.Codec
 	bufsize      int
 }
 
@@ -130,7 +141,7 @@ func DefaultOptions() Options {
 	return Options{
 		timeout:      defaultTimeout,
 		maxStreams:   defaultMaxStreams,
-		codec:        encoding.GetCodec(encoding.Name),
+		ecodec:       encoding.GetCodec(encoding.Name),
 		readTimeout:  defaultReadTimeout,
 		writeTimeout: defaultWriteTimeout,
 		keepalive:    defaultKeepalive,
@@ -138,7 +149,9 @@ func DefaultOptions() Options {
 }
 
 // client is the RoundTripper implementation: it owns the connection, the
-// stream table and the receive loop that demultiplexes responses.
+// stream table and the receive loop that demultiplexes responses. Codec is the
+// encoder for the header and the bodies; it is built once in DialContext and is
+// always a defaultCodec, whatever WithBufSize was set to.
 type client struct {
 	Options
 	RoundTripper
@@ -147,6 +160,7 @@ type client struct {
 	streamID uint32
 	sync.Once
 	sync.RWMutex
+	Codec
 }
 
 // Dial connects to endpoint over TCP with the background context.
@@ -158,6 +172,11 @@ func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 // transport configuration and the connection, then starts the receive loop.
 // The dial itself runs under defaultTimeout, not WithTimeout: that option
 // only reaches Ping, so a slow dial is bounded by the package default.
+//
+// opts are applied twice: once inside newChannel for the connection, and once
+// here into a fresh Options so the client can read ecodec and build its Codec.
+// The client's Codec is always a defaultCodec, so a pooled request buffer can
+// be queued by a batched channel.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	d := net.Dialer{
 		Timeout: defaultTimeout,
@@ -167,13 +186,15 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		return nil, err
 	}
 	ch := newChannel(cc, opts...)
+	opt := DefaultOptions()
+	for _, o := range opts {
+		o(&opt)
+	}
 	rt := &client{
 		SendCloser: ch,
-		Options:    DefaultOptions(),
+		Options:    opt,
 		streams:    make(map[uint32]*clientStream),
-	}
-	for _, o := range opts {
-		o(&rt.Options)
+		Codec:      &defaultCodec{ecodec: opt.ecodec},
 	}
 	go func() {
 		if err := rt.Handle(context.WithoutCancel(ctx), ch); err != nil {
@@ -266,7 +287,6 @@ func (c *client) createStream(ctx context.Context, _ ...CallOption) (*clientStre
 		cancel:       cancel,
 		deleteStream: c.deleteStream,
 		c:            make(chan *reply, 1),
-		codec:        c.codec,
 	}
 	c.streams[s.id] = &s
 	c.streamID = streamID
@@ -295,39 +315,50 @@ func (c *client) getStream(sid uint32) *clientStream {
 	return c.streams[sid]
 }
 
-// Invoke performs one unary call: it encodes req, hands the bytes to RoundTrip,
-// then decodes the reply into reply. The header, the stream id, the caller
-// deadline and the status check all belong to RoundTrip. grpc.CallOption values
-// are accepted for interface compatibility and ignored; metadata and the
-// deadline travel through ctx.
+// Invoke performs one unary call: it encodes req through the client's Codec,
+// hands the bytes to RoundTrip, then decodes the reply into reply. The header,
+// the stream id, the caller deadline and the status check all belong to
+// RoundTrip. grpc.CallOption values are accepted for interface compatibility
+// and ignored; metadata and the deadline travel through ctx.
+//
+// The request buffer is freed when Invoke returns, and the header buffer when
+// RoundTrip returns. On the success path RoundTrip has already received the
+// reply, so both frames are on the wire. On an error, or under batching, a
+// frame can still be pending when its buffer goes back to the pool.
 func (c *client) Invoke(ctx context.Context, method string, req any, reply any, _ ...grpc.CallOption) error {
-	b, err := c.codec.Marshal(req)
+	b, err := c.Marshal(req)
 	if err != nil {
 		return err
 	}
-	response, err := c.RoundTrip(ctx, b, &CallOptions{
+	defer b.Free()
+	response, err := c.RoundTrip(ctx, b.ReadOnlyData(), &CallOptions{
 		FullMethodName: method,
 	})
 	if err != nil {
 		return err
 	}
 	defer response.Free()
-	if err := c.codec.Unmarshal(response.ReadOnlyData(), reply); err != nil {
+	if err := c.Unmarshal(response, reply); err != nil {
 		return err
 	}
 	return nil
 }
 
-// RoundTrip sends p as one payload frame on a fresh stream and returns the
-// reply payload as a Buffer the caller owns and frees. p goes on the wire as
+// RoundTrip sends b as one payload frame on a fresh stream and returns the
+// reply payload as a Buffer the caller owns and frees. b goes on the wire as
 // given, which lets a relay forward bytes it cannot interpret.
 //
-// The header is built here: opts first, then the caller's context deadline
-// folded into Timeout, then context metadata appended to Metadatas, and the
-// stream id last, so this transport's id always wins. A reply whose code is
-// not OK is freed here and comes back as a status error with that code and
-// description.
-func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (Buffer, error) {
+// The header is built here: the stream id this transport allocated, then opts,
+// then the caller's context deadline folded into Timeout, then context metadata
+// appended to Metadatas. A CallOption carrying a non-zero StreamID replaces the
+// allocated one, so a caller can route the frame to another stream. A reply
+// whose code is not OK is freed here and comes back as a status error with that
+// code and description.
+//
+// The header is encoded through the client's Codec and freed on return. With
+// batching off the write has already completed by then; with batching on the
+// header and the payload can both still sit in the pending batch.
+func (c *client) RoundTrip(ctx context.Context, b []byte, opts ...CallOption) (Buffer, error) {
 	s, err := c.createStream(ctx)
 	if err != nil {
 		return nil, err
@@ -335,7 +366,7 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (B
 	// The half-close is best effort: a failure to send it is already covered by
 	// whatever error the call returns.
 	defer func() { _ = s.CloseSend() }()
-	in := api.CallOptions{}
+	in := api.CallOptions{StreamID: s.id}
 	for _, o := range opts {
 		o.apply(&in)
 	}
@@ -347,15 +378,12 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (B
 			in.Metadatas = append(in.Metadatas, k, v)
 		}
 	}
-	// Written last, after every option was applied, so a caller cannot route
-	// frames to another stream: the id this transport allocated is the only one
-	// the peer will see.
-	in.StreamID = s.id
-	h, err := encoding.Marshal(&in)
+	h, err := c.Marshal(&in)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Sender.Send(h, p); err != nil {
+	defer h.Free()
+	if err := s.Sender.Send(h.ReadOnlyData(), b); err != nil {
 		return nil, err
 	}
 	reply, err := s.recv()
@@ -379,9 +407,13 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (B
 	return reply.Buffer, nil
 }
 
-// Ping keeps the connection active by opening a stream, sending an empty
-// request and waiting for the reply. The balancer relies on it, so an idle
-// connection never reaches the read deadline.
+// Ping keeps the connection active by running a RoundTrip with a nil payload,
+// so the request body is a zero-length frame. The header names no method, so
+// the server can only answer codes.Unimplemented; that answer counts as proof
+// the connection is alive, and every other error is propagated. The reply
+// buffer is discarded without being freed: it is the zero-length frame, not a
+// pooled payload. The balancer relies on Ping, so an idle connection never
+// reaches the read deadline.
 //
 // Its budget is min(Timeout(), Keepalive()), not the stream's read timeout: a
 // health check has to fail before the next one is due. Under the defaults that
@@ -389,21 +421,9 @@ func (c *client) RoundTrip(ctx context.Context, p []byte, opts ...CallOption) (B
 func (c *client) Ping(ctx context.Context) error {
 	childCtx, cancel := context.WithTimeout(ctx, min(c.Timeout(), c.Keepalive()))
 	defer cancel()
-	s, err := c.createStream(childCtx)
-	if err != nil {
+	if _, err := c.RoundTrip(childCtx, nil); err != nil && status.Code(err) != codes.Unimplemented {
 		return err
-	}
-	// The half-close is best effort: a failure to send it is already covered by
-	// whatever error the call returns.
-	defer func() { _ = s.CloseSend() }()
-	if err := s.Send(&api.Empty{}); err != nil {
-		return err
-	}
-	// The request carries no method name, so the server can only answer
-	// codes.Unimplemented. That answer is proof the connection is alive, so it
-	// counts as success; every other error is propagated.
-	if err := s.RecvMsg(&api.Empty{}); err != nil && status.Code(err) != codes.Unimplemented {
-		return err
+
 	}
 	return nil
 }

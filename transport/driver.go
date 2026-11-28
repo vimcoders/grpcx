@@ -24,15 +24,14 @@ const (
 	// header and payloads that arrive in bursts. A payload at least this large
 	// is read directly once the buffer drains. messageLengthMax itself cost
 	// 4MB of heap per connection.
-	readBufSize = 1024 * 1024
+	readBufSize = 32 * 1024
 	// defaultFlushInterval is the timer resolution Go's runtime timer wheel
 	// settles on, so it is the shortest useful flush delay, and the only one a
 	// batched connection runs at: Options carries no interval field.
 	defaultFlushInterval = time.Millisecond
-	// defaultBufSize is the size of one batching block. WithBufSize multiplies
-	// its argument by it, so Options.bufsize — the field channel.Send compares
-	// the pending frames against — is counted in bytes. The server option keeps
-	// its argument as a block count and Handle converts it.
+	// defaultBufSize is the size of one batching block. WithBufSize takes bytes
+	// directly, so this constant only sets the defaultMaxBufSize ceiling:
+	// sixteen blocks.
 	defaultBufSize = 1024
 	// defaultMaxBufSize bounds the send buffer at 16 blocks, matching the
 	// default TCP send buffer on Linux.
@@ -51,7 +50,8 @@ const (
 	// keepalive period, or idle connections are torn down between pings.
 	defaultReadTimeout = 3 * defaultKeepalive
 	// defaultWriteTimeout bounds a single write: Send arms the write deadline on
-	// every call, and the flush timer arms one before it writes.
+	// every call, and the flush timer writes under the deadline the last Send
+	// armed.
 	defaultWriteTimeout = defaultTimeout
 	// defaultKeepalive is the idle period at which the round robin balancer pings
 	// a connection. It is three defaultTimeouts rather than gRPC's ten-second
@@ -73,7 +73,8 @@ type RoundTripper interface {
 	//
 	// With batching off (the default) p is written before RoundTrip returns.
 	// Once WithBufSize is set, the frame can sit in the pending batch for up to
-	// one flush interval, and the caller must not touch the bytes until then.
+	// one flush interval: the caller must neither change the bytes nor free the
+	// buffer holding them until the flush.
 	RoundTrip(context.Context, []byte, ...CallOption) (Buffer, error)
 	// Ping sends an empty request to keep the connection from hitting the read
 	// deadline.
@@ -84,7 +85,9 @@ type RoundTripper interface {
 
 // Sender writes frames onto one connection: every argument becomes a single
 // length-prefixed frame, so a caller sends the header and the payload as two
-// frames.
+// frames. The slices are borrowed, not owned: a batched channel keeps them by
+// reference until the flush, so the caller must not change or free them before
+// that write has happened.
 type Sender interface {
 	Send(...[]byte) error
 }
@@ -141,4 +144,20 @@ type ServiceRegistrar = grpc.ServiceRegistrar
 type Buffer interface {
 	Free()
 	ReadOnlyData() []byte
+}
+
+// Codec turns one message into a Buffer and back.
+//
+// Marshal returns a buffer the caller owns and frees: it can come from the
+// frame pool, in which case Free returns it, or from an encoding that allocates
+// its own bytes, in which case Free is a no-op. Unmarshal only reads the
+// buffer; ownership stays with the caller.
+//
+// Two implementations exist. defaultCodec special-cases proto.Message into a
+// pool buffer and delegates everything else to the configured encoding.Codec;
+// codec delegates every value, proto included. The server picks between them
+// according to its batching threshold; the client always uses defaultCodec.
+type Codec interface {
+	Marshal(any) (Buffer, error)
+	Unmarshal(Buffer, any) error
 }

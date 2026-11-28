@@ -29,14 +29,17 @@ import (
 	"google.golang.org/grpc/mem"
 )
 
-// defaultBuffer is a frame payload whose storage comes from buffers. Free
-// returns it to the pool and must be called exactly once.
+// defaultBuffer is a frame payload backed by the buffers pool. Free returns it
+// to the pool and must be called exactly once; it is a value type, so the
+// returned Buffer interface holds a copy of the slice header, not a pointer.
 type defaultBuffer []byte
 
+// Free returns the storage to the pool.
 func (e defaultBuffer) Free() {
 	putmbuf(e)
 }
 
+// ReadOnlyData returns the bytes as they are.
 func (e defaultBuffer) ReadOnlyData() []byte {
 	return e
 }
@@ -60,7 +63,9 @@ func putmbuf(p []byte) {
 }
 
 // channel owns one net.Conn: it frames outbound messages, reads inbound frames,
-// and batches writes when bufsize is non-zero.
+// and batches writes when bufsize is non-zero. Options is embedded, so the
+// channel also carries ecodec, but nothing here uses it: marshalling belongs to
+// the client and the server handlers, not to the framing layer.
 type channel struct {
 	Options
 	net.Conn
@@ -109,7 +114,7 @@ func newChannel(c net.Conn, opts ...Option) *channel {
 // A zero-length frame returns an empty Buffer, not nil, so every call has
 // something to free and no caller has to nil-check.
 func (ch *channel) Recv() (Buffer, error) {
-	var hrbuf [messageHeaderLength]byte // avoid alloc when reading header
+	var hrbuf [messageHeaderLength]byte // escapes: ReadFull holds it
 
 	if err := ch.SetReadDeadline(time.Now().Add(ch.readTimeout)); err != nil {
 		return nil, err
@@ -166,7 +171,7 @@ func (ch *channel) Send(p ...[]byte) error {
 		if len(b) > messageLengthMax {
 			return status.OutOfRange.Err()
 		}
-		var hwbuf [messageHeaderLength]byte
+		var hwbuf [messageHeaderLength]byte // escapes into net.Buffers
 		binary.BigEndian.PutUint32(hwbuf[:], uint32(len(b)))
 		bw = append(bw, hwbuf[:], b)
 	}

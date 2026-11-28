@@ -22,9 +22,9 @@ type ServerOption func(c *ServerOptions)
 // requests.
 //
 // Codec is derived state, not an independent setting: WithServerBufSize rebuilds
-// it from Options.ecodec on every call, picking codec when batching is on and
-// defaultCodec when it is off. WithServerCodec leans on that by writing ecodec
-// and then calling WithServerBufSize again.
+// it through Options.newCodec on every call, picking emptyCodec when batching is
+// on and defaultCodec when it is off. WithServerCodec leans on the same helper
+// after writing ecodec, so option order does not matter.
 //
 // ServerOptions also implements Handler, which is what serves each accepted
 // connection. The built-in handler answers unary methods only, so there is no
@@ -75,11 +75,11 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 	}
 }
 
-// WithServerCodec stores c in Options.ecodec and rebuilds the server Codec by
-// re-running WithServerBufSize with the current threshold, so the choice
-// between defaultCodec and codec is re-derived from the new ecodec. Option
-// order does not matter: whichever of the two options runs last leaves a Codec
-// built from the latest ecodec.
+// WithServerCodec stores c in Options.ecodec and rebuilds the server Codec from
+// the resulting options, so the choice between defaultCodec and emptyCodec is
+// re-derived from the new ecodec and the current threshold. Option order does
+// not matter: whichever of the two options runs last leaves a Codec built from
+// the latest Options.
 //
 // The request header is decoded with the built-in codec of package encoding
 // whatever this option holds. The reply header is marshalled by the server
@@ -88,7 +88,8 @@ func RegisterService(sd *grpc.ServiceDesc, ss any) ServerOption {
 func WithServerCodec(c encoding.Codec) ServerOption {
 	return func(so *ServerOptions) {
 		WithCodec(c)(&so.Options)
-		WithServerBufSize(so.bufsize)(so)
+		opt := so.Options
+		so.Codec = opt.newCodec()
 	}
 }
 
@@ -113,12 +114,12 @@ func WithServerWriteTimeout(d time.Duration) ServerOption {
 }
 
 // WithServerBufSize applies WithBufSize and then rebuilds the server Codec from
-// Options.ecodec: codec when the threshold is positive, defaultCodec otherwise.
-// Rebuilding on every call is what keeps the Codec in step with whichever of
-// WithServerBufSize and WithServerCodec ran last.
+// the resulting options: emptyCodec when the threshold is positive, defaultCodec
+// otherwise. Rebuilding on every call is what keeps the Codec in step with
+// whichever of WithServerBufSize and WithServerCodec ran last.
 //
-// With batching on, codec keeps every reply — including the reply header and a
-// proto.Message body — out of the frame pool, so sender.send can free its
+// With batching on, emptyCodec keeps every reply — including the reply header and
+// a proto.Message body — out of the frame pool, so sender.send can free its
 // buffers when it returns without recycling bytes that are still queued for the
 // flush. With batching off, defaultCodec puts proto messages in pool buffers.
 //
@@ -131,11 +132,8 @@ func WithServerBufSize(n int) ServerOption {
 			return
 		}
 		WithBufSize(n)(&so.Options)
-		if so.bufsize == 0 {
-			so.Codec = &defaultCodec{so.ecodec}
-		} else {
-			so.Codec = &codec{so.ecodec}
-		}
+		opt := so.Options
+		so.Codec = opt.newCodec()
 	}
 }
 

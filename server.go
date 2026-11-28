@@ -47,8 +47,8 @@ func WithServerWriteTimeout(d time.Duration) ServerOption {
 }
 
 // WithServerBufSize applies the byte threshold and rebuilds the server Codec:
-// an unpooled codec while the threshold is positive, the pool-backed
-// defaultCodec when it is non-positive, which also turns batching off.
+// an unpooled codec while the threshold is positive, the pool-backed codec when
+// it is non-positive, which also turns batching off.
 func WithServerBufSize(n int) ServerOption {
 	return transport.WithServerBufSize(n)
 }

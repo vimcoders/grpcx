@@ -37,10 +37,12 @@ type ClientConnInterface interface {
 type Option func(c *client)
 
 // WithCodec forwards transport.WithCodec, which stores the codec in the
-// transport options. The client builds a defaultCodec from it, so a
-// proto.Message body and the request header are still marshalled by protobuf
-// into a pool buffer; the codec given here handles non-proto values and all
-// decoding. A nil codec is ignored.
+// transport options. The transport derives its Codec from it, so the effect
+// depends on the batching threshold: with batching off, a proto.Message body and
+// the request header are marshalled by protobuf into a pool buffer, while the
+// codec given here handles non-proto values and all decoding. With batching on,
+// every value goes to the codec. A nil codec is stored as given, so a value that
+// reaches it panics on the call through the nil interface.
 func WithCodec(codec encoding.Codec) Option {
 	return func(c *client) {
 		c.opts = append(c.opts, transport.WithCodec(codec))

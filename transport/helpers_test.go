@@ -213,7 +213,7 @@ func newTestClient(t *testing.T, conn net.Conn, opts ...Option) *client {
 		SendCloser: ch,
 		Options:    o,
 		streams:    make(map[uint32]*clientStream),
-		Codec:      &defaultCodec{ecodec: o.ecodec},
+		Codec:      o.newCodec(),
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	go func() { _ = c.Handle(ctx, ch) }()
@@ -341,7 +341,7 @@ func newClientOnSender(t *testing.T, respond func(*clientStream, *api.CallOption
 	c := &client{
 		Options: o,
 		streams: make(map[uint32]*clientStream),
-		Codec:   &defaultCodec{ecodec: o.ecodec},
+		Codec:   o.newCodec(),
 	}
 	c.SendCloser = a
 	a.c = c

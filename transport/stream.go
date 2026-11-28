@@ -327,9 +327,10 @@ type sender struct {
 // The stream id travels inside opts; a zero id there leaves the frame
 // unroutable.
 //
-// Freeing on return is only safe when the Codec returns unpooled bytes, which
-// is what codec does. With a defaultCodec under batching, a proto header or
-// body would go back to the pool while its bytes were still in the batch.
+// Freeing on return is only safe when the Codec returns unpooled bytes, and
+// Options.newCodec guarantees that under batching: it installs emptyCodec, never
+// defaultCodec. With a defaultCodec under batching, a proto header or body would
+// go back to the pool while its bytes were still in the batch.
 func (s *sender) send(m any, opts ...CallOption) error {
 	options := api.CallOptions{}
 	for _, v := range opts {

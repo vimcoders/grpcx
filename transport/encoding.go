@@ -18,7 +18,7 @@ func (e emptyBuffer) ReadOnlyData() []byte {
 	return e
 }
 
-// defaultCodec is the Codec the transport installs by default. It splits on the
+// defaultCodec is the Codec installed while batching is off. It splits on the
 // type of the value: a proto.Message is marshalled into a pool buffer, anything
 // else is delegated to ecodec and wrapped in an emptyBuffer. The split means a
 // Buffer returned by Marshal is not always pooled, and Free is only meaningful
@@ -61,28 +61,29 @@ func (c defaultCodec) Unmarshal(b Buffer, v any) error {
 	return c.ecodec.Unmarshal(b.ReadOnlyData(), v)
 }
 
-// codec adapts any encoding.Codec to Codec without special-casing proto. Every
-// value, proto.Message included, goes through ecodec, and the result is always
-// an emptyBuffer. WithServerBufSize installs it when batching is on so a batched
-// frame is never handed back to the pool before the flush has written it.
-type codec struct {
+// emptyCodec adapts any encoding.Codec to Codec without special-casing proto.
+// Every value, proto.Message included, goes through ecodec, and the result is
+// always an emptyBuffer. Options.newCodec installs it while batching is on, so a
+// frame queued in the pending batch is never handed back to the pool before the
+// flush has written it.
+type emptyCodec struct {
 	ecodec encoding.Codec
 }
 
 // Marshal implements Codec by delegating to defaultMarshal.
-func (c codec) Marshal(v any) (Buffer, error) {
+func (c emptyCodec) Marshal(v any) (Buffer, error) {
 	return c.defaultMarshal(v)
 }
 
 // defaultMarshal delegates to ecodec and returns the bytes as an emptyBuffer.
 // As with defaultCodec, an error result still carries a non-nil Buffer
 // interface holding a nil emptyBuffer.
-func (c codec) defaultMarshal(v any) (emptyBuffer, error) {
+func (c emptyCodec) defaultMarshal(v any) (emptyBuffer, error) {
 	return c.ecodec.Marshal(v)
 }
 
 // Unmarshal implements Codec: it hands the buffer's bytes to ecodec and leaves
 // the buffer's ownership with the caller.
-func (c codec) Unmarshal(b Buffer, v any) error {
+func (c emptyCodec) Unmarshal(b Buffer, v any) error {
 	return c.ecodec.Unmarshal(b.ReadOnlyData(), v)
 }

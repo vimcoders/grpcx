@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -274,5 +275,67 @@ func TestHandleDiscardsAnUnroutableReply(t *testing.T) {
 	}
 	if got := recv.remaining(); got != 0 {
 		t.Errorf("%d frames left, want none", got)
+	}
+}
+
+// TestDialContextChoosesTheCodec covers the client side of newCodec: a dial with
+// batching on installs the unpooled codec, so a frame queued in the pending
+// batch is never handed back to the pool before the flush.
+func TestDialContextChoosesTheCodec(t *testing.T) {
+	cases := []struct {
+		name   string
+		opts   []Option
+		pooled bool
+	}{
+		{"batching off", nil, true},
+		{"batching on", []Option{WithBufSize(1)}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+			go func() {
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					go func(conn net.Conn) {
+						defer func() { _ = conn.Close() }()
+						buf := make([]byte, readBufSize)
+						for {
+							if _, err := conn.Read(buf); err != nil {
+								return
+							}
+						}
+					}(conn)
+				}
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			rt, err := DialContext(ctx, ln.Addr().String(), c.opts...)
+			if err != nil {
+				t.Fatalf("DialContext: %v", err)
+			}
+			t.Cleanup(func() { _ = rt.Close() })
+
+			cl, ok := rt.(*client)
+			if !ok {
+				t.Fatalf("DialContext returned %T, want *client", rt)
+			}
+			if c.pooled {
+				if _, ok := cl.Codec.(defaultCodec); !ok {
+					t.Fatalf("Codec is %T, want defaultCodec", cl.Codec)
+				}
+				return
+			}
+			if _, ok := cl.Codec.(emptyCodec); !ok {
+				t.Fatalf("Codec is %T, want emptyCodec", cl.Codec)
+			}
+		})
 	}
 }

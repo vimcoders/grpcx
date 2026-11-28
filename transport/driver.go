@@ -153,10 +153,11 @@ type Buffer interface {
 // its own bytes, in which case Free is a no-op. Unmarshal only reads the
 // buffer; ownership stays with the caller.
 //
-// Two implementations exist. defaultCodec special-cases proto.Message into a
-// pool buffer and delegates everything else to the configured encoding.Codec;
-// codec delegates every value, proto included. The server picks between them
-// according to its batching threshold; the client always uses defaultCodec.
+// Two implementations exist, and Options.newCodec picks between them from the
+// batching threshold on the client and the server alike. defaultCodec
+// special-cases proto.Message into a pool buffer and delegates everything else
+// to the configured encoding.Codec; emptyCodec delegates every value, proto
+// included, and hands out buffers the pool never owns.
 type Codec interface {
 	Marshal(any) (Buffer, error)
 	Unmarshal(Buffer, any) error

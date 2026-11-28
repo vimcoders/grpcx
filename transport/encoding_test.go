@@ -106,10 +106,10 @@ func TestDefaultCodecRejectsGarbage(t *testing.T) {
 	}
 }
 
-// TestCodecKeepsEveryValueOffThePool covers the batching codec: a proto.Message
-// is delegated too, so nothing it returns can be handed back to the pool.
+// TestCodecKeepsEveryValueOffThePool covers emptyCodec: a proto.Message is
+// delegated too, so nothing it returns can be handed back to the pool.
 func TestCodecKeepsEveryValueOffThePool(t *testing.T) {
-	c := codec{ecodec: protoCodec()}
+	c := emptyCodec{ecodec: protoCodec()}
 	buf, err := c.Marshal(&api.EchoRequest{Message: "hi"})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -123,9 +123,9 @@ func TestCodecKeepsEveryValueOffThePool(t *testing.T) {
 	buf.Free()
 }
 
-// TestCodecRoundTripsThroughEncoding covers the batching codec's decode path.
+// TestCodecRoundTripsThroughEncoding covers emptyCodec's decode path.
 func TestCodecRoundTripsThroughEncoding(t *testing.T) {
-	c := codec{ecodec: protoCodec()}
+	c := emptyCodec{ecodec: protoCodec()}
 	buf, err := c.Marshal(&api.EchoRequest{Message: "hi"})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -150,8 +150,8 @@ func TestEmptyBufferFreeIsANoop(t *testing.T) {
 	}
 }
 
-// TestFixedCodecReachesNonProto covers WithCodec's reach: the installed codec
-// handles a non-proto value even though the client Codec is a defaultCodec.
+// TestFixedCodecReachesNonProto covers WithCodec's reach: defaultCodec hands a
+// non-proto value to the installed codec.
 func TestFixedCodecReachesNonProto(t *testing.T) {
 	c := defaultCodec{ecodec: fixedCodec{out: []byte("M")}}
 	buf, err := c.Marshal(map[string]string{"a": "1"})

@@ -78,13 +78,14 @@ func WithWriteTimeout(d time.Duration) Option {
 
 // WithCodec stores c in Options.ecodec exactly as given, nil included: there is
 // no nil check. DialContext reads that field once and builds the client's Codec
-// as a defaultCodec, so this option never touches the Codec field itself.
+// through Options.newCodec, so this option never touches the Codec field itself.
 //
-// The effect depends on the value being encoded: a proto.Message always goes
-// through proto.Marshal into a pool buffer and never reaches c, while every
-// other value is handed to c on the encode and the decode path. A nil c
-// therefore fails only when such a value is encoded or decoded: the call
-// through the nil interface panics.
+// The effect depends on the batching threshold as well as on the value being
+// encoded. With batching off, a proto.Message goes through proto.Marshal into a
+// pool buffer and never reaches c, while every other value is handed to c on
+// both the encode and the decode path. With batching on, every value including
+// proto.Message goes to c. A nil c therefore fails whenever a value that would
+// reach it is encoded or decoded: the call through the nil interface panics.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
 		t.ecodec = c
@@ -135,6 +136,18 @@ func (o Options) Timeout() time.Duration {
 	return o.timeout
 }
 
+// newCodec builds the Codec for this configuration. With batching on it returns
+// an emptyCodec, which keeps every value off the frame pool so a frame queued in
+// the pending batch cannot be handed back before the flush has written it. With
+// batching off it returns a defaultCodec, which marshals proto messages into
+// pooled buffers.
+func (o Options) newCodec() Codec {
+	if o.bufsize > 0 {
+		return emptyCodec{o.ecodec}
+	}
+	return defaultCodec{o.ecodec}
+}
+
 // DefaultOptions returns the transport configuration with every field set to
 // its package default.
 func DefaultOptions() Options {
@@ -150,8 +163,9 @@ func DefaultOptions() Options {
 
 // client is the RoundTripper implementation: it owns the connection, the
 // stream table and the receive loop that demultiplexes responses. Codec is the
-// encoder for the header and the bodies; it is built once in DialContext and is
-// always a defaultCodec, whatever WithBufSize was set to.
+// encoder for the header and the bodies; it is built once in DialContext from
+// Options.newCodec, so the batching threshold decides whether proto messages
+// take a pooled buffer.
 type client struct {
 	Options
 	RoundTripper
@@ -175,8 +189,9 @@ func Dial(endpoint string, opts ...Option) (RoundTripper, error) {
 //
 // opts are applied twice: once inside newChannel for the connection, and once
 // here into a fresh Options so the client can read ecodec and build its Codec.
-// The client's Codec is always a defaultCodec, so a pooled request buffer can
-// be queued by a batched channel.
+// Codec comes from Options.newCodec: with batching on it is an emptyCodec, so a
+// frame queued in the pending batch is never handed back to the pool before the
+// flush has written it.
 func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTripper, error) {
 	d := net.Dialer{
 		Timeout: defaultTimeout,
@@ -194,7 +209,7 @@ func DialContext(ctx context.Context, endpoint string, opts ...Option) (RoundTri
 		SendCloser: ch,
 		Options:    opt,
 		streams:    make(map[uint32]*clientStream),
-		Codec:      &defaultCodec{ecodec: opt.ecodec},
+		Codec:      opt.newCodec(),
 	}
 	go func() {
 		if err := rt.Handle(context.WithoutCancel(ctx), ch); err != nil {
@@ -228,11 +243,11 @@ func (c *client) Handle(ctx context.Context, recv Recver) error {
 // the header and payload to it. A frame whose stream is already gone is
 // discarded so the next frame stays on a boundary.
 func (c *client) interceptor(ctx context.Context, recv Recver) error {
-	options, err := decodeCallOptions(recv)
+	opts, err := decodeCallOptions(recv)
 	if err != nil {
 		return err
 	}
-	s := c.getStream(options.StreamID)
+	s := c.getStream(opts.StreamID)
 	if s == nil {
 		// the stream is already gone; read the payload frame off the wire to
 		// keep the next frame on a boundary, then give the buffer back
@@ -243,7 +258,7 @@ func (c *client) interceptor(ctx context.Context, recv Recver) error {
 		defer p.Free()
 		return nil
 	}
-	return s.Handle(ctx, recv, WithCallOptions(options))
+	return s.Handle(ctx, recv, WithCallOptions(opts))
 }
 
 // createStream allocates the next stream id, registers it in the stream table

@@ -2,7 +2,6 @@ package grpcx_test
 
 import (
 	"context"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -26,8 +25,8 @@ var (
 
 func Benchmark1K(b *testing.B) {
 	// WithBufSize 高并发下开启批量发送，默认不开启
-	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
+	// numProcs := runtime.GOMAXPROCS(0)
+	c, err := grpcx.Dial(ttAddr /*grpcx.WithBufSize(numProcs*1024)*/)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -48,8 +47,8 @@ func Benchmark1K(b *testing.B) {
 
 func Benchmark5K(b *testing.B) {
 	// WithBufSize 高并发下开启批量发送，默认不开启
-	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
+	// numProcs := runtime.GOMAXPROCS(0)
+	c, err := grpcx.Dial(ttAddr /*grpcx.WithBufSize(numProcs*1024)*/)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return
@@ -70,8 +69,8 @@ func Benchmark5K(b *testing.B) {
 
 func Benchmark1024K(b *testing.B) {
 	// WithBufSize 高并发下开启批量发送，默认不开启
-	numProcs := runtime.GOMAXPROCS(0)
-	c, err := grpcx.Dial(ttAddr, grpcx.WithBufSize(numProcs*1024))
+	// numProcs := runtime.GOMAXPROCS(0)
+	c, err := grpcx.Dial(ttAddr /*grpcx.WithBufSize(numProcs*1024)*/)
 	if err != nil {
 		b.Errorf("Dial failed: %v", err)
 		return

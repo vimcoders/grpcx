@@ -225,7 +225,7 @@ func TestSenderSendWritesHeaderThenPayload(t *testing.T) {
 // the wire.
 func TestSenderSendReportsMarshalError(t *testing.T) {
 	f := &fakeSender{}
-	s := &sender{Sender: f, Codec: codec{ecodec: fixedCodec{err: errors.New("boom")}}}
+	s := &sender{Sender: f, Codec: emptyCodec{ecodec: fixedCodec{err: errors.New("boom")}}}
 	if err := s.send(&api.Empty{}); err == nil {
 		t.Fatal("send returned no error")
 	}

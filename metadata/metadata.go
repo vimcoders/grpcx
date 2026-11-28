@@ -27,20 +27,32 @@ import (
 // request header.
 type MD map[string]string
 
-// Pairs returns an MD formed by the mapping of key, value ...
-// Pairs panics if len(kv) is odd.
+// ParsePairs returns an MD formed by the mapping of key, value ... It rejects
+// an odd input count instead of panicking, so callers handling untrusted input
+// can turn the error into a protocol response.
 //
 // Keys are lowercased as they are stored; the value is kept verbatim. No
 // character set is enforced here, and a key beginning with "grpc-" is stored like
 // any other: the header is grpcx's own, so the gRPC reserved-prefix rule does not
 // apply. A repeated key keeps the last value.
-func Pairs(kv ...string) MD {
+func ParsePairs(kv ...string) (MD, error) {
 	if len(kv)%2 == 1 {
-		panic(fmt.Sprintf("metadata: Pairs got the odd number of input pairs for metadata: %d", len(kv)))
+		return nil, fmt.Errorf("metadata: odd number of key/value inputs: %d", len(kv))
 	}
-	var md = make(MD)
+	md := make(MD, len(kv)/2)
 	for i := 0; i+1 < len(kv); i += 2 {
 		md[strings.ToLower(kv[i])] = kv[i+1]
+	}
+	return md, nil
+}
+
+// Pairs returns an MD formed by the mapping of key, value ... It preserves the
+// original local-call contract: an odd input count is programmer misuse and
+// panics with ParsePairs's error. Use ParsePairs when the input is untrusted.
+func Pairs(kv ...string) MD {
+	md, err := ParsePairs(kv...)
+	if err != nil {
+		panic(err)
 	}
 	return md
 }

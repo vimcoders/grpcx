@@ -243,10 +243,10 @@ type defaultMethodHandler struct {
 // The deadline is the first non-zero of the header timeout, WithServerTimeout
 // and defaultTimeout, capped at defaultTimeout: a header that names a timeout
 // wins over the option, and the option can only tighten the ceiling. The
-// request payload is decoded through the server Codec and freed on return. A
-// handler error is reported in the response header's status code instead of
-// tearing the connection down; a panic is recovered the same way with
-// codes.Internal.
+// request payload is decoded through the server Codec and freed on return.
+// Malformed metadata is answered with codes.InvalidArgument without tearing the
+// connection down; a handler error is reported in the response header's status
+// code the same way, and a panic is recovered with codes.Internal.
 func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...CallOption) error {
 	// Nothing below reads Code or Desc back out of options, and the reply status
 	// is built separately in info, so both stay zero: zero is codes.OK, which is
@@ -260,22 +260,26 @@ func (d *defaultMethodHandler) Handle(ctx context.Context, recv Recver, opts ...
 		return err
 	}
 	defer p.Free()
-	metadatas := metadata.Pairs(options.Metadatas...)
-	timeout := min(cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout), defaultTimeout)
-	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
-	defer cancel()
 	info := &CallOptions{Code: uint32(codes.OK), StreamID: options.StreamID}
 	s := sender{Codec: d.Codec, Sender: d.Sender}
-	dec := func(in any) error { return d.Codec.Unmarshal(p, in) }
 	defer func() {
 		if r := recover(); r != nil {
 			info.Code, info.Desc = uint32(codes.Internal), fmt.Sprintf("handler panic: %v", r)
 			_ = s.send(&api.Empty{}, info)
 		}
 	}()
+	metadatas, err := metadata.ParsePairs(options.Metadatas...)
+	if err != nil {
+		info.Code, info.Desc = uint32(codes.InvalidArgument), err.Error()
+		return s.send(&api.Empty{}, info)
+	}
+	timeout := min(cmp.Or(time.Duration(options.Timeout)*time.Millisecond, d.timeout, defaultTimeout), defaultTimeout)
+	timeoutCtx, cancel := context.WithTimeout(metadata.WithMetadata(ctx, metadatas), timeout)
+	defer cancel()
+	dec := func(in any) error { return d.Codec.Unmarshal(p, in) }
 	reply, err := d.Handler(d.imp, timeoutCtx, dec, d.unaryInt)
 	if err != nil {
-		info.Code, info.Desc = uint32(status.Code(err)), err.Error()
+		info.Code, info.Desc = uint32(status.Code(err)), status.Convert(err).Message()
 		return s.send(&api.Empty{}, info)
 	}
 	if timeoutCtx.Err() != nil {

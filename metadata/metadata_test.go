@@ -32,6 +32,33 @@ func TestPairsPanicsOnAnOddCount(t *testing.T) {
 	Pairs(odd...)
 }
 
+// TestParsePairsBuildsMetadata covers the non-panicking constructor used at
+// input boundaries: valid pairs produce the same normalized map as Pairs.
+func TestParsePairsBuildsMetadata(t *testing.T) {
+	md, err := ParsePairs("Trace-Id", "abc", "K", "v")
+	if err != nil {
+		t.Fatalf("ParsePairs: %v", err)
+	}
+	if got, ok := md.Get("trace-id"); !ok || got != "abc" {
+		t.Errorf("Get(trace-id) = (%q, %v), want (abc, true)", got, ok)
+	}
+	if got, ok := md.Get("k"); !ok || got != "v" {
+		t.Errorf("Get(k) = (%q, %v), want (v, true)", got, ok)
+	}
+}
+
+// TestParsePairsRejectsAnOddCount covers malformed input: the caller receives
+// an error and no partial map, and nothing panics.
+func TestParsePairsRejectsAnOddCount(t *testing.T) {
+	md, err := ParsePairs("key")
+	if err == nil {
+		t.Fatal("ParsePairs with an odd count returned no error")
+	}
+	if md != nil {
+		t.Errorf("ParsePairs returned %v with the error, want nil", md)
+	}
+}
+
 // TestGetMissesAKey covers the absent case.
 func TestGetMissesAKey(t *testing.T) {
 	if got, ok := Pairs("k", "v").Get("missing"); ok || got != "" {

@@ -79,6 +79,25 @@ func TestDefaultCodecUnmarshalReadsTheBuffer(t *testing.T) {
 	}
 }
 
+// TestDefaultCodecKeepsProtoRoundTripSymmetric covers a custom ecodec: proto
+// values stay on protobuf for both Marshal and Unmarshal, rather than being
+// encoded by protobuf and then handed to the custom codec for decoding.
+func TestDefaultCodecKeepsProtoRoundTripSymmetric(t *testing.T) {
+	c := defaultCodec{ecodec: fixedCodec{out: []byte("M")}}
+	buf, err := c.Marshal(&api.EchoRequest{Message: "hi"})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	defer buf.Free()
+	var out api.EchoRequest
+	if err := c.Unmarshal(buf, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.Message != "hi" {
+		t.Errorf("round trip = %q, want hi", out.Message)
+	}
+}
+
 // TestDefaultCodecReportsMarshalError covers the fallback branch's error path:
 // the result is a non-nil Buffer interface holding a nil emptyBuffer, which is
 // what the comment on defaultMarshal promises.

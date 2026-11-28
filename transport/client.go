@@ -81,11 +81,12 @@ func WithWriteTimeout(d time.Duration) Option {
 // through Options.newCodec, so this option never touches the Codec field itself.
 //
 // The effect depends on the batching threshold as well as on the value being
-// encoded. With batching off, a proto.Message goes through proto.Marshal into a
-// pool buffer and never reaches c, while every other value is handed to c on
-// both the encode and the decode path. With batching on, every value including
-// proto.Message goes to c. A nil c therefore fails whenever a value that would
-// reach it is encoded or decoded: the call through the nil interface panics.
+// encoded. With batching off, a proto.Message goes through protobuf in both
+// directions and uses a pool buffer when marshalled, while every other value is
+// handed to c on both the encode and the decode path. With batching on, every
+// value including proto.Message goes to c. A nil c therefore fails whenever a
+// value that would reach it is encoded or decoded: the call through the nil
+// interface panics.
 func WithCodec(c encoding.Codec) Option {
 	return func(t *Options) {
 		t.ecodec = c

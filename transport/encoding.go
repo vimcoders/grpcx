@@ -19,10 +19,10 @@ func (e emptyBuffer) ReadOnlyData() []byte {
 }
 
 // defaultCodec is the Codec installed while batching is off. It splits on the
-// type of the value: a proto.Message is marshalled into a pool buffer, anything
-// else is delegated to ecodec and wrapped in an emptyBuffer. The split means a
-// Buffer returned by Marshal is not always pooled, and Free is only meaningful
-// on the proto branch.
+// type of the value in both directions: a proto.Message is marshalled into a
+// pool buffer and decoded with proto.Unmarshal, while every other value is
+// delegated to ecodec. The split means a Buffer returned by Marshal is not
+// always pooled, and Free is only meaningful on the proto branch.
 type defaultCodec struct {
 	ecodec encoding.Codec
 }
@@ -55,9 +55,13 @@ func (c defaultCodec) defaultMarshal(v any) (emptyBuffer, error) {
 	return c.ecodec.Marshal(v)
 }
 
-// Unmarshal implements Codec: it hands the buffer's bytes to ecodec. The buffer
+// Unmarshal implements Codec symmetrically with Marshal: proto.Message values
+// are decoded by protobuf, and every other value is handed to ecodec. The buffer
 // is read, never freed.
 func (c defaultCodec) Unmarshal(b Buffer, v any) error {
+	if vv, ok := v.(proto.Message); ok {
+		return proto.Unmarshal(b.ReadOnlyData(), vv)
+	}
 	return c.ecodec.Unmarshal(b.ReadOnlyData(), v)
 }
 

@@ -154,10 +154,11 @@ type Buffer interface {
 // buffer; ownership stays with the caller.
 //
 // Two implementations exist, and Options.newCodec picks between them from the
-// batching threshold on the client and the server alike. defaultCodec
-// special-cases proto.Message into a pool buffer and delegates everything else
-// to the configured encoding.Codec; emptyCodec delegates every value, proto
-// included, and hands out buffers the pool never owns.
+// batching threshold on the client and the server alike. defaultCodec handles
+// proto.Message with protobuf in both directions, using a pool buffer when
+// marshalling, and delegates every other value to the configured encoding.Codec;
+// emptyCodec delegates every value, proto included, and hands out buffers the
+// pool never owns.
 type Codec interface {
 	Marshal(any) (Buffer, error)
 	Unmarshal(Buffer, any) error

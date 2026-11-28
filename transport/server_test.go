@@ -67,8 +67,8 @@ func TestInterceptorReportsHandlerError(t *testing.T) {
 	if codes.Code(got.Code) != codes.InvalidArgument {
 		t.Errorf("code = %v, want InvalidArgument", codes.Code(got.Code))
 	}
-	if got.Desc == "" {
-		t.Error("the reply header carries no description")
+	if got.Desc != "test: handler failed" {
+		t.Errorf("Desc = %q, want the bare status message", got.Desc)
 	}
 	if got.StreamID != 5 {
 		t.Errorf("StreamID = %d, want 5", got.StreamID)
@@ -179,6 +179,29 @@ func TestHandleServesRepeatedCalls(t *testing.T) {
 		if resp.Message != "hi!" {
 			t.Errorf("reply %d = %q, want hi!", i, resp.Message)
 		}
+	}
+}
+
+// TestHandleRejectsOddMetadataAndKeepsServing drives malformed metadata through
+// a real connection: the client gets InvalidArgument, no panic escapes the
+// server, and the same connection still serves the next request.
+func TestHandleRejectsOddMetadataAndKeepsServing(t *testing.T) {
+	cli, _, _ := startPipeServer(t, echoService(&echoImpl{}))
+	payload := mustMarshal(t, &api.EchoRequest{Message: "bad"})
+	_, err := cli.RoundTrip(context.Background(), payload, &CallOptions{
+		FullMethodName: api.EchoService_Echo_FullMethodName,
+		Metadatas:      []string{"odd"},
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Fatalf("RoundTrip code = %v, want InvalidArgument (err = %v)", got, err)
+	}
+
+	var resp api.EchoResponse
+	if err := cli.Invoke(context.Background(), api.EchoService_Echo_FullMethodName, &api.EchoRequest{Message: "hi"}, &resp); err != nil {
+		t.Fatalf("Invoke after malformed metadata: %v", err)
+	}
+	if resp.Message != "hi!" {
+		t.Errorf("reply = %q, want hi!", resp.Message)
 	}
 }
 

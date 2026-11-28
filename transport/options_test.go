@@ -157,13 +157,13 @@ func TestNewCodecPicksByThreshold(t *testing.T) {
 			WithBufSize(c.bufsize)(&o)
 			got := o.newCodec()
 			if c.pooled {
-				if _, ok := got.(defaultCodec); !ok {
-					t.Fatalf("newCodec() = %T, want defaultCodec", got)
+				if _, ok := got.(*defaultCodec); !ok {
+					t.Fatalf("newCodec() = %T, want *defaultCodec", got)
 				}
 				return
 			}
-			if _, ok := got.(emptyCodec); !ok {
-				t.Fatalf("newCodec() = %T, want emptyCodec", got)
+			if _, ok := got.(*emptyCodec); !ok {
+				t.Fatalf("newCodec() = %T, want *emptyCodec", got)
 			}
 		})
 	}
@@ -177,8 +177,8 @@ func TestWithServerBufSizeChoosesTheCodec(t *testing.T) {
 		if so.bufsize != 1 {
 			t.Fatalf("bufsize = %d, want 1", so.bufsize)
 		}
-		if _, ok := so.Codec.(emptyCodec); !ok {
-			t.Errorf("Codec is %T, want emptyCodec", so.Codec)
+		if _, ok := so.Codec.(*emptyCodec); !ok {
+			t.Errorf("Codec is %T, want *emptyCodec", so.Codec)
 		}
 	})
 	t.Run("zero", func(t *testing.T) {
@@ -186,16 +186,15 @@ func TestWithServerBufSizeChoosesTheCodec(t *testing.T) {
 		if so.bufsize != 0 {
 			t.Fatalf("bufsize = %d, want 0", so.bufsize)
 		}
-		if _, ok := so.Codec.(defaultCodec); !ok {
-			t.Errorf("Codec is %T, want defaultCodec", so.Codec)
+		if _, ok := so.Codec.(*defaultCodec); !ok {
+			t.Errorf("Codec is %T, want *defaultCodec", so.Codec)
 		}
 	})
 	t.Run("negative", func(t *testing.T) {
 		// A negative n is dropped before WithBufSize runs, so the default
 		// threshold and the pooled codec both survive: batching stays off and
-		// proto replies keep coming out of the pool. The Codec is still the
-		// pointer DefaultServerOptions built, which is why this branch asserts
-		// *defaultCodec while the rebuilt branches assert the value.
+		// proto replies keep coming out of the pool. The Codec is the pointer
+		// DefaultServerOptions built, untouched by the rebuild.
 		so := serverOptions(WithServerBufSize(-1))
 		if so.bufsize != 0 {
 			t.Fatalf("bufsize = %d, want the default 0 kept", so.bufsize)
@@ -229,11 +228,11 @@ func TestServerCodecOrderIsIrrelevant(t *testing.T) {
 				t.Fatalf("ecodec = %v, want the custom codec", so.ecodec)
 			}
 			if c.wantPool {
-				if _, ok := so.Codec.(defaultCodec); !ok {
-					t.Fatalf("Codec is %T, want defaultCodec", so.Codec)
+				if _, ok := so.Codec.(*defaultCodec); !ok {
+					t.Fatalf("Codec is %T, want *defaultCodec", so.Codec)
 				}
-			} else if _, ok := so.Codec.(emptyCodec); !ok {
-				t.Fatalf("Codec is %T, want emptyCodec", so.Codec)
+			} else if _, ok := so.Codec.(*emptyCodec); !ok {
+				t.Fatalf("Codec is %T, want *emptyCodec", so.Codec)
 			}
 			buf, err := so.Marshal(map[string]string{"a": "1"})
 			if err != nil {

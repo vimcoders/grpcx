@@ -328,13 +328,13 @@ func TestDialContextChoosesTheCodec(t *testing.T) {
 				t.Fatalf("DialContext returned %T, want *client", rt)
 			}
 			if c.pooled {
-				if _, ok := cl.Codec.(defaultCodec); !ok {
-					t.Fatalf("Codec is %T, want defaultCodec", cl.Codec)
+				if _, ok := cl.Codec.(*defaultCodec); !ok {
+					t.Fatalf("Codec is %T, want *defaultCodec", cl.Codec)
 				}
 				return
 			}
-			if _, ok := cl.Codec.(emptyCodec); !ok {
-				t.Fatalf("Codec is %T, want emptyCodec", cl.Codec)
+			if _, ok := cl.Codec.(*emptyCodec); !ok {
+				t.Fatalf("Codec is %T, want *emptyCodec", cl.Codec)
 			}
 		})
 	}

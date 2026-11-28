@@ -39,8 +39,9 @@ type ServerOptions struct {
 
 // DefaultServerOptions returns a fresh ServerOptions for every call: the
 // standard transport options, a pass-through unary interceptor, an empty
-// service descriptor and a defaultCodec built from the default ecodec. It is a
-// function rather than a package variable so each server owns its own Codec.
+// service descriptor and the Codec Options.newCodec derives from the default
+// ecodec. It is a function rather than a package variable so each server owns
+// its own Codec.
 func DefaultServerOptions() ServerOptions {
 	opt := DefaultOptions()
 	return ServerOptions{
@@ -49,7 +50,7 @@ func DefaultServerOptions() ServerOptions {
 			return handler(ctx, req)
 		},
 		desc:  &grpc.ServiceDesc{},
-		Codec: &defaultCodec{opt.ecodec},
+		Codec: opt.newCodec(),
 	}
 }
 

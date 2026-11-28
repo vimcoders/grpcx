@@ -136,16 +136,17 @@ func (o Options) Timeout() time.Duration {
 	return o.timeout
 }
 
-// newCodec builds the Codec for this configuration. With batching on it returns
-// an emptyCodec, which keeps every value off the frame pool so a frame queued in
-// the pending batch cannot be handed back before the flush has written it. With
-// batching off it returns a defaultCodec, which marshals proto messages into
-// pooled buffers.
+// newCodec builds the Codec for this configuration, always as a pointer so the
+// Codec field holds one shape whatever the threshold. With batching on it
+// returns an emptyCodec, which keeps every value off the frame pool so a frame
+// queued in the pending batch cannot be handed back before the flush has written
+// it. With batching off it returns a defaultCodec, which marshals proto messages
+// into pooled buffers.
 func (o Options) newCodec() Codec {
 	if o.bufsize > 0 {
-		return emptyCodec{o.ecodec}
+		return &emptyCodec{o.ecodec}
 	}
-	return defaultCodec{o.ecodec}
+	return &defaultCodec{o.ecodec}
 }
 
 // DefaultOptions returns the transport configuration with every field set to

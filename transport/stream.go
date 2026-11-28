@@ -159,14 +159,18 @@ type CallOption interface {
 }
 
 // CallOptions is the concrete CallOption: each non-zero field overrides its
-// counterpart in the header. Metadatas is the exception — the pairs accumulate
-// across the options applied.
+// counterpart in the header, except StreamID — the header keeps the id it
+// already carries and only takes the option's when its own is zero, so a caller
+// cannot move a frame onto another stream. Metadatas accumulates instead of
+// overriding.
 type CallOptions api.CallOptions
 
 // apply merges c into opts field by field: a non-zero field in c replaces what
-// an earlier option put there, and a zero one leaves it alone. apply never
-// fills in a default, so "this header named no timeout" survives to the call
-// site: Invoke and RoundTrip fold the context deadline in, and
+// an earlier option put there, and a zero one leaves it alone. StreamID runs
+// the other way: opts keeps the id it already carries and c only fills it while
+// opts has none, so a header the transport built keeps its own stream. apply
+// never fills in a default, so "this header named no timeout" survives to the
+// call site: Invoke and RoundTrip fold the context deadline in, and
 // defaultMethodHandler.Handle falls back to WithServerTimeout.
 func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.Timeout = cmp.Or(c.Timeout, opts.Timeout)
@@ -175,7 +179,7 @@ func (c *CallOptions) apply(opts *api.CallOptions) {
 	opts.Code = cmp.Or(c.Code, opts.Code)
 	opts.Desc = cmp.Or(c.Desc, opts.Desc)
 	opts.Metadatas = append(opts.Metadatas, c.Metadatas...)
-	opts.StreamID = cmp.Or(c.StreamID, opts.StreamID)
+	opts.StreamID = cmp.Or(opts.StreamID, c.StreamID)
 }
 
 // decodeCallOptions reads the request header frame off recv and returns the

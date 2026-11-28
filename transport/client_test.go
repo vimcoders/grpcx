@@ -163,6 +163,33 @@ func TestRoundTripHeaderCarriesDeadlineAndMetadata(t *testing.T) {
 	}
 }
 
+// TestRoundTripIgnoresCallOptionStreamID covers the one field the options
+// cannot replace: the id createStream allocated is what goes on the wire, so a
+// caller cannot point the frame at a stream this transport never registered.
+func TestRoundTripIgnoresCallOptionStreamID(t *testing.T) {
+	// The answering sender replies on the id it reads off the header, so a
+	// replaced id would come back as Unavailable instead of a clean reply.
+	c, a := newClientOnSender(t, replyOnSlot(codes.OK, ""))
+	if _, err := c.RoundTrip(context.Background(), nil, &CallOptions{StreamID: 99}); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+
+	frames := a.sent()
+	if len(frames) != 2 {
+		t.Fatalf("sent %d frames, want 2", len(frames))
+	}
+	var header api.CallOptions
+	if err := encoding.Unmarshal(frames[0], &header); err != nil {
+		t.Fatalf("header decode: %v", err)
+	}
+	if header.StreamID == 99 {
+		t.Error("StreamID = 99, want the id this transport allocated")
+	}
+	if header.StreamID == 0 {
+		t.Error("StreamID = 0, want a registered stream id")
+	}
+}
+
 // TestPingSwallowsUnimplemented covers the health check's one exception: the
 // server answering Unimplemented still proves the connection is alive.
 func TestPingSwallowsUnimplemented(t *testing.T) {

@@ -350,10 +350,10 @@ func (c *client) Invoke(ctx context.Context, method string, req any, reply any, 
 //
 // The header is built here: the stream id this transport allocated, then opts,
 // then the caller's context deadline folded into Timeout, then context metadata
-// appended to Metadatas. A CallOption carrying a non-zero StreamID replaces the
-// allocated one, so a caller can route the frame to another stream. A reply
-// whose code is not OK is freed here and comes back as a status error with that
-// code and description.
+// appended to Metadatas. StreamID is the one field opts cannot replace: the
+// allocated id stays, because a frame aimed at another stream has no entry in
+// this transport's table and the call would fail. A reply whose code is not OK
+// is freed here and comes back as a status error with that code and description.
 //
 // The header is encoded through the client's Codec and freed on return. With
 // batching off the write has already completed by then; with batching on the
